@@ -87,6 +87,13 @@ static int init_info_queue(void);
 static void check_all_ports_link_status(uint8_t port_num, uint32_t port_mask);
 
 
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+#include <unistd.h>
+uint32_t nf_mgr_id;
+static uint32_t read_onvm_mgr_id_from_system(void);
+#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif // ENABLE_NFV_RESL
 /*********************************Interfaces**********************************/
 
 
@@ -172,6 +179,13 @@ init(int argc, char *argv[]) {
         onvm_sc_print(default_chain);
 
         onvm_flow_dir_init();
+
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+        uint32_t my_id = read_onvm_mgr_id_from_system();
+        printf("Read the ONVM_MGR Identifier as: [%d (0x%x)] \n", my_id,my_id);
+#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif // ENABLE_NFV_RESL
 
         return 0;
 }
@@ -549,3 +563,13 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask) {
  * Main init function for the multi-process server app,
  * calls subfunctions to do each stage of the initialisation.
  */
+
+
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+static uint32_t read_onvm_mgr_id_from_system(void) {
+        nf_mgr_id = gethostid();
+        return nf_mgr_id;
+}
+#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif // ENABLE_NFV_RESL
