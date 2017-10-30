@@ -53,6 +53,10 @@
 #include "onvm_pkt.h"
 #include "onvm_nf.h"
 
+#ifdef ENABLE_BFD
+#include "onvm_bfd.h"
+#endif
+
 #ifdef INTERRUPT_SEM
 struct wakeup_info *wakeup_infos;
 #endif //INTERRUPT_SEM
@@ -440,6 +444,10 @@ main(int argc, char *argv[]) {
         rte_eal_remote_launch(monitor, NULL, cur_lcore);
         */        
         #endif
+
+#ifdef ENABLE_BFD
+        onvm_bfd_init(nf_mgr_id);
+#endif
 
         /* Master thread handles statistics and NF management */
         master_thread_main();

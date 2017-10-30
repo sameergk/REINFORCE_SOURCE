@@ -272,6 +272,11 @@ extern unsigned num_sockets;
 extern struct onvm_service_chain *default_chain;
 extern struct onvm_ft *sdn_ft;
 
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+extern uint32_t nf_mgr_id;
+#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif // ENABLE_NFV_RESL
 
 /**********************************Functions**********************************/
 

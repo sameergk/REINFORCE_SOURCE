@@ -20,6 +20,7 @@
 #re1=^[0-9]+([.][0-9]+)?$
 re='^[0-9]+$'
 pids=`fuser -v -m /mnt/huge | head -n 1 | awk '{print }'`
+echo "Process IDs using DPDK/HUGE Pages: $pids"
 for pid in $pids
 do
   if [ $pid == "kernel" ]; then

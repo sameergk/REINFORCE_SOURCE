@@ -119,6 +119,15 @@ struct onvm_service_chain;
 #endif  //ENABLE_NF_BACKPRESSURE
 
 
+/******************************************************************************/
+// NFV RESL related extensions, control macros and defines
+#define ENABLE_NFV_RESL             // global nvf_Resl feature flag
+#ifdef ENABLE_NFV_RESL
+#define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
+#define ENABLE_BFD                  // BFD management
+#endif
+
+/******************************************************************************/
 #define SET_BIT(x,bitNum) (x|=(1<<(bitNum-1)))
 static inline void set_bit(long *x, unsigned bitNum) {
     *x |= (1L << (bitNum-1));
