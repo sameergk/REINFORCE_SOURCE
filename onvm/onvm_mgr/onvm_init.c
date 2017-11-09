@@ -63,6 +63,7 @@ struct rte_mempool *nf_info_pool;
 struct rte_ring *nf_info_queue;
 uint16_t **services;
 uint16_t *nf_per_service_count;
+
 struct client_tx_stats *clients_stats;
 struct onvm_service_chain *default_chain;
 struct onvm_service_chain **default_sc_p;
@@ -164,7 +165,7 @@ init(int argc, char *argv[]) {
         retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 1);
         if (retval == ENOSPC) {
                 printf("chain length can not be larger than the maximum chain length\n");
-                exit(1);
+                exit(5);
         }
         printf("Default service chain: send to sdn NF\n");        
         
@@ -180,6 +181,10 @@ init(int argc, char *argv[]) {
 
         onvm_flow_dir_init();
 
+#if defined(ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD) || defined(ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD)
+        rte_timer_subsystem_init();
+#endif //ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
+
 #ifdef ENABLE_NFV_RESL
 #ifdef ENABLE_NF_MGR_IDENTIFIER
         uint32_t my_id = read_onvm_mgr_id_from_system();
@@ -189,7 +194,6 @@ init(int argc, char *argv[]) {
 
         return 0;
 }
-
 
 /*****************************Internal functions******************************/
 
@@ -377,7 +381,9 @@ init_shm_rings(void) {
         if (services == NULL || nf_per_service_count == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot allocate memory for service to NF mapping\n");
 
+        unsigned r_size = ringsize;
         for (i = 0; i < MAX_CLIENTS; i++) {
+                r_size = ((i==0)?(ringsize*2):(ringsize));
                 /* Create an RX queue for each client */
                 socket_id = rte_socket_id();
                 rq_name = get_rx_queue_name(i);
@@ -386,11 +392,12 @@ init_shm_rings(void) {
                 clients[i].rx_q = rte_ring_create(rq_name,
                                 ringsize, socket_id,
                                 //RING_F_SP_ENQ|RING_F_SC_DEQ);     /* single prod, single cons */
-                                RING_F_SC_DEQ);                 /* multi prod, single cons */
+                                RING_F_SC_DEQ);                 /* multi prod, single cons (Enqueue can be by either Rx/Tx Threads, but dequeue only by NF thread)*/
                 clients[i].tx_q = rte_ring_create(tq_name,
-                                ringsize, socket_id,
-                                //RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons */
-                                 RING_F_SC_DEQ);                 /* multi prod, single cons */
+                                r_size, //ringsize,
+                                socket_id,
+                                RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by dedicated Tx thread) */
+                                //RING_F_SC_DEQ);                 /* multi prod, single cons */
                                 //but it should be RING_F_SP_ENQ
 
                 if (clients[i].rx_q == NULL)
@@ -482,6 +489,12 @@ init_shm_rings(void) {
 
                 clients[i].shm_server = (rte_atomic16_t *)shm;
                 rte_atomic16_set(clients[i].shm_server, 0);
+                #endif
+
+                //#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+                #ifdef ENABLE_NF_BACKPRESSURE
+                memset(&clients[i].bft_list, 0, sizeof(clients[i].bft_list));
+                clients[i].bft_list.max_len=CLIENT_QUEUE_RINGSIZE*2;
                 #endif
         }
         return 0;

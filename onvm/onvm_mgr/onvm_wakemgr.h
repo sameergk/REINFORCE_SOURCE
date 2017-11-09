@@ -7,6 +7,7 @@
  *   Copyright(c)
  *            2015-2016 George Washington University
  *            2015-2016 University of California Riverside
+ *            2010-2014 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -35,54 +36,33 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * onvm_flow_dir.h - flow director APIs
  ********************************************************************/
 
-#ifndef _ONVM_FLOW_DIR_H_
-#define _ONVM_FLOW_DIR_H_
 
-#include "common.h"
-#include "onvm_flow_table.h"
+/******************************************************************************
 
-#define SDN_FT_ENTRIES  (1024) //(1024*10*10) //(1024*4)
+                                 onvm_wakemgr.h
 
-extern struct onvm_ft *sdn_ft;
-extern struct onvm_ft **sdn_ft_p;
 
-struct onvm_flow_entry {
-        struct onvm_ft_ipv4_5tuple *key;
-        struct onvm_service_chain *sc;
-        uint64_t ref_cnt;
-        uint16_t idle_timeout;
-        uint16_t hard_timeout;
-        uint64_t packet_count;
-        uint64_t byte_count;
-        uint64_t entry_index;
-};
+      Header file containing prototypes of functions related to NF wakeup management.
 
-/* Get a pointer to the flow entry entry for this packet.
- * Returns:
- *  0        on success. *flow_entry points to this packet flow's flow entry
- *  -ENOENT  if flow has not been added to table. *flow_entry points to flow entry
- */
-int onvm_flow_dir_init(void);
-int onvm_flow_dir_nf_init(void);
-int onvm_flow_dir_get_pkt(struct rte_mbuf* pkt, struct onvm_flow_entry **flow_entry);
-int onvm_flow_dir_add_pkt(struct rte_mbuf* pkt, struct onvm_flow_entry **flow_entry);
-/* delete the flow dir entry, but do not free the service chain (useful if a service chain is pointed to by several different flows */
-int onvm_flow_dir_del_pkt(struct rte_mbuf* pkt);
-/* Delete the flow dir entry and free the service chain */
-int onvm_flow_dir_del_and_free_pkt(struct rte_mbuf* pkt);
-int onvm_flow_dir_get_key(struct onvm_ft_ipv4_5tuple* key, struct onvm_flow_entry **flow_entry);
-int onvm_flow_dir_add_key(struct onvm_ft_ipv4_5tuple* key, struct onvm_flow_entry **flow_entry);
-int onvm_flow_dir_del_key(struct onvm_ft_ipv4_5tuple* key);
-int onvm_flow_dir_del_and_free_key(struct onvm_ft_ipv4_5tuple* key);
-void onvm_flow_dir_print_stats(void);
-int onvm_flow_dir_clear_all_entries(void);
-int onvm_flow_dir_reset_entry(struct onvm_flow_entry *flow_entry);
-void onvm_flow_dir_set_index(void);
 
-#ifdef ENABLE_NF_BACKPRESSURE
-uint32_t extract_sc_list(uint32_t *bft_count, sc_entries_list *c_list);
-#endif
-#endif // _ONVM_FLOW_DIR_H_
+******************************************************************************/
+
+
+#ifndef _ONVM_WAKEMGR_H_
+#define _ONVM_WAKEMGR_H_
+
+
+/*********************************Interfaces**********************************/
+#ifdef INTERRUPT_SEM
+extern struct wakeup_info *wakeup_infos;
+
+void register_signal_handler(void);
+
+int wakemgr_main(void *arg);
+
+inline void handle_wakeup(struct wakeup_info *wakeup_info);
+
+#endif //INTERRUPT_SEM
+#endif //_ONVM_WAKEMGR_H_

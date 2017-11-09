@@ -55,8 +55,26 @@
 extern uint16_t next_instance_id;
 extern struct wakeup_info *wakeup_infos;
 
+#define MAX_CORES_ON_NODE (64)
+//Data structure to sort out all active NFs on each core
+typedef struct nfs_per_core {
+        uint16_t sorted;                    //status if the nf_ids list is sorted for wake-up
+        uint16_t count;                     //count of nfs in the list of nf_ids
+        uint32_t nf_ids[MAX_CLIENTS];       //id of the nf <populated in-order and sorted in order needed for wake-up
+        uint64_t run_time[MAX_CLIENTS] ;    //run time of the each of the id, indexed by id itself(not sorted)
+}nfs_per_core_t;
+
+typedef struct nf_schedule_info {
+        uint16_t sorted;
+        nfs_per_core_t nf_list_per_core[MAX_CORES_ON_NODE];
+}nf_schedule_info_t;
+extern nf_schedule_info_t nf_sched_param;
+//extern nfs_per_core_t nf_list_per_core[MAX_CORES_ON_NODE];
+
+
 #ifdef ENABLE_NF_BACKPRESSURE
 // Global mode variables (default service chain without flow_Table entry: can support only 1 flow (i.e all flows have same NFs)
+extern uint8_t  global_bkpr_mode;
 extern uint16_t downstream_nf_overflow;
 extern uint16_t highest_downstream_nf_service_id;
 extern uint16_t lowest_upstream_to_throttle;
@@ -107,6 +125,22 @@ inline uint16_t
 onvm_nf_service_to_nf_map(uint16_t service_id, struct rte_mbuf *pkt);
 
 
+/*
+ * Interface to evaluate statistics relevant for nf_scheduling for all registered NFs.
+ *
+ */
+void
+onvm_nf_stats_update(unsigned long interval);
+
+
+void compute_and_order_nf_wake_priority(void);
+
+
+
+/* Enqueue NF to the bottleneck watch list */
+int enqueu_nf_to_bottleneck_watch_list(uint16_t nf_id);
+int dequeue_nf_from_bottleneck_watch_list(uint16_t nf_id);
+int check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list(void);
 /****************************Internal functions*******************************/
 
 

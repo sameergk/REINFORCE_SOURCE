@@ -89,8 +89,8 @@
 /***********************************Macros************************************/
 
 
-#define MBUFS_PER_CLIENT 1536 //65536 //10240 //1536
-#define MBUFS_PER_PORT (10240) //2048 //10240 //65536 //10240 //1536
+#define MBUFS_PER_CLIENT 1536 //65536 //10240 //1536                            (use U: 1536, T:1536)
+#define MBUFS_PER_PORT 10240 //(10240) //2048 //10240 //65536 //10240 //1536    (use U: 10240, T:10240)
 #define MBUF_CACHE_SIZE 512
 #define MBUF_OVERHEAD (sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 #define RX_MBUF_DATA_SIZE 2048
@@ -99,14 +99,17 @@
 #define NF_INFO_SIZE sizeof(struct onvm_nf_info)
 #define NF_INFO_CACHE 8
 
-#define RTE_MP_RX_DESC_DEFAULT 1024 //512 //1536 //2048 //1024 //512 (use 1024)
-#define RTE_MP_TX_DESC_DEFAULT 1024 //512 //1536 //2048 //1024 //512 (use 1024)
-#define CLIENT_QUEUE_RINGSIZE (4096)  //128 //4096  //4096 //128   (use 4096)
+#define RTE_MP_RX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define RTE_MP_TX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+//#define CLIENT_QUEUE_RINGSIZE  (512) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#define CLIENT_QUEUE_RINGSIZE  (4096) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+//For TCP UDP use 70,40
+//For TCP TCP, IO use 80 20
 
 // Note: Based on the approach the tuned values change. For NF Throttling (80/75,20/25) works better, for Packet Throttling (70,50 or 70,40 or 80,40) seems better -- must be tuned and set accordingly.
 #ifdef NF_BACKPRESSURE_APPROACH_1
-#define CLIENT_QUEUE_RING_THRESHOLD (70)
-#define CLIENT_QUEUE_RING_THRESHOLD_GAP (50)
+#define CLIENT_QUEUE_RING_THRESHOLD (80)
+#define CLIENT_QUEUE_RING_THRESHOLD_GAP (20) //(25)
 #else  // defined NF_BACKPRESSURE_APPROACH_2 or other
 #define CLIENT_QUEUE_RING_THRESHOLD (80)
 #define CLIENT_QUEUE_RING_THRESHOLD_GAP (20)
@@ -115,16 +118,33 @@
 #define CLIENT_QUEUE_RING_WATER_MARK_SIZE ((uint32_t)((CLIENT_QUEUE_RINGSIZE*CLIENT_QUEUE_RING_THRESHOLD)/100))
 #define CLIENT_QUEUE_RING_LOW_THRESHOLD ((CLIENT_QUEUE_RING_THRESHOLD > CLIENT_QUEUE_RING_THRESHOLD_GAP) ? (CLIENT_QUEUE_RING_THRESHOLD-CLIENT_QUEUE_RING_THRESHOLD_GAP):(CLIENT_QUEUE_RING_THRESHOLD))
 #define CLIENT_QUEUE_RING_LOW_WATER_MARK_SIZE ((uint32_t)((CLIENT_QUEUE_RINGSIZE*CLIENT_QUEUE_RING_LOW_THRESHOLD)/100))
+#define ECN_EWMA_ALPHA  (0.25)
+#define CLIENT_QUEUE_RING_ECN_MARK_SIZE ((uint32_t)(((1-ECN_EWMA_ALPHA)*CLIENT_QUEUE_RING_WATER_MARK_SIZE) + ((ECN_EWMA_ALPHA)*CLIENT_QUEUE_RING_LOW_WATER_MARK_SIZE)))///2)
 #define NO_FLAGS 0
 
 #define ONVM_NUM_RX_THREADS 1
 
-#define DYNAMIC_CLIENTS 0
-#define STATIC_CLIENTS 1
+#define DYNAMIC_CLIENTS 1
+#define STATIC_CLIENTS 0
 
 
 /******************************Data structures********************************/
+#ifdef ENABLE_NF_BACKPRESSURE //NF_BACKPRESSURE_APPROACH_1
+//#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+typedef struct bottleneck_ft_data {
+        uint16_t chain_index;           //index of NF (bottleneck) in the chain
+         struct onvm_flow_entry* bft;   //flow_entry field
+}bottleneck_ft_data_t;
+typedef struct bottleneck_ft_info {
+        uint16_t bft_count;         // num of entries in the bft[]
+        uint16_t r_h;               // read_head in the bft[]
+        uint16_t w_h;               // write head in the bft[]
+        uint16_t max_len;           // Max size/count of bft[]
+        //struct onvm_flow_entry* bft[CLIENT_QUEUE_RINGSIZE];
+        bottleneck_ft_data_t bft[CLIENT_QUEUE_RINGSIZE*2+1];
+}bottlenect_ft_info_t;
 
+#endif //ENABLE_NF_BACKPRESSURE
 
 /*
  * Define a client structure with all needed info, including
@@ -154,17 +174,33 @@ struct client {
                 volatile uint64_t prev_rx_drop;
                 volatile uint64_t prev_wakeup_count;
                 #endif
+
+//#ifdef ENABLE_NF_BACKPRESSURE
 #if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
                 volatile uint64_t bkpr_drop;
                 volatile uint64_t prev_bkpr_drop;
-#endif //defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+#endif //#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+
+
+//#ifdef ENABLE_NF_BACKPRESSURE
+#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+                uint16_t max_rx_q_len;
+                uint16_t max_tx_q_len;
+                uint16_t bkpr_count;
+#endif //defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
         } stats;
         
+#ifdef ENABLE_NF_BACKPRESSURE
+//#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+        uint16_t is_bottleneck;         //status: not marked=0/marked for enqueue=1/enqueued as bottleneck=2
+        bottlenect_ft_info_t bft_list;
+#endif //defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+
         /* mutex and semaphore name for NFs to wait on */ 
         #ifdef INTERRUPT_SEM        
         const char *sem_name;
         key_t shm_key;
-        rte_atomic16_t *shm_server;
+        rte_atomic16_t *shm_server;     //0=running; 1=blocked_on_rx (no pkts to process); 2=blocked_on_tx (cannot push packets)
 
         #ifdef USE_MQ
         mqd_t mutex;

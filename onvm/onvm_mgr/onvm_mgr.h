@@ -116,8 +116,8 @@ struct packet_buf {
  */
 struct thread_info {
        unsigned queue_id;
-       unsigned first_cl;
-       unsigned last_cl;
+       unsigned first_cl;   //inclusive (
+       unsigned last_cl;    //exclusive ] so f_cl=1 and l_cl=4 -> 1,2,3 only.
        /* FIXME: This is confusing since it is non-inclusive. It would be
         *        better to have this take the first client and the number
         *        of consecutive clients after it to handle.
@@ -137,6 +137,11 @@ struct wakeup_info {
 	uint64_t prev_num_wakeups;
 };
 #endif //INTERRUPT_SEM
+
+#ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+//static int onv_pkt_send_on_alt_port(struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
+//int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count);
+#endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
 
 
 #endif  // _ONVM_MGR_H_

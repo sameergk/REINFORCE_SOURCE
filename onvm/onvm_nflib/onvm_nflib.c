@@ -50,8 +50,25 @@
 #include "onvm_nflib_internal.h"
 #include "onvm_nflib.h"
 
+
+nf_explicit_callback_function nf_ecb = NULL;
+static uint8_t need_ecb = 0;
+void register_explicit_callback_function(nf_explicit_callback_function ecb) {
+        if(ecb) {
+                nf_ecb = ecb;
+        }
+        return;
+}
+
+/*****************************************************************************
+                        HISTOGRAM DETAILS
+*/
+
+/******************************************************************************/
+
 /************************************API**************************************/
 #define USE_STATIC_IDS
+#define RTDSC_CYCLE_COST    (20*2) // profiled  approx. 18~27cycles per call
 
 #ifdef USE_CGROUPS_PER_NF_INSTANCE
 #include <stdlib.h>
@@ -103,6 +120,24 @@ void init_cgroup_info(struct onvm_nf_info *nf_info) {
 
         printf("NF on core=%u added to cgroup: %s, ret=%d", nf_info->core_id, cg_name,ret);
         return;
+}
+#endif
+
+
+/******************************Timer Helper functions*******************************/
+#ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+static void
+stats_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
+        __attribute__((unused)) void *ptr_data) {
+
+#ifdef INTERRUPT_SEM
+        counter = SAMPLING_RATE;
+#endif //INTERRUPT_SEM
+
+        //printf("\n On core [%d] Inside Timer Callback function: %"PRIu64" !!\n", rte_lcore_id(), rte_rdtsc_precise());
+        //printf("Echo %d", system("echo > hello_timer.txt"));
+        //printf("\n Inside Timer Callback function: %"PRIu64" !!\n", rte_rdtsc_precise());
 }
 #endif
 
@@ -222,6 +257,27 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         init_cgroup_info(nf_info);
 #endif
 
+#ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+        //unsigned cur_lcore = rte_lcore_id();
+        //unsigned timer_core = rte_get_next_lcore(cur_lcore, 1, 1);
+        //printf("cur_core [%u], timer_core [%u]", cur_lcore,timer_core);
+        rte_timer_subsystem_init();
+        rte_timer_init(&nf_info->stats_timer);
+        rte_timer_reset_sync(&nf_info->stats_timer,
+                                (STATS_PERIOD_IN_MS * rte_get_timer_hz()) / 1000,
+                                PERIODICAL,
+                                rte_lcore_id(), //timer_core
+                                &stats_timer_cb, NULL
+                                );
+#endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+#ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+        hist_init_v2(&nf_info->ht2);    //hist_init( &ht, MAX_NF_COMP_COST_CYCLES);
+#endif
+
+#ifdef ENABLE_ECN_CE
+        hist_init_v2(&nf_info->ht2_q);    //hist_init( &ht, MAX_NF_COMP_COST_CYCLES);
+#endif
         RTE_LOG(INFO, APP, "Finished Process Init.\n");
         return retval_final;
 }
@@ -248,7 +304,7 @@ void onvm_nf_yeild(struct onvm_nf_info* info) {
         if ((!ONVM_SPECIAL_NF) || (info->instance_id != 1)) { }
         
         tx_stats->wkup_count[info->instance_id] += 1;
-        rte_atomic16_set(flag_p, 1);
+        rte_atomic16_set(flag_p, 1);  //rte_atomic16_cmpset(flag_p, 0, 1);
         
         #ifdef USE_MQ
         rmsg_len = mq_receive(mutex, msg_t,sizeof(msg_t), (unsigned int *)&msg_prio);
@@ -337,6 +393,82 @@ void onvm_nf_yeild(struct onvm_nf_info* info) {
         #ifdef USE_POLL_MODE
         // no operation; continue;
         #endif
+        
+        //check and trigger explicit callabck before returning.
+        if(need_ecb && nf_ecb) {
+                need_ecb = 0;
+                nf_ecb();
+        }
+}
+void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info);
+void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info)
+{
+        #ifdef USE_MQ
+        static int msg = '\0';
+        //struct timespec timeout = {.tv_sec=0, .tv_nsec=1000};
+        //clock_gettime(CLOCK_REALTIME, &timeout);timeout..tv_nsec+=1000;
+        //msg = (unsigned int)mq_timedsend(clients[instance_id].mutex, (const char*) &msg, sizeof(msg),(unsigned int)prio, &timeout);
+        //msg = (unsigned int)mq_send(clients[instance_id].mutex, (const char*) &msg, sizeof(msg),(unsigned int)prio);
+        msg = mq_send(mutex, (const char*) &msg,0,0);
+        if (0 > msg) perror ("mq_send failed!");
+        #endif
+
+        #ifdef USE_FIFO
+        unsigned msg = 1;
+        msg = write(mutex, (void*) &msg, sizeof(msg));
+        #endif
+
+
+        #ifdef USE_SIGNAL
+        //static int count = 0;
+        //if (count < 100) { count++;
+        int sts = sigqueue(nf_info->pid, SIGUSR1, (const union sigval)0);
+        if (sts) perror ("sigqueue failed!!");
+        //}
+        #endif
+
+        #ifdef USE_SEMAPHORE
+        sem_post(mutex);
+        //printf("Triggered to wakeup the NF thread internally");
+        #endif
+
+        #ifdef USE_SCHED_YIELD
+        rte_atomic16_read(clients[instance_id].shm_server);
+        #endif
+
+        #ifdef USE_NANO_SLEEP
+        rte_atomic16_read(clients[instance_id].shm_server);
+        #endif
+
+        #ifdef USE_SOCKET
+        static char msg[2] = "\0";
+        sendto(onvm_socket_id, msg, sizeof(msg), 0, (struct sockaddr *) &clients[instance_id].mutex, (socklen_t) sizeof(struct sockaddr_un));
+        #endif
+
+        #ifdef USE_FLOCK
+        if (0 > (flock(clients[instance_id].mutex, LOCK_UN|LOCK_NB))) { perror ("FILE UnLock Failed!!");}
+        #endif
+
+        #ifdef USE_MQ2
+        static unsigned long msg = 1;
+        //static msgbuf_t msg = {.mtype = 1, .mtext[0]='\0'};
+        //if (0 > msgsnd(clients[instance_id].mutex, (const void*) &msg, sizeof(msg.mtext), IPC_NOWAIT)) {
+        if (0 > msgsnd(clients[instance_id].mutex, (const void*) &msg, 0, IPC_NOWAIT)) {
+                perror ("Msgsnd Failed!!");
+        }
+        #endif
+
+        #ifdef USE_ZMQ
+        static char msg[2] = "\0";
+        zmq_connect (onvm_socket_id,get_sem_name(instance_id));
+        zmq_send (onvm_socket_id, msg, sizeof(msg), 0);
+        #endif
+
+        #ifdef USE_POLL_MODE
+        rte_atomic16_read(clients[instance_id].shm_server);
+        #endif
+        
+        return;
 }
 
 uint64_t compute_start_cycles(void);// __attribute__((always_inline));
@@ -383,7 +515,7 @@ onvm_nflib_run(
                 int ret_act;
 
                 /* check if signalled to block, then block */
-                #if defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_2)
+                #if defined(ENABLE_NF_BACKPRESSURE) && (defined(NF_BACKPRESSURE_APPROACH_2) || defined(USE_ARBITER_NF_EXEC_PERIOD))
                 #ifdef INTERRUPT_SEM
                 if (rte_atomic16_read(flag_p) ==1) {
                         onvm_nf_yeild(info);
@@ -391,11 +523,14 @@ onvm_nflib_run(
                 #endif  // INTERRUPT_SEM
                 #endif  // defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_2)
 
-                /* try dequeuing max possible packets first, if that fails, get the
-                 * most we can. Loop body should only execute once, maximum */
-                while (nb_pkts > 0 &&
-                                unlikely(rte_ring_dequeue_bulk(rx_ring, pkts, nb_pkts) != 0))
-                        nb_pkts = (uint16_t)RTE_MIN(rte_ring_count(rx_ring), PKT_READ_SIZE);
+
+                //can as well move this inside the onvm_nf_yeild() function. Always perform at the end of yeild call.
+                //if(need_ecb && nf_ecb) {
+                //    need_ecb = 0;
+                //    nf_ecb();
+                //}
+                
+                nb_pkts = (uint16_t)rte_ring_dequeue_burst(rx_ring, pkts, nb_pkts);
 
                 if(nb_pkts == 0) {
                         #ifdef INTERRUPT_SEM
@@ -404,46 +539,10 @@ onvm_nflib_run(
                         continue;
                 }
 
-                /* Precheck if Tx buffer can hold the processed packets, if not Drop */
-                #ifdef PRE_PROCESS_DROP_ON_RX
-                #ifdef DROP_APPROACH_1
-                /* check here for the Tx Ring size to drop apriori to pushing to NFs Rx Ring */
-                if(rte_ring_free_count(tx_ring) < PKT_READ_SIZE) {
-                        for (j = 0; j < nb_pkts; j++) {
-                                 rte_pktmbuf_free(pkts[j]);
-                        }
-                        //Note: Difficult to account for number of Dropped buffers as client struct is not shared.
-                        tx_stats->tx_predrop[nf_info->instance_id]+=nb_pkts;
-                        nb_pkts=0;continue;
-                }
-                #endif //DROP_APPROACH_1
-                #else
-                (void)j;
-                #endif //PRE_PROCESS_DROP_ON_RX
-
-
                 /* Give each packet to the user proccessing function */
                 for (i = 0; i < nb_pkts; i++) {
                         meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
 
-
-
-//#if 0
-                        #if (defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)) || defined(DUMMY_FT_LOAD_ONLY) //#if defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)
-                        struct onvm_flow_entry *flow_entry = NULL;
-                        int ret = onvm_flow_dir_get_pkt(pkts[i], &flow_entry);
-                        //if (likely(ret >= 0 && flow_entry->sc) && unlikely (flow_entry->sc->highest_downstream_nf_index_id && (is_upstream_NF(flow_entry->sc->highest_downstream_nf_index_id, meta->chain_index)))) { //if (ret >= 0 && flow_entry->sc) {
-                        if (likely(ret >= 0 && flow_entry->sc)) {
-                                #ifndef DUMMY_FT_LOAD_ONLY
-                                #ifdef INTERRUPT_SEM
-                                while (unlikely (flow_entry->sc->highest_downstream_nf_index_id && (is_upstream_NF(flow_entry->sc->highest_downstream_nf_index_id, meta->chain_index)))) {
-                                        onvm_nf_yeild(info);
-                                }
-                                #endif  // INTERRUPT_SEM
-                                #endif  // DUMMY_FT_LOAD_ONLY
-                        }
-                        #endif  //defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)
-//#endif // if 0
 
                         #ifdef INTERRUPT_SEM
                         //meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
@@ -456,19 +555,36 @@ onvm_nflib_run(
                         
                         #ifdef INTERRUPT_SEM
                         if (counter % SAMPLING_RATE == 0) {
-                                //end_tsc = rte_rdtsc();
-                                //tx_stats->comp_cost[info->instance_id] = end_tsc - start_tsc;
                                 tx_stats->comp_cost[info->instance_id] = compute_total_cycles(start_tsc);
-                                #ifdef USE_CGROUPS_PER_NF_INSTANCE
-                                #define RTDSC_CYCLE_COST    (20*2) // profiled  approx. 18~27cycles per call
-                                nf_info->comp_cost  = (nf_info->comp_cost == 0)? (tx_stats->comp_cost[info->instance_id]): ((nf_info->comp_cost+ tx_stats->comp_cost[info->instance_id])/2);
-                                if (nf_info->comp_cost > RTDSC_CYCLE_COST) {
-                                        nf_info->comp_cost -= RTDSC_CYCLE_COST;
+                                if (tx_stats->comp_cost[info->instance_id] > RTDSC_CYCLE_COST) {
+                                        tx_stats->comp_cost[info->instance_id] -= RTDSC_CYCLE_COST;
                                 }
+
+                                #ifdef USE_CGROUPS_PER_NF_INSTANCE
+
+                                #ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+                                hist_store_v2(&info->ht2, tx_stats->comp_cost[info->instance_id]);  //hist_store(&ht,tx_stats->comp_cost[info->instance_id]); //tx_stats->comp_cost[info->instance_id] = max_nf_computation_cost;
+                                //avoid updating 'nf_info->comp_cost' as it will be calculated in the weight assignment function
+                                //nf_info->comp_cost  = hist_extract_v2(&nf_info->ht2,VAL_TYPE_RUNNING_AVG);
+                                #endif //STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+                                #else   //just use the running average
+                                nf_info->comp_cost  = (nf_info->comp_cost == 0)? (tx_stats->comp_cost[info->instance_id]): ((nf_info->comp_cost+tx_stats->comp_cost[info->instance_id])/2);
                                 #endif //USE_CGROUPS_PER_NF_INSTANCE
+
+                                #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+                                counter = 1;
+                                #endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+                                #ifdef ENABLE_ECN_CE
+                                hist_store_v2(&info->ht2_q, rte_ring_count(rx_ring));
+                                #endif
                         }
+
+                        #ifndef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
                         counter++;  //computing for first packet makes also account reasonable cycles for cache-warming.
-                        #endif
+                        #endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+                        #endif  //INTERRUPT_SEM
 
                         /* NF returns 0 to return packets or 1 to buffer */
                         if(likely(ret_act == 0)) {
@@ -478,6 +594,10 @@ onvm_nflib_run(
                                 tx_stats->tx_buffer[info->instance_id]++;
                         }
                 }
+
+                #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+                rte_timer_manage();
+                #endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
 
                 if (unlikely(tx_batch_size > 0 && rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size) == -ENOBUFS)) {
 
@@ -493,7 +613,6 @@ onvm_nflib_run(
                                 #endif
                                 #endif
 
-                                //j++;
                                 #ifdef DROP_APPROACH_3_WITH_YIELD
                                 sched_yield();
                                 #endif
@@ -556,10 +675,40 @@ onvm_nflib_stop(void) {
         rte_exit(EXIT_SUCCESS, "Done.");
 }
 
+int
+onvm_nflib_drop_pkt(struct rte_mbuf* pkt) {
+        rte_pktmbuf_free(pkt);
+        tx_stats->tx_drop[nf_info->instance_id]++;
+        return 0;
+}
 
+
+void notify_for_ecb(void) {
+        need_ecb = 1;
+        if ((rte_atomic16_read(flag_p) ==1)) {
+            onvm_nf_wake_notify(nf_info);
+        }
+        return;
+}
+
+int
+onvm_nflib_handle_msg(struct onvm_nf_msg *msg) {
+        switch(msg->msg_type) {
+        case MSG_STOP:
+                RTE_LOG(INFO, APP, "Shutting down...\n");
+                keep_running = 0;
+                break;
+        case MSG_NF_TRIGGER_ECB:
+            notify_for_ecb();
+            break;
+        case MSG_NOOP:
+        default:
+                break;
+        }
+
+        return 0;
+}
 /******************************Helper functions*******************************/
-
-
 static struct onvm_nf_info *
 onvm_nflib_info_init(const char *tag)
 {
@@ -690,6 +839,7 @@ onvm_nflib_handle_signal(int sig)
 #ifdef INTERRUPT_SEM
 static void set_cpu_sched_policy_and_mode(void) {
         return;
+
         struct sched_param param;
         pid_t my_pid = getpid();
         sched_getparam(my_pid, &param);
