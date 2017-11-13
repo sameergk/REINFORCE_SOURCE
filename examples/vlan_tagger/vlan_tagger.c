@@ -181,6 +181,8 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
                 printf("\nUnknown Ethernet Type [0x%x]!\n ", rte_be_to_cpu_16(eth->ether_type));
         }
 
+        //rte_vlan_strip(pkt);
+
         return;
 }
 static int
@@ -196,6 +198,9 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
         meta->action = ONVM_NF_ACTION_TONF;
         meta->destination = destination;
+
+        meta->action = ONVM_NF_ACTION_OUT;
+        meta->destination = pkt->port;
         return 0;
 }
 
