@@ -413,11 +413,12 @@ struct onvm_service_chain {
 
 #define NF_WAITING_FOR_ID 0     // First step in startup process, doesn't have ID confirmed by manager yet
 #define NF_STARTING 1           // When a NF is in the startup process and already has an id
-#define NF_RUNNING 2            // Running normally
-#define NF_PAUSED  3            // NF is not receiving packets, but may in the future
-#define NF_STOPPED 4            // NF has stopped and in the shutdown process
-#define NF_ID_CONFLICT 5        // NF is trying to declare an ID already in use
-#define NF_NO_IDS 6             // There are no available IDs for this NF
+#define NF_WAITING_FOR_RUN  2   // When NF asserts itself to run and ready to process packets ; requests manager to be considered for delivering packets.
+#define NF_RUNNING 3            // Running normally
+#define NF_PAUSED  4            // NF is not receiving packets, but may in the future
+#define NF_STOPPED 5            // NF has stopped and in the shutdown process
+#define NF_ID_CONFLICT 6        // NF is trying to declare an ID already in use
+#define NF_NO_IDS 7             // There are no available IDs for this NF
 
 #define NF_NO_ID -1
 

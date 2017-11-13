@@ -228,7 +228,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         }
         RTE_LOG(INFO, APP, "Using Instance ID %d\n", nf_info->instance_id);
         RTE_LOG(INFO, APP, "Using Service ID %d\n", nf_info->service_id);
-        sleep(2);
+        //sleep(2);
 
         /* Now, map rx and tx rings into client space */
         rx_ring = rte_ring_lookup(get_rx_queue_name(nf_info->instance_id));
@@ -240,7 +240,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
                 rte_exit(EXIT_FAILURE, "Cannot get TX ring - is server process running?\n");
 
         /* Tell the manager we're ready to recieve packets */
-        nf_info->status = NF_RUNNING;
+        //nf_info->status = NF_RUNNING;
 
         nf_info->pid = getpid();
 
@@ -507,6 +507,20 @@ onvm_nflib_run(
         /* Listen for ^C so we can exit gracefully */
         signal(SIGINT, onvm_nflib_handle_signal);
         
+        nf_info->status = NF_WAITING_FOR_RUN;
+        /* Put this NF's info struct onto queue for manager to process startup */
+        if (rte_ring_enqueue(nf_info_ring, nf_info) < 0) {
+                rte_mempool_put(nf_info_mp, nf_info); // give back mermory
+                rte_exit(EXIT_FAILURE, "Cannot send nf_info to manager");
+        }
+        /* Wait for a client id to be assigned by the manager */ /*
+        RTE_LOG(INFO, APP, "Waiting for manager to put to RUN state...\n");
+       for (; nf_info->status == (uint16_t)NF_WAITING_FOR_RUN ;) {
+                sleep(1);
+        }
+        Note: There is no need for synchronization here; as NF Manager will update the status to Running and only then it will be registered to deliver the packets.
+        Also the NF MANGER will put the NF to the RUNNING STATE */
+        //nf_info->status = NF_RUNNING;
 
         for (; keep_running;) {
                 uint16_t i, j, nb_pkts = PKT_READ_SIZE;

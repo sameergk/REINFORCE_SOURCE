@@ -75,7 +75,7 @@ void monitor_nf_node_liveliness_via_pid_monitoring(void);
 int nf_sort_func(const void * a, const void *b);
 inline void extract_nf_load_and_svc_rate_info(__attribute__((unused)) unsigned long interval);
 inline void setup_nfs_priority_per_core_list(__attribute__((unused)) unsigned long interval);
-
+int onvm_nf_register_run(struct onvm_nf_info *nf_info);
 #define DEFAULT_NF_CPU_SHARE    (1024)
 
 //Local Data structure to compute nf_load and comp_cost contention on each core
@@ -424,6 +424,9 @@ onvm_nf_check_status(void) {
         struct onvm_nf_info *nf;
         int num_new_nfs = rte_ring_count(nf_info_queue);
 
+        /* Add PID monitoring to assert active NFs (non crashed) */
+        monitor_nf_node_liveliness_via_pid_monitoring();
+
         if (rte_ring_dequeue_bulk(nf_info_queue, new_nfs, num_new_nfs) != 0)
         #if !defined(USE_CGROUPS_PER_NF_INSTANCE) || !defined (ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT)
                 return;
@@ -437,6 +440,8 @@ onvm_nf_check_status(void) {
                 if (nf->status == NF_WAITING_FOR_ID) {
                         if (!onvm_nf_start(nf))
                                 num_clients++;
+                } else if (nf->status == NF_WAITING_FOR_RUN) {
+                        onvm_nf_register_run(nf);
                 } else if (nf->status == NF_STOPPED) {
                         if (!onvm_nf_stop(nf))
                                 num_clients--;
@@ -444,7 +449,7 @@ onvm_nf_check_status(void) {
         }
 
         /* Add PID monitoring to assert active NFs (non crashed) */
-        monitor_nf_node_liveliness_via_pid_monitoring();
+        //monitor_nf_node_liveliness_via_pid_monitoring();
 
         /* Ideal location to re-compute the NF weight
         #if defined (USE_CGROUPS_PER_NF_INSTANCE) && defined(ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT)
@@ -495,6 +500,15 @@ onvm_nf_service_to_nf_map(uint16_t service_id, struct rte_mbuf *pkt) {
 
 /******************************Internal functions*****************************/
 
+inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
+
+        nf_info->status = NF_RUNNING;
+        // Register this NF running within its service
+        uint16_t service_count = nf_per_service_count[nf_info->service_id]++;
+        services[nf_info->service_id][service_count] = nf_info->instance_id;
+
+        return nf_per_service_count[nf_info->service_id];
+}
 
 inline int
 onvm_nf_start(struct onvm_nf_info *nf_info) {
@@ -531,8 +545,8 @@ onvm_nf_start(struct onvm_nf_info *nf_info) {
         clients[nf_id].instance_id = nf_id;
 
         // Register this NF running within its service
-        uint16_t service_count = nf_per_service_count[nf_info->service_id]++;
-        services[nf_info->service_id][service_count] = nf_id;
+        //uint16_t service_count = nf_per_service_count[nf_info->service_id]++;
+        //services[nf_info->service_id][service_count] = nf_id;
 
         // Let the NF continue its init process
         nf_info->status = NF_STARTING;
