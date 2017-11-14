@@ -286,108 +286,15 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
 void onvm_nf_yeild(struct onvm_nf_info* info);
 void onvm_nf_yeild(struct onvm_nf_info* info) {
         
-        #ifdef USE_MQ
-        static char msg_t[256] = "\0";
-        static unsigned long int msg_prio=0;
-        //struct timespec timeout = {.tv_sec=0, .tv_nsec=1000};
-        static ssize_t rmsg_len = 0;
-        #endif //USE_MQ
-
-        #ifdef USE_SIGNAL
-        //static sigset_t mask;
-        //static struct timespec timeout;
-	//static sigset_t orig_mask;  
-        //struct sigaction  action;      
-        #endif
-
         /* For now discard the special NF instance and put all NFs to wait */
         if ((!ONVM_SPECIAL_NF) || (info->instance_id != 1)) { }
         
         tx_stats->wkup_count[info->instance_id] += 1;
         rte_atomic16_set(flag_p, 1);  //rte_atomic16_cmpset(flag_p, 0, 1);
         
-        #ifdef USE_MQ
-        rmsg_len = mq_receive(mutex, msg_t,sizeof(msg_t), (unsigned int *)&msg_prio);
-        //clock_gettime(CLOCK_REALTIME, &timeout);timeout.tv_nsec+=(10*1000*1000);
-        //rmsg_len = mq_timedreceive(mutex, msg_t,sizeof(msg_t), (unsigned int *)&msg_prio, &timeout);
-        if( 0 > rmsg_len) { 
-                perror ("mq_timedreceive() failed!!");
-                struct mq_attr attr = {0,};
-                mq_getattr(mutex, &attr);
-                printf (" Flags=%u, Max_MSG=%u, MSG_SIZE=%u, CURMSGS=%u",(unsigned int)attr.mq_flags, (unsigned int)attr.mq_maxmsg, (unsigned int)attr.mq_msgsize, (unsigned int)attr.mq_curmsgs);
-               // exit(1);
-        }
-        #endif
 
-        #ifdef USE_FIFO
-        unsigned msg_t= 0;
-        msg_t = read(mutex, (void*)&msg_t, sizeof(msg_t));                      
-        #endif
-
-        #ifdef USE_SIGNAL
-        while(1) {
-                //int sig_rcvd = sigtimedwait(&mask, NULL, &timeout);
-                int sig_rcvd = 0;
-                //static int counter = 0;
-                int res = sigwait(&mutex, &sig_rcvd);
-                if (res) { perror ("sigwait() Failed!!");  exit(1);}             
-                //if (sig_rcvd == SIGINT) { printf("Recieved SIGINT: %d", sig_rcvd); exit(1); break;}
-                if (sig_rcvd == SIGUSR1) { /* counter++; printf("[%d]", counter); printf("Recieved SIGUSR1: %d", sig_rcvd); */ break;}
-                //if (sig_rcvd != SIGUSR1) { printf("Recieved other SIGNAL: %d", sig_rcvd); continue;}     
-        }
-        #endif
-        
         #ifdef USE_SEMAPHORE
         sem_wait(mutex);
-        #endif
-
-        #ifdef USE_SCHED_YIELD
-        sched_yield();
-        #endif
-
-        #ifdef USE_NANO_SLEEP
-        static struct timespec dur = {.tv_sec=0, .tv_nsec=10}, rem = {.tv_sec=0, .tv_nsec=0};
-        nanosleep(&dur, &rem); 
-        if (rem.tv_nsec > 0) { printf ("nano sleep obstructed with time [%d]\n", (int)rem.tv_nsec);}
-        #endif
-
-        #ifdef USE_SOCKET
-        //int onvm_mgr_fd = accept(mutex, NULL, NULL);
-        static char msg_t[2] = "\0";
-        static struct sockaddr_un  onvm_addr;
-        static socklen_t addr_len = sizeof( struct sockaddr_un);     
-        /* if (read(onvm_mgr_fd, &msg_t, sizeof(msg_t));
-        */
-        //int rlen = 
-        recvfrom(mutex, msg_t, sizeof(msg_t), 0, (struct sockaddr *) &onvm_addr, &addr_len);
-        //printf("%d ", rlen);
-        //close(onvm_mgr_fd);
-        #endif
-
-        #ifdef USE_FLOCK
-        flock(mutex, LOCK_EX);
-        #endif
-        
-        #ifdef USE_MQ2
-        static unsigned long msg_t = 1;
-        //struct msgbuf { long mtype; char mtext[1];};
-        //static struct msgbuf msg_t = {1,'\0'};
-        //static msgbuf_t msg_t = {.mtype = 1, .mtext[0]='\0'};
-        //msgrcv(mutex, msg_t, msg_len, msg_type, 0);      
-        
-        /*if(0 > msgrcv(mutex, NULL,0,0, IPC_NOWAIT)){ 
-                if (errno == E2BIG) 
-                        printf("Msg has arrived!!\n");
-        } */
-        if (0 > msgrcv(mutex, &msg_t, 0, 1, 0)) {        
-        //if (0 > msgrcv(mutex, &msg_t, sizeof(msg_t.mtext), 1, 0)) {
-                perror ("msgrcv Failed!!");
-        }
-        #endif
-
-        #ifdef USE_ZMQ
-        static char msg_t[2] = "\0";
-        zmq_recv(mutex, msg_t, sizeof(msg_t), 0);
         #endif
 
         #ifdef USE_POLL_MODE
@@ -403,65 +310,9 @@ void onvm_nf_yeild(struct onvm_nf_info* info) {
 void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info);
 void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info)
 {
-        #ifdef USE_MQ
-        static int msg = '\0';
-        //struct timespec timeout = {.tv_sec=0, .tv_nsec=1000};
-        //clock_gettime(CLOCK_REALTIME, &timeout);timeout..tv_nsec+=1000;
-        //msg = (unsigned int)mq_timedsend(clients[instance_id].mutex, (const char*) &msg, sizeof(msg),(unsigned int)prio, &timeout);
-        //msg = (unsigned int)mq_send(clients[instance_id].mutex, (const char*) &msg, sizeof(msg),(unsigned int)prio);
-        msg = mq_send(mutex, (const char*) &msg,0,0);
-        if (0 > msg) perror ("mq_send failed!");
-        #endif
-
-        #ifdef USE_FIFO
-        unsigned msg = 1;
-        msg = write(mutex, (void*) &msg, sizeof(msg));
-        #endif
-
-
-        #ifdef USE_SIGNAL
-        //static int count = 0;
-        //if (count < 100) { count++;
-        int sts = sigqueue(nf_info->pid, SIGUSR1, (const union sigval)0);
-        if (sts) perror ("sigqueue failed!!");
-        //}
-        #endif
-
         #ifdef USE_SEMAPHORE
         sem_post(mutex);
         //printf("Triggered to wakeup the NF thread internally");
-        #endif
-
-        #ifdef USE_SCHED_YIELD
-        rte_atomic16_read(clients[instance_id].shm_server);
-        #endif
-
-        #ifdef USE_NANO_SLEEP
-        rte_atomic16_read(clients[instance_id].shm_server);
-        #endif
-
-        #ifdef USE_SOCKET
-        static char msg[2] = "\0";
-        sendto(onvm_socket_id, msg, sizeof(msg), 0, (struct sockaddr *) &clients[instance_id].mutex, (socklen_t) sizeof(struct sockaddr_un));
-        #endif
-
-        #ifdef USE_FLOCK
-        if (0 > (flock(clients[instance_id].mutex, LOCK_UN|LOCK_NB))) { perror ("FILE UnLock Failed!!");}
-        #endif
-
-        #ifdef USE_MQ2
-        static unsigned long msg = 1;
-        //static msgbuf_t msg = {.mtype = 1, .mtext[0]='\0'};
-        //if (0 > msgsnd(clients[instance_id].mutex, (const void*) &msg, sizeof(msg.mtext), IPC_NOWAIT)) {
-        if (0 > msgsnd(clients[instance_id].mutex, (const void*) &msg, 0, IPC_NOWAIT)) {
-                perror ("Msgsnd Failed!!");
-        }
-        #endif
-
-        #ifdef USE_ZMQ
-        static char msg[2] = "\0";
-        zmq_connect (onvm_socket_id,get_sem_name(instance_id));
-        zmq_send (onvm_socket_id, msg, sizeof(msg), 0);
         #endif
 
         #ifdef USE_POLL_MODE
@@ -537,13 +388,6 @@ onvm_nflib_run(
                 #endif  // INTERRUPT_SEM
                 #endif  // defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_2)
 
-
-                //can as well move this inside the onvm_nf_yeild() function. Always perform at the end of yeild call.
-                //if(need_ecb && nf_ecb) {
-                //    need_ecb = 0;
-                //    nf_ecb();
-                //}
-                
                 nb_pkts = (uint16_t)rte_ring_dequeue_burst(rx_ring, pkts, nb_pkts);
 
                 if(nb_pkts == 0) {
@@ -625,10 +469,6 @@ onvm_nflib_run(
                                 #ifdef INTERRUPT_SEM
                                 onvm_nf_yeild(info);
                                 #endif
-                                #endif
-
-                                #ifdef DROP_APPROACH_3_WITH_YIELD
-                                sched_yield();
                                 #endif
 
                                 if (tx_batch_size <= rte_ring_free_count(tx_ring)) {
@@ -743,6 +583,17 @@ onvm_nflib_info_init(const char *tag)
         info->status = NF_WAITING_FOR_ID;
         info->tag = tag;
 
+#ifdef ENABLE_NFV_RESL
+        nf_state_mp = rte_mempool_lookup(_NF_STATE_MEMPOOL_NAME);
+        if (nf_state_mp == NULL)
+                rte_exit(EXIT_FAILURE, "No Client STATE Info mempool - bye\n");
+         if(rte_mempool_get(nf_state_mp,&info->state_mempool) < 0) {
+                 rte_exit(EXIT_FAILURE, "Failed to get client state memory");
+         }
+         if (info->state_mempool == NULL) {
+                 rte_exit(EXIT_FAILURE, "Client state memory not allocated!");
+         }
+#endif //#ifdef ENABLE_NFV_RESL
         return info;
 }
 
@@ -810,38 +661,8 @@ onvm_nflib_handle_signal(int sig)
                 if (/*(mutex) && */(rte_atomic16_read(flag_p) ==1)) {
                         rte_atomic16_set(flag_p, 0);
                         
-                        #ifdef USE_MQ
-                        mq_close(mutex);
-                        #endif                        
-                        
-                        #ifdef USE_FIFO
-                        close(mutex);                  
-                        #endif
-                        
-                        #ifdef USE_SIGNAL
-                        #endif
-        
                         #ifdef USE_SEMAPHORE
                         sem_post(mutex);
-                        #endif //USE_MQ
-                        
-                        #ifdef USE_SOCKET
-                        shutdown(mutex, SHUT_RDWR);
-                        close(mutex);
-                        #endif
-
-                        #ifdef USE_FLOCK
-                        flock(mutex, LOCK_UN|LOCK_NB);
-                        close(mutex);
-                        #endif
-
-                        #ifdef USE_MQ2
-                        msgctl(mutex, IPC_RMID, 0);
-                        #endif
-                        
-                        #ifdef USE_ZMQ
-                        zmq_close(mutex);
-                        zmq_ctx_destroy(mutex_ctx);
                         #endif
                 }
                 #endif
@@ -870,30 +691,6 @@ init_shared_cpu_info(uint16_t instance_id) {
         sem_name = get_sem_name(instance_id);
         fprintf(stderr, "sem_name=%s for client %d\n", sem_name, instance_id);
 
-        #ifdef USE_MQ
-        struct mq_attr attr = {.mq_flags=0, .mq_maxmsg=1, .mq_msgsize=sizeof(int), .mq_curmsgs=0}
-;       mutex = mq_open(sem_name, O_RDONLY, 0666, &attr);
-        //mutex = mq_open(sem_name, O_RDONLY);
-        if (0 > mutex) {
-                perror("Unable to open mqd");
-                fprintf(stderr, "unable to execute semphore for client %d\n", instance_id);
-                exit(1);
-        }
-        #endif
-
-        #ifdef USE_FIFO
-        mutex = mkfifo(sem_name, 0666);
-        if (mutex) { perror ("MKFIFO failed!!");}        
-        mutex = open(sem_name, O_RDONLY); 
-        #endif
-
-        #ifdef USE_SIGNAL
-        sigemptyset (&mutex);
-	sigaddset (&mutex, SIGUSR1);
-        //sigaddset (&mutex, SIGINT);
-        sigprocmask(SIG_BLOCK, &mutex, NULL);
-        #endif
-        
         #ifdef USE_SEMAPHORE
         mutex = sem_open(sem_name, 0, 0666, 0);
         if (mutex == SEM_FAILED) {
@@ -902,46 +699,8 @@ init_shared_cpu_info(uint16_t instance_id) {
                 sem_close(mutex);
                 exit(1);
         }
-        #endif //USE_MQ
-
-        #ifdef USE_SOCKET
-        mutex = socket (PF_LOCAL, SOCK_DGRAM, 0);
-        struct sockaddr_un name = {.sun_family=AF_UNIX};
-        strncpy(name.sun_path, sem_name, sizeof(name.sun_path) - 1);
-        if ( 0 > bind(mutex, (const struct sockaddr *) &name,sizeof(struct sockaddr_un)) 
-              /* || 0 > listen(mutex, 1) */ ) {
-                perror ("Unable to bind or listen on AF_UNIX Socket!!");
-                close(mutex);
-                exit(1);
-        }
         #endif
 
-        #ifdef USE_FLOCK
-        mutex = open(sem_name, O_CREAT|O_RDWR, 0666);
-        #endif
-        
-        #ifdef USE_MQ2
-        //struct mq_attr attr = {.mq_flags=0, .mq_maxmsg=1, .mq_msgsize=sizeof(int), .mq_curmsgs=0}
-;       //mutex = open_queue(sem_name);
-        key = get_rx_shmkey(instance_id); //ftok(sem_name,instance_id);
-        mutex = msgget(key, IPC_CREAT|0666);
-        if (0 > mutex) {
-                perror("Unable to open msgqueue!");
-                fprintf(stderr, "unable to execute semphore for client %d\n", instance_id);
-                exit(1);
-        }
-        #endif
-        
-        #ifdef USE_ZMQ
-        if (NULL == (zmq_ctx = zmq_init(1))){ perror("zmq_init()! failed!!");}
-        if (NULL == (mutex_ctx = zmq_ctx_new ())){ perror("zmq_ctx_init()! failed!!");}
-        if (NULL == (mutex = zmq_socket (mutex_ctx, ZMQ_REP))){ perror("zmq_socket()! failed!!");} //ZMQ_PULL
-        if ( 0 != zmq_bind (mutex, sem_name)) {  //"tcp://*:5555" "ipc:///tmp/feeds/0"
-                perror ("Failed to create ZMQ socket!!");
-                exit(1);
-        }
-        #endif
-        
         /* get flag which is shared by server */
         key = get_rx_shmkey(instance_id);
         if ((shmid = shmget(key, SHMSZ, 0666)) < 0) {
@@ -959,12 +718,10 @@ init_shared_cpu_info(uint16_t instance_id) {
 
         set_cpu_sched_policy_and_mode();
 
-//#if 0
         // Get the FlowTable Entries Exported to the NF.
         #if (defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)) || defined(DUMMY_FT_LOAD_ONLY)
         onvm_flow_dir_nf_init();
         #endif //# defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)
-//#endif //if 0
 }
 #endif
 

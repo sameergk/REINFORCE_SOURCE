@@ -202,36 +202,8 @@ struct client {
         key_t shm_key;
         rte_atomic16_t *shm_server;     //0=running; 1=blocked_on_rx (no pkts to process); 2=blocked_on_tx (cannot push packets)
 
-        #ifdef USE_MQ
-        mqd_t mutex;
-        #endif
-        
-        #ifdef USE_FIFO
-        int mutex;       
-        #endif
-
-        #ifdef USE_SIGNAL
-        #endif
-
         #ifdef USE_SEMAPHORE        
         sem_t *mutex;
-        #endif
-
-        #ifdef USE_SOCKET
-        struct sockaddr_un mutex; //clients[instance_id].mutex
-        #endif
-
-        #ifdef USE_FLOCK
-        int mutex;      
-        #endif
-        
-        #ifdef USE_MQ2
-        int mutex;
-        #endif
-
-        #ifdef USE_ZMQ
-        //void *mutex;
-        //void *mutex_ctx;
         #endif
 
         #ifdef ENABLE_NF_BACKPRESSURE

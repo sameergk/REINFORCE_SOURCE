@@ -82,27 +82,13 @@
 /* Note: Make the PACKET_READ_SIZE defined in onvm_mgr.h same as PKT_READ_SIZE defined in onvm_nflib_internal.h, better get rid of latter */
 // enable: PRE_PROCESS_DROP_ON_RX, DROP_APPROACH_3,DROP_APPROACH_3_WITH_SYNC
 #define PRE_PROCESS_DROP_ON_RX  // Feature flag for addressing NF Local Back-pressure:: To lookup NF Tx queue occupancy and drop packets pro-actively before pushing to NFs Rx Ring.
-////#define DROP_APPROACH_1       // (cleaned out) Handle inside NF_LIB:: After dequeue from NFs Rx ring, check for Tx Ring size and drop pkts before pushing packet to the NFs processing function. < Too late, only avoids packet processing by NF:: Discontinued.. Results are OK, but not preferred approach>
-////#define DROP_APPROACH_2       // (cleaned out) Handle in onvm_mgr:: After segregation of Rx/Tx buffers to specific NF: Drop the packet before pushing the packets to the NFs Rx Ring buffer. < Early decision. Must also account for packets that could be currently under processing. < Results OK, but not preferred approach>
 #define DROP_APPROACH_3         // Handle inside NF_LIB:: Make the NF to block until it cannot push the packets to the Tx Ring, Subsequent packets will be dropped in onvm_mgr context by Rx/Tx Threads < 3 options: Poll till Tx is free, Yield or Block on Semaphore>
-////#define DROP_APPROACH_3_WITH_YIELD    //sub-option for approach 3: Results are good, but could result in lots of un-necessary context switches as one block might result in multiple yields. Thrpt is on par with block-approach.
-////#define DROP_APPROACH_3_WITH_POLL     // (cleaned out) sub-option for approach 3: Results are good, but accounts to CPU wastage and hence not preferred.
 #define DROP_APPROACH_3_WITH_SYNC       //sub-option for approach 3: Results are good, preferred approach.
 
 #define INTERRUPT_SEM           // To enable NF thread interrupt mode wake.  Better to move it as option in Makefile
 
 #define USE_SEMAPHORE           // Use Semaphore for IPC
-//#define USE_MQ                // USe Message Queue for IPC between NFs and NF manager
-//#define USE_FIFO              // Use Named Pipe (FIFO) -- cannot work in our model as Writer cannot be opened in nonblock
-//#define USE_SIGNAL            // Use Signals (SIGUSR1) for IPC -- not reliable; makes the program exit after a while ( more pending singals??)..
-//#define USE_SCHED_YIELD       // Use Explicit CPU Relinquish CPU, no explicit IPC other than shared mem read/write
-//#define USE_NANO_SLEEP        // Use Sleep call to Reqlinqush CPU no explicit IPC other than shared mem read/write
-//#define USE_SOCKET            // Use socket for IPC, NFs block on recv and mgr sends to ublock clients
-//#define USE_FLOCK             // USE FILE_LOCK PREMITIVE for Blocking the NFs and mgr opens files in locked mode < Very expensive>
-//#define USE_MQ2               // USE SYS_V5 Message Queue <good but relatively expensive than MQ >
-//#define USE_ZMQ               // Use ZeroMQ sockets for communication < expensive as well, it doesn't seem to fit in our model>
-#if (defined(INTERRUPT_SEM) && !defined(USE_SEMAPHORE) && !defined(USE_MQ) && !defined(USE_FIFO) && !defined(USE_SIGNAL) \
-&& !defined(USE_SCHED_YIELD) && !defined(USE_NANO_SLEEP) && !defined(USE_SOCKET) && !defined(USE_FLOCK) && !defined(USE_MQ2) && !defined(USE_ZMQ))
+#if (defined(INTERRUPT_SEM) && !defined(USE_SEMAPHORE))
 #define USE_POLL_MODE
 #endif
 
@@ -262,10 +248,6 @@ static inline long get_index_of_highest_set_bit(long x) {
         return next_set_index;
 }
 
-//#ifdef USE_MQ2
-//typedef struct msgbuf { long mtype; char mtext[32];}msgbuf_t;
-//#endif
-
 //extern uint8_t rss_symmetric_key[40];
 //size of onvm_pkt_meta cannot exceed 8 bytes, so how to add onvm_service_chain* sc pointer?
 struct onvm_pkt_meta {
@@ -347,6 +329,14 @@ struct onvm_nf_info {
 #ifdef ENABLE_ECN_CE
         histogram_v2_t ht2_q;
 #endif  //ENABLE_ECN_CE
+
+#ifdef ENABLE_NFV_RESL
+        void *state_mempool;
+#define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
+#define _NF_STATE_SIZE      (64*1024)
+#define _NF_STATE_CACHE     (8)
+
+#endif //#ifdef ENABLE_NFV_RESL
 };
 
 /*
@@ -383,17 +373,12 @@ struct onvm_service_chain {
 #ifdef INTERRUPT_SEM
 #define SHMSZ 4                         // size of shared memory segement (page_size)
 #define KEY_PREFIX 123                  // prefix len for key
-#ifdef USE_MQ
-#define MP_CLIENT_SEM_NAME "/MProc_Client_%u_SEM"
-#elif defined USE_FIFO
-#define MP_CLIENT_SEM_NAME "/MProc_Client_%u_SEM"
-#elif defined USE_SOCKET
-#define MP_CLIENT_SEM_NAME "/MProc_Client_%u_SEM"
-#elif defined USE_ZMQ
-#define MP_CLIENT_SEM_NAME "ipc:///MProc_Client_%u_SEM"
-#else
+
+#ifdef USE_SEMAPHORE
 #define MP_CLIENT_SEM_NAME "MProc_Client_%u_SEM"
-#endif //USE_MQ
+#endif //USE_SEMAPHORE
+
+
 //1000003 1000033 1000037 1000039 1000081 1000099 1000117 1000121 1000133
 //#define SAMPLING_RATE 1000000           // sampling rate to estimate NFs computation cost
 #define SAMPLING_RATE 1000003           // sampling rate to estimate NFs computation cost

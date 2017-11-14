@@ -107,6 +107,10 @@ extern struct onvm_nf_info *nf_info;
 // Shared pool for all clients info
 static struct rte_mempool *nf_info_mp;
 
+#ifdef ENABLE_NFV_RESL
+// Shared pool for all clients info
+static struct rte_mempool *nf_state_mp;
+#endif //#ifdef ENABLE_NFV_RESL
 
 // User-given NF Client ID (defaults to manager assigned)
 static uint16_t initial_instance_id = NF_NO_ID;
@@ -134,40 +138,10 @@ uint64_t counter = 1;
 // flag_p=2 => "Internal NF Msg to wakeup NF and do processing .. Yet To be Finalized."   
 static rte_atomic16_t *flag_p;
 
-#ifdef USE_MQ
-static mqd_t mutex;
-#endif //USE_MQ
-
-#ifdef USE_FIFO
-static int mutex;
-#endif //USE_FIFO
-
-#ifdef  USE_SIGNAL
-static sigset_t mutex;
-#endif //USE_SIGNAL
-
 #ifdef USE_SEMAPHORE
 // Mutex for sem_wait
 static sem_t *mutex;
 #endif //USE_SIGNAL
-
-#ifdef USE_SOCKET
-static int mutex;
-#endif
-
-#ifdef USE_FLOCK
-static int mutex;    
-#endif
-
-#ifdef USE_MQ2
-static int mutex;
-#endif
-
-#ifdef USE_ZMQ
-void *zmq_ctx;
-void *mutex_ctx;
-void* mutex;
-#endif
 
 #endif  //INTERRUPT_SEM
 

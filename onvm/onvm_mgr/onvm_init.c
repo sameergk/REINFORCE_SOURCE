@@ -60,6 +60,11 @@ struct port_info *ports = NULL;
 
 struct rte_mempool *pktmbuf_pool;
 struct rte_mempool *nf_info_pool;
+
+#ifdef ENABLE_NFV_RESL
+struct rte_mempool *nf_state_pool;
+#endif //#ifdef ENABLE_NFV_RESL
+
 struct rte_ring *nf_info_queue;
 uint16_t **services;
 uint16_t *nf_per_service_count;
@@ -232,6 +237,15 @@ init_client_info_pool(void)
                         NF_INFO_SIZE, NF_INFO_CACHE,
                         0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
 
+
+#ifdef ENABLE_NFV_RESL
+        nf_state_pool = rte_mempool_create(_NF_STATE_MEMPOOL_NAME, MAX_CLIENTS,
+                        _NF_STATE_SIZE, NF_INFO_CACHE,
+                                0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+
+        if(nf_state_pool == NULL) { printf("Failed to Create mbuf state pool '%s' ...\n", _NF_STATE_MEMPOOL_NAME);}
+#endif //#ifdef ENABLE_NFV_RESL
+
         return (nf_info_pool == NULL); /* 0 on success */
 }
 
@@ -317,47 +331,9 @@ init_shm_rings(void) {
         key_t key;
         int shmid;
         char *shm;
-                
-        #ifdef USE_MQ
-        mqd_t mutex;
-        struct mq_attr attr = {.mq_flags=0 , .mq_maxmsg=1, .mq_msgsize=sizeof(int), .mq_curmsgs=0};
-        #endif
-
-        #ifdef USE_FIFO
-        int mutex;    
-        #endif
 
         #ifdef USE_SEMAPHORE
         sem_t *mutex;
-        #endif
-
-        #ifdef USE_SOCKET
-        onvm_socket_id = socket (PF_LOCAL, SOCK_DGRAM, 0);
-        if (0 > onvm_socket_id) {
-                perror ("Failed to create local socket");
-                exit(1);
-        }
-        if (fcntl(onvm_socket_id, F_SETFL, fcntl(onvm_socket_id, F_GETFL, 0) | O_NONBLOCK)){
-                perror ("Failed to make nonblocking socket!");
-                exit(2);
-        }
-        #endif
-
-        #ifdef USE_FLOCK
-        int mutex;       
-        #endif
-        
-        #ifdef USE_MQ2
-        int mutex;
-        #endif
-        
-        #ifdef USE_ZMQ
-        zmq_ctx = zmq_init(2);
-        onvm_socket_ctx = zmq_ctx_new ();
-        onvm_socket_id = zmq_socket (onvm_socket_ctx, ZMQ_REQ); // ZMQ_PUSH ZMQ_PAIR
-        if (zmq_ctx == NULL || onvm_socket_ctx == NULL || onvm_socket_id == NULL) {
-                perror("onvm_mgr failed in zzmmq_socket\n");        
-        }
         #endif
 
         #endif
@@ -415,23 +391,6 @@ init_shm_rings(void) {
                 sem_name = get_sem_name(i);
                 clients[i].sem_name = sem_name;        
                 fprintf(stderr, "sem_name=%s for client %d\n", sem_name, i);
-                
-                #ifdef USE_MQ //O_NONBLOCK
-                mutex = mq_open(sem_name, O_CREAT|O_WRONLY, 0666, &attr);
-                if (mutex < 0 ) {
-                        perror("Unable to open mqd!");
-                        fprintf(stderr, "unable to execute mq_open for client %d\n, error [%d, %d]", i, mutex, errno);
-                        //mq_unlink(mutex);
-                        exit(1);
-                }
-                clients[i].mutex = mutex;
-                #endif
-
-                #ifdef USE_FIFO
-                if (mkfifo(sem_name, 0666)) { perror("MKFIFO failed!");}                
-                if (0 > (mutex = open(sem_name, O_WRONLY|O_NONBLOCK, 0666))) { perror ("OPEN FIFO Failed!!");}
-                clients[i].mutex = mutex;
-                #endif
 
                 #ifdef USE_SEMAPHORE                
                 mutex = sem_open(sem_name, O_CREAT, 06666, 0);
@@ -441,39 +400,6 @@ init_shm_rings(void) {
                         exit(1);
                 }
                 clients[i].mutex = mutex;
-                #endif
-
-                #ifdef USE_SIGNAL
-                //nothing to be done per client.                
-                #endif
-
-                #ifdef USE_SOCKET
-                // initialize clients socket address details 
-                clients[i].mutex.sun_family = AF_UNIX;
-                strncpy(clients[i].mutex.sun_path, sem_name, sizeof(clients[i].mutex.sun_path) - 1);
-                #endif
-   
-                #ifdef USE_FLOCK
-                if (0 > (mutex = open(sem_name, O_CREAT|O_WRONLY, 0666))) { perror ("OPEN FILE Failed!!");}
-                if (0 > (flock(mutex, LOCK_EX|LOCK_NB))) { perror ("FILE Lock Failed!!");}
-                clients[i].mutex = mutex;
-                #endif
-                
-                #ifdef USE_MQ2
-                //struct mq_attr attr = {.mq_flags=0, .mq_maxmsg=1, .mq_msgsize=sizeof(int), .mq_curmsgs=0}
-        ;       //mutex = open_queue(sem_name);
-                key = get_rx_shmkey(i);//ftok(sem_name,i);
-                mutex = msgget(key, IPC_CREAT|0666);
-                if (0 > mutex) {
-                        perror("Unable to open msgqueue!");
-                        fprintf(stderr, "unable to execute semphore for client %d\n", i);
-                        exit(1);
-                }
-                clients[i].mutex = mutex;
-                #endif
-
-                #ifdef USE_ZMQ
-                //zmq_connect(onvm_socket_id,sem_name);
                 #endif
 
                 key = get_rx_shmkey(i);       

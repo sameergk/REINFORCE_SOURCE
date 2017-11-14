@@ -259,64 +259,8 @@ whether_wakeup_client(int instance_id)
 static inline void
 notify_client(int instance_id)
 {
-        #ifdef USE_MQ
-        static int msg = '\0';
-        //struct timespec timeout = {.tv_sec=0, .tv_nsec=1000};
-        //clock_gettime(CLOCK_REALTIME, &timeout);timeout..tv_nsec+=1000;
-        //msg = (unsigned int)mq_timedsend(clients[instance_id].mutex, (const char*) &msg, sizeof(msg),(unsigned int)prio, &timeout);
-        //msg = (unsigned int)mq_send(clients[instance_id].mutex, (const char*) &msg, sizeof(msg),(unsigned int)prio);
-        msg = mq_send(clients[instance_id].mutex, (const char*) &msg,0,0);
-        if (0 > msg) { perror ("mq_send failed!");}
-        #endif
-
-        #ifdef USE_FIFO
-        unsigned msg = 1;
-        msg = write(clients[instance_id].mutex, (void*) &msg, sizeof(msg));
-        #endif
-
-
-        #ifdef USE_SIGNAL
-        //static int count = 0;
-        //if (count < 100) { count++;
-        int sts = sigqueue(clients[instance_id].info->pid, SIGUSR1, (const union sigval)0);
-        if (sts) perror ("sigqueue failed!!");
-        //}
-        #endif
-
         #ifdef USE_SEMAPHORE
         sem_post(clients[instance_id].mutex);
-        #endif
-
-        #ifdef USE_SCHED_YIELD
-        rte_atomic16_read(clients[instance_id].shm_server);
-        #endif
-
-        #ifdef USE_NANO_SLEEP
-        rte_atomic16_read(clients[instance_id].shm_server);
-        #endif
-
-        #ifdef USE_SOCKET
-        static char msg[2] = "\0";
-        sendto(onvm_socket_id, msg, sizeof(msg), 0, (struct sockaddr *) &clients[instance_id].mutex, (socklen_t) sizeof(struct sockaddr_un));
-        #endif
-
-        #ifdef USE_FLOCK
-        if (0 > (flock(clients[instance_id].mutex, LOCK_UN|LOCK_NB))) { perror ("FILE UnLock Failed!!");}
-        #endif
-
-        #ifdef USE_MQ2
-        static unsigned long msg = 1;
-        //static msgbuf_t msg = {.mtype = 1, .mtext[0]='\0'};
-        //if (0 > msgsnd(clients[instance_id].mutex, (const void*) &msg, sizeof(msg.mtext), IPC_NOWAIT)) {
-        if (0 > msgsnd(clients[instance_id].mutex, (const void*) &msg, 0, IPC_NOWAIT)) {
-                perror ("Msgsnd Failed!!");
-        }
-        #endif
-
-        #ifdef USE_ZMQ
-        static char msg[2] = "\0";
-        zmq_connect (onvm_socket_id,get_sem_name(instance_id));
-        zmq_send (onvm_socket_id, msg, sizeof(msg), 0);
         #endif
 
         #ifdef USE_POLL_MODE
@@ -460,39 +404,9 @@ static void signal_handler(int sig, siginfo_t *info, void *secret) {
         if (sig <= 15) {
                 for (i = 1; i < MAX_CLIENTS; i++) {
 
-                        #ifdef USE_MQ
-                        mq_close(clients[i].mutex);
-                        mq_unlink(clients[i].sem_name);
-                        #endif
-
-                        #ifdef USE_FIFO
-                        close(clients[i].mutex);
-                        unlink(clients[i].sem_name);
-                        #endif
-
-                        #ifdef USE_SIGNAL
-                        #endif
-
-                        #ifdef USE_SOCKET
-                        #endif
-
                         #ifdef USE_SEMAPHORE
                         sem_close(clients[i].mutex);
                         sem_unlink(clients[i].sem_name);
-                        #endif
-
-                        #ifdef USE_FLOCK
-                        flock(clients[i].mutex, LOCK_UN|LOCK_NB);
-                        close(clients[i].mutex);
-                        #endif
-
-                        #ifdef USE_MQ2
-                        msgctl(clients[i].mutex, IPC_RMID, 0);
-                        #endif
-
-                        #ifdef USE_ZMQ
-                        zmq_close(onvm_socket_id);
-                        zmq_ctx_destroy(onvm_socket_ctx);
                         #endif
 
                 }
