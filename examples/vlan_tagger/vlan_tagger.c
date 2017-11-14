@@ -68,6 +68,12 @@ static uint32_t print_delay = 5000000;
 
 static uint32_t destination;
 
+typedef struct vlan_tag_info_table {
+        uint16_t ft_index;
+        uint16_t vlan_tag;
+        uint32_t tag_counter;
+}vlan_tag_info_table_t;
+vlan_tag_info_table_t *vtag_tbl = NULL;
 /*
  * Print a usage message
  */
@@ -140,6 +146,9 @@ do_stats_display(struct rte_mbuf* pkt) {
         printf("Port : %d\n", pkt->port);
         printf("Size : %d\n", pkt->pkt_len);
         printf("N°   : %d\n", pkt_process);
+        if(vtag_tbl) {
+                printf("Counter: %d\n", vtag_tbl[0].tag_counter);
+        }
         printf("\n\n");
 
         ip = onvm_pkt_ipv4_hdr(pkt);
@@ -159,13 +168,14 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
                 exit(0);
                 return ;
         }
+        uint16_t vlan_tag = 0x10;
         if (ETHER_TYPE_IPv4 == rte_be_to_cpu_16(eth->ether_type)) {
                 if (rte_vlan_insert(&pkt)) {
                         printf("\nFailed to Insert Vlan Header to the Packet!!!!\n");
                         return;
                 }
                 struct vlan_hdr *vlan = (struct vlan_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr));
-                vlan->vlan_tci = rte_cpu_to_be_16((uint16_t)0x10);
+                vlan->vlan_tci = rte_cpu_to_be_16((uint16_t)vlan_tag);
                 //vlan->eth_proto = rte_cpu_to_be_16(ETHER_TYPE_ARP);
                 //printf("\nVLAN [0x%x, 0x%x] is already inserted!\n", rte_be_to_cpu_16(vlan->vlan_tci), rte_be_to_cpu_16(vlan->eth_proto));
         }
@@ -182,6 +192,18 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
         }
 
         //rte_vlan_strip(pkt);
+#ifdef ENABLE_NFV_RESL
+        if(nf_info->state_mempool) {
+                if(vtag_tbl  == NULL) {
+                        vtag_tbl = (vlan_tag_info_table_t*)nf_info->state_mempool;
+                        vtag_tbl[0].ft_index = 0;
+                        vtag_tbl[0].vlan_tag = vlan_tag;
+                        vtag_tbl[0].tag_counter = 1;
+                } else {
+                        vtag_tbl[0].tag_counter+=1;
+                }
+        }
+#endif //#ifdef ENABLE_NFV_RESL
 
         return;
 }

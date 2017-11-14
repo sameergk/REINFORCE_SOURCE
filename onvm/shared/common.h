@@ -187,11 +187,15 @@ struct onvm_service_chain;
 /******************************************************************************/
 // NFV RESL related extensions, control macros and defines
 #define ENABLE_NFV_RESL             // global nvf_Resl feature flag
+
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
-#endif
 
+#define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
+#define _NF_STATE_SIZE      (64*1024)
+#define _NF_STATE_CACHE     (8)
+#endif  //#ifdef ENABLE_NFV_RESL
 /******************************************************************************/
 #define SET_BIT(x,bitNum) ((x)|=(1<<(bitNum-1)))
 static inline void set_bit(long *x, unsigned bitNum) {
@@ -332,11 +336,8 @@ struct onvm_nf_info {
 
 #ifdef ENABLE_NFV_RESL
         void *state_mempool;
-#define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
-#define _NF_STATE_SIZE      (64*1024)
-#define _NF_STATE_CACHE     (8)
-
 #endif //#ifdef ENABLE_NFV_RESL
+
 };
 
 /*
