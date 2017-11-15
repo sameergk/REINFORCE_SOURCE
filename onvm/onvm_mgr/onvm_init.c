@@ -99,6 +99,7 @@ static void check_all_ports_link_status(uint8_t port_num, uint32_t port_mask);
 uint32_t nf_mgr_id;
 static uint32_t read_onvm_mgr_id_from_system(void);
 #endif // ENABLE_NF_MGR_IDENTIFIER
+static int init_nf_state_pool(void);
 #endif // ENABLE_NFV_RESL
 /*********************************Interfaces**********************************/
 
@@ -224,6 +225,17 @@ init_mbuf_pools(void) {
         return (pktmbuf_pool == NULL); /* 0  on success */
 }
 
+#ifdef ENABLE_NFV_RESL
+static int init_nf_state_pool(void) {
+        printf("Cache size:[%d,max:%d], Creating mbuf pool '%s' ...\n", _NF_STATE_CACHE, RTE_MEMPOOL_CACHE_MAX_SIZE, _NF_MEMPOOL_NAME);
+        nf_state_pool = rte_mempool_create(_NF_STATE_MEMPOOL_NAME, MAX_CLIENTS,
+                        _NF_STATE_SIZE, _NF_STATE_CACHE,
+                                0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+
+        if(nf_state_pool == NULL) { printf("Failed to Create mbuf state pool '%s' ...\n", _NF_STATE_MEMPOOL_NAME);}
+        return (nf_state_pool == NULL); /* 0 on success */
+}
+#endif
 /**
  * Set up a mempool to store nf_info structs
  */
@@ -239,11 +251,9 @@ init_client_info_pool(void)
 
 
 #ifdef ENABLE_NFV_RESL
-        nf_state_pool = rte_mempool_create(_NF_STATE_MEMPOOL_NAME, MAX_CLIENTS,
-                        _NF_STATE_SIZE, NF_INFO_CACHE,
-                                0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
-
-        if(nf_state_pool == NULL) { printf("Failed to Create mbuf state pool '%s' ...\n", _NF_STATE_MEMPOOL_NAME);}
+        if(init_nf_state_pool()) {
+               rte_exit(EXIT_FAILURE, "Cannot create client state mbuf pool: %s\n", rte_strerror(rte_errno));
+        }
 #endif //#ifdef ENABLE_NFV_RESL
 
         return (nf_info_pool == NULL); /* 0 on success */
@@ -365,6 +375,22 @@ init_shm_rings(void) {
                 rq_name = get_rx_queue_name(i);
                 tq_name = get_tx_queue_name(i);
                 clients[i].instance_id = i;
+
+#ifdef ENABLE_NFV_RESL
+                if(i < MAX_ACTIVE_CLIENTS) { //if(is_primary_active_nf_id(i)) {
+                        clients[i].rx_q = rte_ring_create(rq_name,
+                                        ringsize, socket_id,
+                                        RING_F_SC_DEQ);                 /* multi prod, single cons (Enqueue can be by either Rx/Tx Threads, but dequeue only by NF thread)*/
+                        clients[i].tx_q = rte_ring_create(tq_name,
+                                        r_size, //ringsize,
+                                        socket_id,
+                                        RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by dedicated Tx thread) */
+                } else {
+                        clients[i].rx_q = clients[get_associated_active_or_standby_nf_id(i)].rx_q;
+                        clients[i].tx_q = clients[get_associated_active_or_standby_nf_id(i)].tx_q;
+                        fprintf(stderr, "re-using rx and tx queue rings for client %d with %d\n", i, get_associated_active_or_standby_nf_id(i));
+                }
+#else
                 clients[i].rx_q = rte_ring_create(rq_name,
                                 ringsize, socket_id,
                                 //RING_F_SP_ENQ|RING_F_SC_DEQ);     /* single prod, single cons */
@@ -376,11 +402,13 @@ init_shm_rings(void) {
                                 //RING_F_SC_DEQ);                 /* multi prod, single cons */
                                 //but it should be RING_F_SP_ENQ
 
+#endif
                 if (clients[i].rx_q == NULL)
                         rte_exit(EXIT_FAILURE, "Cannot create rx ring queue for client %u\n", i);
 
                 if (clients[i].tx_q == NULL)
                         rte_exit(EXIT_FAILURE, "Cannot create tx ring queue for client %u\n", i);
+
 
                 #ifdef ENABLE_RING_WATERMARK
                 rte_ring_set_water_mark(clients[i].rx_q, CLIENT_QUEUE_RING_WATER_MARK_SIZE);
@@ -389,8 +417,8 @@ init_shm_rings(void) {
 
                 #ifdef INTERRUPT_SEM
                 sem_name = get_sem_name(i);
-                clients[i].sem_name = sem_name;        
-                fprintf(stderr, "sem_name=%s for client %d\n", sem_name, i);
+                clients[i].sem_name = sem_name;
+                //fprintf(stderr, "sem_name=%s for client %d\n", sem_name, i);
 
                 #ifdef USE_SEMAPHORE                
                 mutex = sem_open(sem_name, O_CREAT, 06666, 0);

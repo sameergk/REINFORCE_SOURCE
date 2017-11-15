@@ -226,7 +226,14 @@ whether_wakeup_client(int instance_id)
         if (clients[instance_id].rx_q == NULL) {
                 return 0;
         }
-
+#ifdef ENABLE_NFV_RESL
+        //If PRIMARY(ACTIVE) NF IS ALIVE, then DO NOT WAKE THE (SECONDARY) STANDBY NF;
+        //if((!is_primary_active_nf_id(instance_id)) && (NF_RUNNING == clients[get_associated_active_or_standby_nf_id(instance_id)].info->status)) {
+        if((!is_primary_active_nf_id(instance_id)) && (onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(instance_id)]) ) ) {
+                return 0;
+        }
+        //IF ONLY EITHER IS ALIVE THEN WAKEUP THIS ONE
+#endif
         #ifdef ENABLE_NF_BACKPRESSURE
         #ifdef NF_BACKPRESSURE_APPROACH_2
         /* Block the upstream (earlier) NFs from getting scheduled, if there is NF at downstream that is bottlenecked! */

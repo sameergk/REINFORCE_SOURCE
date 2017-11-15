@@ -194,7 +194,10 @@ struct onvm_service_chain;
 
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)
-#define _NF_STATE_CACHE     (8)
+#define _NF_STATE_CACHE     (16)
+
+#define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
+#define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
 #endif  //#ifdef ENABLE_NFV_RESL
 /******************************************************************************/
 #define SET_BIT(x,bitNum) ((x)|=(1<<(bitNum-1)))
@@ -413,11 +416,16 @@ struct onvm_service_chain {
  */
 static inline const char *
 get_rx_queue_name(unsigned id) {
+
         /* buffer for return value. Size calculated by %u being replaced
          * by maximum 3 digits (plus an extra byte for safety) */
         static char buffer[sizeof(MP_CLIENT_RXQ_NAME) + 2];
 
+#ifdef ENABLE_NFV_RESL
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_RXQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+#else
         snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_RXQ_NAME, id);
+#endif
         return buffer;
 }
 
@@ -429,10 +437,27 @@ get_tx_queue_name(unsigned id) {
         /* buffer for return value. Size calculated by %u being replaced
          * by maximum 3 digits (plus an extra byte for safety) */
         static char buffer[sizeof(MP_CLIENT_TXQ_NAME) + 2];
-
+#ifdef ENABLE_NFV_RESL
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_TXQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+#else
         snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_TXQ_NAME, id);
+#endif
         return buffer;
 }
+
+#ifdef ENABLE_NFV_RESL
+static inline unsigned
+get_associated_active_or_standby_nf_id(unsigned nf_id) {
+        if(nf_id < MAX_ACTIVE_CLIENTS) {
+                return (nf_id|MAX_ACTIVE_CLIENTS);
+        }
+        return (nf_id&(MAX_ACTIVE_CLIENTS-1));
+}
+static inline unsigned
+is_primary_active_nf_id(unsigned nf_id) {
+        return ((nf_id < MAX_ACTIVE_CLIENTS));
+}
+#endif
 
 #ifdef INTERRUPT_SEM
 /*

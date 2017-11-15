@@ -50,6 +50,101 @@
 #include "onvm_nflib_internal.h"
 #include "onvm_nflib.h"
 
+/*********************************************************************/
+#if defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) &&                           \
+    defined(_POSIX_MONOTONIC_CLOCK)
+#define HAS_CLOCK_GETTIME_MONOTONIC
+#endif
+
+#define ENABLE_LOCAL_LATENCY_PROFILER
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+  struct timespec start, stop;
+#else
+  struct timeval start, stop;
+#endif
+int64_t delta = 0;
+int get_cur_time(void* ct);
+int get_start_time(void);
+int get_stop_time(void);
+int64_t get_elapsed_time(void);
+int get_cur_time(void* ct)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+    if (clock_gettime(USE_THIS_CLOCK,(struct timespec *)ct) == -1) {
+      perror("clock_gettime");
+      return 1;
+    }
+#else
+    if (gettimeofday(&ct, NULL) == -1) {
+      perror("gettimeofday");
+      return 1;
+    }
+#endif
+    return 0;
+}
+
+int get_start_time(void)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+    if (clock_gettime(USE_THIS_CLOCK, &start) == -1) {
+      perror("clock_gettime");
+      return 1;
+    }
+#else
+    if (gettimeofday(&start, NULL) == -1) {
+      perror("gettimeofday");
+      return 1;
+    }
+#endif
+    return 0;
+}
+
+int get_stop_time(void)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+    if (clock_gettime(USE_THIS_CLOCK, &stop) == -1) {
+      perror("clock_gettime");
+      return 1;
+    }
+#else
+    if (gettimeofday(&stop, NULL) == -1) {
+      perror("gettimeofday");
+      return 1;
+    }
+#endif
+    return 0;
+}
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+int64_t get_ttl_time(struct timespec start, struct timespec stop);
+int64_t get_ttl_time(struct timespec start, struct timespec stop)
+{
+#else
+int64_t get_ttl_time(struct timeval start, struct timeval stop)
+#endif
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+        delta = ((stop.tv_sec - start.tv_sec) * 1000000000 +
+             (stop.tv_nsec - start.tv_nsec));
+#else
+        delta = (stop.tv_sec - start.tv_sec) * 1000000000 +
+             (stop.tv_usec - start.tv_usec) * 1000;
+#endif
+        return delta;
+}
+
+int64_t get_elapsed_time(void)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+        delta = ((stop.tv_sec - start.tv_sec) * 1000000000 +
+             (stop.tv_nsec - start.tv_nsec));
+#else
+        delta = (stop.tv_sec - start.tv_sec) * 1000000000 +
+             (stop.tv_usec - start.tv_usec) * 1000;
+#endif
+        return delta;
+}
+#endif //ENABLE_LOCAL_LATENCY_PROFILER
+/*********************************************************************/
 
 nf_explicit_callback_function nf_ecb = NULL;
 static uint8_t need_ecb = 0;
@@ -358,20 +453,43 @@ onvm_nflib_run(
         /* Listen for ^C so we can exit gracefully */
         signal(SIGINT, onvm_nflib_handle_signal);
         
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_start_time();
+#endif
+
         nf_info->status = NF_WAITING_FOR_RUN;
         /* Put this NF's info struct onto queue for manager to process startup */
         if (rte_ring_enqueue(nf_info_ring, nf_info) < 0) {
                 rte_mempool_put(nf_info_mp, nf_info); // give back mermory
                 rte_exit(EXIT_FAILURE, "Cannot send nf_info to manager");
         }
-        /* Wait for a client id to be assigned by the manager */ /*
+        /* Wait for a client id to be assigned by the manager */
         RTE_LOG(INFO, APP, "Waiting for manager to put to RUN state...\n");
-       for (; nf_info->status == (uint16_t)NF_WAITING_FOR_RUN ;) {
-                sleep(1);
+        struct timespec req = {0,1000}, res = {0,0};
+        for (; nf_info->status == (uint16_t)NF_WAITING_FOR_RUN ;) {
+                nanosleep(&req, &res); //sleep(1); //better poll for some time and exit if failed within that time.?
         }
-        Note: There is no need for synchronization here; as NF Manager will update the status to Running and only then it will be registered to deliver the packets.
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_stop_time();
+        int64_t ttl_elapsed = get_elapsed_time();
+        printf("WAIT_TIME: %li ns\n", ttl_elapsed);
+#endif
+        /* Note: There is no need for synchronization here; as NF Manager will update the status to Running and only then it will be registered to deliver the packets.
         Also the NF MANGER will put the NF to the RUNNING STATE */
         //nf_info->status = NF_RUNNING;
+
+#ifdef ENABLE_NFV_RESL
+        //By default: let the process start in waiting state and let NF Manage wake up the thread when necessary.
+        //if(!is_primary_active_nf_id(nf_info->instance_id)) {
+                printf("\n Client [%d] is Waiting for SYNC Signal\n", nf_info->instance_id);
+                onvm_nf_yeild(info);
+                printf("\n Client [%d] is starting to process packets \n", nf_info->instance_id);
+        /* }
+        else {
+                //primary must begin to process packet only after standby NF stops processing packets
+                onvm_nf_yeild(info);
+        }*/
+#endif
 
         for (; keep_running;) {
                 uint16_t i, j, nb_pkts = PKT_READ_SIZE;
@@ -380,10 +498,12 @@ onvm_nflib_run(
                 int ret_act;
 
                 /* check if signalled to block, then block */
-                #if defined(ENABLE_NF_BACKPRESSURE) && (defined(NF_BACKPRESSURE_APPROACH_2) || defined(USE_ARBITER_NF_EXEC_PERIOD))
+                #if defined(ENABLE_NF_BACKPRESSURE) && (defined(NF_BACKPRESSURE_APPROACH_2) || defined(USE_ARBITER_NF_EXEC_PERIOD)) || defined(ENABLE_NFV_RESL)
                 #ifdef INTERRUPT_SEM
                 if (rte_atomic16_read(flag_p) ==1) {
+                        printf("\n Explicit Yield request from ONVM_MGR\n ");
                         onvm_nf_yeild(info);
+                        printf("\n Explicit Yield Completed by NF\n");
                 }
                 #endif  // INTERRUPT_SEM
                 #endif  // defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_2)

@@ -74,7 +74,8 @@ static thread_core_map_t thread_core_map;
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
 
-#define NF_STATUS_CHECK_PERIOD_IN_MS    (500)       // 500ms or 0.5seconds
+#define NF_STATUS_CHECK_PERIOD_IN_MS    (500)       // (500) 500ms or 0.5seconds
+#define NF_STATUS_CHECK_PERIOD_IN_US    (100)       // use high precision 100us to ensure that we do it quickly to recover/restore
 #define DISPLAY_STATS_PERIOD_IN_MS      (1000)      // 1000ms or Every second
 #define NF_LOAD_EVAL_PERIOD_IN_MS       (1)         // 1ms
 #define USLEEP_INTERVAL_IN_US           (50)        // 50 micro seconds (even if set to 50, best precision >100micro)
@@ -163,7 +164,8 @@ initialize_master_timers(void) {
 
         uint64_t ticks = 0;
 
-        ticks = ((uint64_t)NF_STATUS_CHECK_PERIOD_IN_MS *(rte_get_timer_hz()/1000));
+        //ticks = ((uint64_t)NF_STATUS_CHECK_PERIOD_IN_MS *(rte_get_timer_hz()/1000));
+        ticks = ((uint64_t)NF_STATUS_CHECK_PERIOD_IN_US *(rte_get_timer_hz()/1000000));
         rte_timer_reset_sync(&nf_status_check_timer,
                 ticks,
                 PERIODICAL,
@@ -217,7 +219,9 @@ master_thread_main(void) {
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
         if(initialize_master_timers() == 0) {
-                while (usleep(USLEEP_INTERVAL_IN_US) == 0) {
+                struct timespec req = {0,1000}, res = {0,0};
+                while (nanosleep(&req, &res) == 0) {
+                //while (usleep(USLEEP_INTERVAL_IN_US) == 0) {
                         rte_timer_manage();
                         //struct timespec ctime; get_current_time(&ctime);
                         //printf("\n sec:[%ld]: nanosec [%ld]", ctime.tv_sec, ctime.tv_nsec);
@@ -299,6 +303,20 @@ tx_thread_main(void *arg) {
                         cl = &clients[i];
                         if (!onvm_nf_is_valid(cl))
                                 continue;
+#ifdef ENABLE_NFV_RESL
+                        if((onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(i)]) )) {
+                                /* When NF(i) is Primary but Secondary is also active: Then Do not process packets in primary until secondary is stopped; Later only Primary must process */
+                                if((is_primary_active_nf_id(i))) {
+                                        if(rte_atomic16_read(clients[get_associated_active_or_standby_nf_id(i)].shm_server)== 0)  {
+                                                continue;
+                                        }
+                                }
+                                /* When NF(i) is Secondary but Primary is also active: Then Do not process packets from Secondary; only Primary must process */
+                                else { //if((!is_primary_active_nf_id(i))) {
+                                        continue;
+                                }
+                        }
+#endif
                         /* try dequeuing max possible packets first, if that fails, get the
                          * most we can. Loop body should only execute once, maximum
                         while (tx_count > 0 &&

@@ -491,10 +491,15 @@ onvm_nf_service_to_nf_map(uint16_t service_id, struct rte_mbuf *pkt) {
 
         if (pkt == NULL)
                 return 0;
-
+#ifdef ENABLE_NFV_RESL
+        //Ideally, return the Primary Active service always; only when primary is down must return secondary; Need better logic; But beware: this is fast path cannot add more complexity here.
+        // I think, it would be simpler to maintain primary and secondary as two separate lists.
+        return services[service_id][0];
+#else
         uint16_t instance_index = pkt->hash.rss % num_nfs_available;
         uint16_t instance_id = services[service_id][instance_index];
         return instance_id;
+#endif
 }
 
 
@@ -502,11 +507,28 @@ onvm_nf_service_to_nf_map(uint16_t service_id, struct rte_mbuf *pkt) {
 
 inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
 
-        nf_info->status = NF_RUNNING;
-        // Register this NF running within its service
         uint16_t service_count = nf_per_service_count[nf_info->service_id]++;
+#ifdef ENABLE_NFV_RESL
+        //Temporary solution: make sure to move the PRIMARY(Active NF) to the Top and move remaining to the bottom. Why? To fix how packets get forwarded to the NF Instance: InstList[hash%NInstances] or InstList[0];
+        if( (service_count > 0) && (is_primary_active_nf_id(nf_info->instance_id) ) ) {
+                int mapIndex = service_count;
+                for (; mapIndex > 0; mapIndex--) {
+                        services[nf_info->service_id][mapIndex] = services[nf_info->service_id][mapIndex - 1];
+                }
+                services[nf_info->service_id][mapIndex]=nf_info->instance_id;
+        } else {
+                services[nf_info->service_id][service_count] = nf_info->instance_id;
+        }
+        //Main concern: When Standby is already running; must signal the standby NF to stop processing packets
+        //if(is_primary_active_nf_id(nf_info->instance_id)) {
+        if((is_primary_active_nf_id(nf_info->instance_id)) && (onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)]) ) ) {
+                rte_atomic16_set(clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)].shm_server, 1);
+        }
+#else
+        // Register this NF running within its service
         services[nf_info->service_id][service_count] = nf_info->instance_id;
-
+#endif
+        nf_info->status = NF_RUNNING;
         return nf_per_service_count[nf_info->service_id];
 }
 
