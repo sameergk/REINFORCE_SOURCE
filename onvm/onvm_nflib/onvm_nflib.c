@@ -703,17 +703,6 @@ onvm_nflib_info_init(const char *tag)
         info->status = NF_WAITING_FOR_ID;
         info->tag = tag;
 
-#ifdef ENABLE_NFV_RESL
-        nf_state_mp = rte_mempool_lookup(_NF_STATE_MEMPOOL_NAME);
-        if (nf_state_mp == NULL)
-                rte_exit(EXIT_FAILURE, "No Client STATE Info mempool - bye\n");
-         if(rte_mempool_get(nf_state_mp,&info->state_mempool) < 0) {
-                 rte_exit(EXIT_FAILURE, "Failed to get client state memory");
-         }
-         if (info->state_mempool == NULL) {
-                 rte_exit(EXIT_FAILURE, "Client state memory not allocated!");
-         }
-#endif //#ifdef ENABLE_NFV_RESL
         return info;
 }
 

@@ -72,6 +72,7 @@ typedef struct vlan_tag_info_table {
         uint16_t ft_index;
         uint16_t vlan_tag;
         uint32_t tag_counter;
+        uint64_t pkt_counter;
 }vlan_tag_info_table_t;
 vlan_tag_info_table_t *vtag_tbl = NULL;
 /*
@@ -147,7 +148,8 @@ do_stats_display(struct rte_mbuf* pkt) {
         printf("Size : %d\n", pkt->pkt_len);
         printf("N°   : %d\n", pkt_process);
         if(vtag_tbl) {
-                printf("Counter: %d\n", vtag_tbl[0].tag_counter);
+                printf("Share Counter: %d\n", vtag_tbl[0].tag_counter);
+                printf("Pkt Counter: %li\n", vtag_tbl[0].pkt_counter);
         }
         printf("\n\n");
 
@@ -196,12 +198,15 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
         if(nf_info->state_mempool) {
                 if(vtag_tbl  == NULL) {
                         vtag_tbl = (vlan_tag_info_table_t*)nf_info->state_mempool;
-                        vtag_tbl[0].ft_index = 0;
-                        vtag_tbl[0].vlan_tag = vlan_tag;
-                        vtag_tbl[0].tag_counter = 1;
-                } else {
+                        //vtag_tbl[0].ft_index = 0;
+                        //vtag_tbl[0].vlan_tag = vlan_tag;
+                        //vtag_tbl[0].tag_counter = 1;
                         vtag_tbl[0].tag_counter+=1;
                 }
+                if(vtag_tbl) {
+                        vtag_tbl[0].pkt_counter+=1;
+                }
+
         }
 #endif //#ifdef ENABLE_NFV_RESL
 

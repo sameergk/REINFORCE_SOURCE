@@ -107,10 +107,6 @@ extern struct onvm_nf_info *nf_info;
 // Shared pool for all clients info
 static struct rte_mempool *nf_info_mp;
 
-#ifdef ENABLE_NFV_RESL
-// Shared pool for all clients info
-static struct rte_mempool *nf_state_mp;
-#endif //#ifdef ENABLE_NFV_RESL
 
 // User-given NF Client ID (defaults to manager assigned)
 static uint16_t initial_instance_id = NF_NO_ID;

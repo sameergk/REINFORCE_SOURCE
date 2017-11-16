@@ -216,6 +216,9 @@ struct client {
         #endif //ENABLE_NF_BACKPRESSURE
 
         #endif //INTERRUPT_SEM
+#ifdef ENABLE_NFV_RESL
+        void *state_mempool;
+#endif //#ifdef ENABLE_NFV_RESL
 };
 
 #if defined (INTERRUPT_SEM) && defined (USE_SOCKET)

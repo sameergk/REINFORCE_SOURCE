@@ -385,9 +385,13 @@ init_shm_rings(void) {
                                         r_size, //ringsize,
                                         socket_id,
                                         RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by dedicated Tx thread) */
+                        if(rte_mempool_get(nf_state_pool,&clients[i].state_mempool) < 0) {
+                                rte_exit(EXIT_FAILURE, "Failed to get client state memory");;
+                        }
                 } else {
                         clients[i].rx_q = clients[get_associated_active_or_standby_nf_id(i)].rx_q;
                         clients[i].tx_q = clients[get_associated_active_or_standby_nf_id(i)].tx_q;
+                        clients[i].state_mempool = clients[get_associated_active_or_standby_nf_id(i)].state_mempool;
                         fprintf(stderr, "re-using rx and tx queue rings for client %d with %d\n", i, get_associated_active_or_standby_nf_id(i));
                 }
 #else

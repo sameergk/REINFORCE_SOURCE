@@ -566,6 +566,10 @@ onvm_nf_start(struct onvm_nf_info *nf_info) {
         clients[nf_id].info = nf_info;
         clients[nf_id].instance_id = nf_id;
 
+#ifdef ENABLE_NFV_RESL
+        //also update NF shared State mempool pointer from pre-setup clients table
+        nf_info->state_mempool = clients[nf_id].state_mempool;
+#endif
         // Register this NF running within its service
         //uint16_t service_count = nf_per_service_count[nf_info->service_id]++;
         //services[nf_info->service_id][service_count] = nf_id;
