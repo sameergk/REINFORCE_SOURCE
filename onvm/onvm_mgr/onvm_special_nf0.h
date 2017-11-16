@@ -41,101 +41,59 @@
 
 /******************************************************************************
 
-                               onvm_mgr.h
+                                 onvm_special_nf0.h
 
-
-         Header file containing all shared headers and data structures
-
+     This file contains the prototypes for all functions related to packet
+     processing within the NF Manager's Plugin/special NF NF[0].
 
 ******************************************************************************/
 
 
-#ifndef _ONVM_MGR_H_
-#define _ONVM_MGR_H_
+#ifndef _ONVM_SPECIAL_NF0_H_
+#define _ONVM_SPECIAL_NF0_H_
 
-
-/******************************Standard C library*****************************/
-
-
-#include <netinet/ip.h>
-#include <stdbool.h>
-#include <math.h>
-
-
-/********************************DPDK library*********************************/
-
-
-#include <rte_byteorder.h>
-#include <rte_memcpy.h>
-#include <rte_malloc.h>
-#include <rte_fbk_hash.h>
-
-
-/******************************Internal headers*******************************/
-
-
-#include "onvm_mgr/onvm_args.h"
-#include "onvm_mgr/onvm_init.h"
-#include "shared/onvm_includes.h"
-#include "shared/onvm_sc_mgr.h"
-#include "shared/onvm_flow_table.h"
-#include "shared/onvm_flow_dir.h"
-
-
-/***********************************Macros************************************/
-
-
-#define PACKET_READ_SIZE ((uint16_t)32)
-
-#define TO_PORT 0
-#define TO_CLIENT 1
-
-
-/***************************Shared global variables***************************/
-
-
-/* ID to be assigned to the next NF that starts */
 extern uint16_t next_instance_id;
+extern struct wakeup_info *wakeup_infos;
 
+/********************************Globals and varaible declarations ***********************************/
 
-/*******************************Data Structures*******************************/
+/********************************Interfaces***********************************/
+
+/*
+ * Interface checking if a given nf is "valid", meaning if it's running.
+ *
+ * Input  : a pointer to the nf
+ * Output : a boolean answer 
+ *
+ */
+/****************************Internal functions*******************************/
 
 
 /*
- * Local buffers to put packets in, used to send packets in bursts to the
- * clients or to the NIC
+ * Function starting special NF.
+ *
+ * Input  : None
+ * Output : an error code
+ *
  */
-struct packet_buf {
-        struct rte_mbuf *buffer[PACKET_READ_SIZE];
-        uint16_t count;
-};
+int start_special_nf0(void);
 
-
-/** Thread state. This specifies which NFs the thread will handle and
- *  includes the packet buffers used by the thread for NFs and ports.
+/*
+ * Function to Stop the special NF.
+ *
+ * Input  : None
+ * Output : an error code
+ *
  */
-struct thread_info {
-       unsigned queue_id;
-       unsigned first_cl;   //inclusive (
-       unsigned last_cl;    //exclusive ] so f_cl=1 and l_cl=4 -> 1,2,3 only.
-       /* FIXME: This is confusing since it is non-inclusive. It would be
-        *        better to have this take the first client and the number
-        *        of consecutive clients after it to handle.
-        */
-       struct packet_buf *nf_rx_buf;
-       struct packet_buf *port_tx_buf;
-};
+int stop_special_nf0(void);
 
+/*
+ * Function to send packets to special NF.
+ *
+ * Input  : a pointer thread sending the packets, packets and count of packets
+ * Output : an error code
+ *
+ */
+int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, __attribute__((unused)) struct rte_mbuf *pkts[], __attribute__((unused)) uint16_t rx_count);
 
-#ifdef INTERRUPT_SEM
-/** NFs wakeup Info: used by manager to update NFs pool and wakeup stats
- */ 
-struct wakeup_info {
-	unsigned first_client;
-	unsigned last_client;
-	uint64_t num_wakeups;
-	uint64_t prev_num_wakeups;
-};
-#endif //INTERRUPT_SEM
-
-#endif  // _ONVM_MGR_H_
+#endif  // _ONVM_SPECIAL_NF0_H_

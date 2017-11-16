@@ -41,16 +41,14 @@
 
 /******************************************************************************
 
-                              onvm_nf.c
+                              onvm_bfd.c
 
-       This file contains all functions related to NF management.
+       This file contains all functions related to BFD management.
 
 ******************************************************************************/
 #include "onvm_bfd.h"
 #include "onvm_mgr.h"
 /********************* Local Functions Declaration ****************************/
-void compute_and_assign_nf_cgroup_weight(void);
-void monitor_nf_node_liveliness_via_pid_monitoring(void);
 int create_bfd_packet(struct rte_mbuf* pkt);
 
 /********************** Local Functions Definition ****************************/
