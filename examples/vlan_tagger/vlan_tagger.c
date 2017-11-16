@@ -56,8 +56,9 @@
 
 #include "onvm_nflib.h"
 #include "onvm_pkt_helper.h"
+#include "onvm_flow_dir.h"
 
-#define NF_TAG "simple_forward"
+#define NF_TAG "vlan_tagger"
 
 /* Struct that contains information about this NF */
 struct onvm_nf_info *nf_info;
@@ -75,6 +76,15 @@ typedef struct vlan_tag_info_table {
         uint64_t pkt_counter;
 }vlan_tag_info_table_t;
 vlan_tag_info_table_t *vtag_tbl = NULL;
+
+typedef struct dirty_mon_state_map_tbl {
+        uint64_t dirty_index;   //Bit index to every 1K LSB=0-1K, MSB=63-64K
+}dirty_mon_state_map_tbl_t;
+dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
+#ifdef ENABLE_NFV_RESL
+#define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
+#endif
+
 /*
  * Print a usage message
  */
@@ -135,7 +145,6 @@ do_stats_display(struct rte_mbuf* pkt) {
         const char clr[] = { 27, '[', '2', 'J', '\0' };
         const char topLeft[] = { 27, '[', '1', ';', '1', 'H', '\0' };
         static int pkt_process = 0;
-        struct ipv4_hdr* ip;
 
         pkt_process += print_delay;
 
@@ -152,16 +161,44 @@ do_stats_display(struct rte_mbuf* pkt) {
                 printf("Pkt Counter: %li\n", vtag_tbl[0].pkt_counter);
         }
         printf("\n\n");
-
+#if 0
+        struct ipv4_hdr* ip;
         ip = onvm_pkt_ipv4_hdr(pkt);
         if (ip != NULL) {
                 onvm_pkt_print(pkt);
         } else {
                 printf("No IP4 header found\n");
         }
+#endif
 }
+#ifdef ENABLE_NFV_RESL
+static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
+        if(nf_info->state_mempool) {
+                if(vtag_tbl  == NULL) {
+                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->state_mempool;
+                        vtag_tbl = (vlan_tag_info_table_t*)(dirty_state_map+1);
+                        vtag_tbl[0].tag_counter+=1;
+                }
+                if(vtag_tbl && meta && pkt) {
+                        struct onvm_flow_entry *flow_entry = NULL;
+                        onvm_flow_dir_get_pkt(pkt, &flow_entry);
+                        if(flow_entry) {
+                                vtag_tbl[flow_entry->entry_index].ft_index = meta->src;
+                                vtag_tbl[flow_entry->entry_index].pkt_counter +=1;
+                                //vtag_tbl[flow_entry->entry_index].ft_index = 0;
+                                //vtag_tbl[flow_entry->entry_index].vlan_tag = vlan_tag;
+                        } else {
+                                vtag_tbl[0].pkt_counter+=1;
+                                //vtag_tbl[0].ft_index = 0;
+                                //vtag_tbl[0].vlan_tag = vlan_tag;
+                        }
+                }
+        }
+        return 0;
+}
+#endif //#ifdef ENABLE_NFV_RESL
 static void
-do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
+do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
         /* This function will check if it is a valid ETH Packet
          * and if it is not a vlan_tagged, inserts a vlan tag
          */
@@ -195,19 +232,7 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
 
         //rte_vlan_strip(pkt);
 #ifdef ENABLE_NFV_RESL
-        if(nf_info->state_mempool) {
-                if(vtag_tbl  == NULL) {
-                        vtag_tbl = (vlan_tag_info_table_t*)nf_info->state_mempool;
-                        //vtag_tbl[0].ft_index = 0;
-                        //vtag_tbl[0].vlan_tag = vlan_tag;
-                        //vtag_tbl[0].tag_counter = 1;
-                        vtag_tbl[0].tag_counter+=1;
-                }
-                if(vtag_tbl) {
-                        vtag_tbl[0].pkt_counter+=1;
-                }
-
-        }
+        save_packet_state(pkt,meta);
 #endif //#ifdef ENABLE_NFV_RESL
 
         return;
@@ -220,7 +245,7 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 counter = 0;
         }
 
-        do_check_and_insert_vlan_tag(pkt);
+        do_check_and_insert_vlan_tag(pkt,meta);
         //if(0 == counter) do_stats_display(pkt);
 
         meta->action = ONVM_NF_ACTION_TONF;

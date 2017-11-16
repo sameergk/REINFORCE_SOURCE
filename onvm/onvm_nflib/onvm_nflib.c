@@ -828,7 +828,7 @@ init_shared_cpu_info(uint16_t instance_id) {
         set_cpu_sched_policy_and_mode();
 
         // Get the FlowTable Entries Exported to the NF.
-        #if (defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)) || defined(DUMMY_FT_LOAD_ONLY)
+        #if (defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)) || defined(DUMMY_FT_LOAD_ONLY) || defined(ENABLE_NFV_RESL)
         onvm_flow_dir_nf_init();
         #endif //# defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_3)
 }
