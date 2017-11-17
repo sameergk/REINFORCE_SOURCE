@@ -97,7 +97,7 @@
 #define MBUF_SIZE (RX_MBUF_DATA_SIZE + MBUF_OVERHEAD)
 
 #define NF_INFO_SIZE sizeof(struct onvm_nf_info)
-#define NF_INFO_CACHE 8
+#define NF_INFO_CACHE (16)    //(8); 16 seems slightly better than 8 increase of 0.1mpps at a client NF; may be same...
 
 #define RTE_MP_RX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define RTE_MP_TX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)

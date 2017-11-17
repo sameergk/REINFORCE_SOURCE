@@ -517,7 +517,7 @@ onvm_nflib_run(
                         continue;
                 }
 
-                /* Give each packet to the user proccessing function */
+                /* Give each packet to the user processing function */
                 for (i = 0; i < nb_pkts; i++) {
                         meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
 
@@ -619,7 +619,7 @@ onvm_nflib_run(
         /* Put this NF's info struct back into queue for manager to ack shutdown */
         nf_info_ring = rte_ring_lookup(_NF_QUEUE_NAME);
         if (nf_info_ring == NULL) {
-                rte_mempool_put(nf_info_mp, nf_info); // give back mermory
+                rte_mempool_put(nf_info_mp, nf_info); // give back memory
                 rte_exit(EXIT_FAILURE, "Cannot get nf_info ring for shutdown");
         }
 

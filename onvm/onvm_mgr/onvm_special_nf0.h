@@ -88,6 +88,15 @@ int start_special_nf0(void);
 int stop_special_nf0(void);
 
 /*
+ * Function to start processing packets enqueued in Rx ring of special NF.
+ *
+ * Input  : None
+ * Output : an error code
+ *
+ */
+int process_special_nf0_rx_packets(void);
+
+/*
  * Function to send packets to special NF.
  *
  * Input  : a pointer thread sending the packets, packets and count of packets

@@ -212,17 +212,21 @@ master_thread_main(void) {
 
         RTE_LOG(INFO, APP, "Core %d: Running master thread\n", rte_lcore_id());
 
+#ifdef ONVM_ENABLE_SPEACILA_NF
+        start_special_nf0();
+#endif
+
         /* Longer initial pause so above printf is seen */
         sleep(sleeptime * 3);
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
         if(initialize_master_timers() == 0) {
                 struct timespec req = {0,1000}, res = {0,0};
-                while (nanosleep(&req, &res) == 0) {
-                //while (usleep(USLEEP_INTERVAL_IN_US) == 0) {
+                while (nanosleep(&req, &res) == 0) { //while (usleep(USLEEP_INTERVAL_IN_US) == 0) { // while(1) {
                         rte_timer_manage();
-                        //struct timespec ctime; get_current_time(&ctime);
-                        //printf("\n sec:[%ld]: nanosec [%ld]", ctime.tv_sec, ctime.tv_nsec);
+#ifdef ONVM_ENABLE_SPEACILA_NF
+                        (void)process_special_nf0_rx_packets();
+#endif
                 }
         } //else
 #else

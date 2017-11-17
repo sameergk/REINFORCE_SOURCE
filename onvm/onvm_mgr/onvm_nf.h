@@ -94,6 +94,15 @@ extern uint64_t throttle_count;
 inline int
 onvm_nf_is_valid(struct client *cl);
 
+/*
+ * Interface checking if a given nf is "valid", meaning if it's running.
+ *
+ * Input  : a pointer to the nf
+ * Output : a boolean answer
+ *
+ */
+inline int
+onvm_nf_is_instance_id_free(struct client *cl);
 
 /*
  * Interface giving the smallest unsigned integer unused for a NF instance.
@@ -165,5 +174,6 @@ onvm_nf_start(struct onvm_nf_info *nf_info);
 inline int
 onvm_nf_stop(struct onvm_nf_info *nf_info);
 
-
+inline int
+onvm_nf_register_run(struct onvm_nf_info *nf_info);
 #endif  // _ONVM_NF_H_

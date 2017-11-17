@@ -52,7 +52,7 @@
 #include "onvm_nf.h"
 #include "onvm_stats.h"
 
-uint16_t next_instance_id = 0;
+uint16_t next_instance_id = 1; //start from 1.
 
 #ifdef ENABLE_NF_BACKPRESSURE
 // Global mode variables (default service chain without flow_Table entry: can support only 1 flow (i.e all flows have same NFs)
@@ -75,7 +75,7 @@ void monitor_nf_node_liveliness_via_pid_monitoring(void);
 int nf_sort_func(const void * a, const void *b);
 inline void extract_nf_load_and_svc_rate_info(__attribute__((unused)) unsigned long interval);
 inline void setup_nfs_priority_per_core_list(__attribute__((unused)) unsigned long interval);
-int onvm_nf_register_run(struct onvm_nf_info *nf_info);
+inline int onvm_nf_register_run(struct onvm_nf_info *nf_info);
 #define DEFAULT_NF_CPU_SHARE    (1024)
 
 //Local Data structure to compute nf_load and comp_cost contention on each core
@@ -375,9 +375,10 @@ void monitor_nf_node_liveliness_via_pid_monitoring(void) {
                                 //clients[nf_id].info->status = NF_STOPPED;
                                 printf("\n\n******* Moving NF with InstanceID:%d state %d to STOPPED\n\n",clients[nf_id].info->instance_id, clients[nf_id].info->status);
                                 clients[nf_id].info->status = NF_STOPPED;
+                                if (!onvm_nf_stop(clients[nf_id].info))num_clients--;   // directly perform in the calling thread; rather than enqueue/dequeue in nf_info_queue
+                                //rte_ring_enqueue(nf_info_queue, clients[nf_id].info);
+                                //rte_mempool_put(nf_info_pool, clients[nf_id].info);
                                 //**** TO DO: Take necessary actions here: It still doesn't clean-up until the new_nf_pool is populated by adding/killing another NF instance.
-                                rte_ring_enqueue(nf_info_queue, clients[nf_id].info);
-                                rte_mempool_put(nf_info_pool, clients[nf_id].info);
                                 // Still the IDs are not recycled.. missing some additional changes:: found bug in the way the IDs are recycled-- fixed change in onvm_nf_next_instance_id()
                         }
                 }
@@ -389,30 +390,25 @@ onvm_nf_is_valid(struct client *cl) {
         return cl && cl->info && cl->info->status == NF_RUNNING;
 }
 
+inline int
+onvm_nf_is_instance_id_free(struct client *cl) {
+        return cl && (NULL == cl->info);
+}
 
 uint16_t
 onvm_nf_next_instance_id(void) {
         struct client *cl;
-        /*
-        while (next_instance_id < MAX_CLIENTS) {
-                cl = &clients[next_instance_id];
-                if (!onvm_nf_is_valid(cl))
-                        break;
-                next_instance_id++;
+        int loop_count = 1;
+        for(; loop_count < MAX_CLIENTS; loop_count++) {
+                if(next_instance_id >= MAX_CLIENTS) {
+                        next_instance_id = 1;   // 0 is Special NF in OVM_MGR now.
+                }
+                cl = &clients[next_instance_id++];
+                if (onvm_nf_is_instance_id_free(cl)) {
+                        return cl->instance_id;
+                }
         }
-        return next_instance_id;
-        */
-
-        if(next_instance_id >= MAX_CLIENTS) {
-                next_instance_id = 1;   // don't know why the id=0 is reserved?
-        }
-        while (next_instance_id < MAX_CLIENTS) {
-                cl = &clients[next_instance_id];
-                if (!onvm_nf_is_valid(cl))
-                        break;
-                next_instance_id++;
-        }
-        return next_instance_id++;
+        return MAX_CLIENTS;
 
 }
 
@@ -428,11 +424,7 @@ onvm_nf_check_status(void) {
         monitor_nf_node_liveliness_via_pid_monitoring();
 
         if (rte_ring_dequeue_bulk(nf_info_queue, new_nfs, num_new_nfs) != 0)
-        #if !defined(USE_CGROUPS_PER_NF_INSTANCE) || !defined (ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT)
                 return;
-        #else
-        {}   // do nothing
-        #endif //USE_CGROUPS_PER_NF_INSTANCE
 
         for (i = 0; i < num_new_nfs; i++) {
                 nf = (struct onvm_nf_info *) new_nfs[i];

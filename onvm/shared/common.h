@@ -70,10 +70,15 @@
 #define MAX_SERVICES 32           // total number of unique services allowed
 #define MAX_CLIENTS_PER_SERVICE 8 // max number of NFs per service.
 
+#define ONVM_ENABLE_SPEACILA_NF //Enable Special NF0 service in onvm_mgr
+#define ONVM_SPECIAL_NF_SERVICE_ID      (0)
+#define ONVM_SPECIAL_NF_INSTANCE_ID     (0)
+
 #define ONVM_NF_ACTION_DROP 0   // drop packet
 #define ONVM_NF_ACTION_NEXT 1   // to whatever the next action is configured by the SDN controller in the flow table
 #define ONVM_NF_ACTION_TONF 2   // send to the NF specified in the argument field (assume it is on the same host)
 #define ONVM_NF_ACTION_OUT 3    // send the packet out the NIC port set in the argument field
+#define ONVM_NF_ACTION_TO_NF_INSTANCE   4   //send to NF Instance ID (specified in the meta->destination. Note unlike ONVM_NF_ACTION_TONF which means to NF SERVICE ID, this is direct destination instance ID.
 
 /* Note: Make the PACKET_READ_SIZE defined in onvm_mgr.h same as PKT_READ_SIZE defined in onvm_nflib_internal.h, better get rid of latter */
 // enable: PRE_PROCESS_DROP_ON_RX, DROP_APPROACH_3,DROP_APPROACH_3_WITH_SYNC
@@ -181,7 +186,7 @@ struct onvm_service_chain;
 
 
 /******************************************************************************/
-// NFV RESL related extensions, control macros and defines
+// NFV RESILIENCY related extensions, control macros and defines
 #define ENABLE_NFV_RESL             // global nvf_Resl feature flag
 
 #ifdef ENABLE_NFV_RESL

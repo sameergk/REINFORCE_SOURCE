@@ -60,13 +60,15 @@
 //#define DELAY_BEFORE_SEND
 //#define DELAY_PER_PKT (5) //20micro seconds
 
+static uint8_t keep_running = 1;
+static struct client *nf0_cl = NULL;
 /*************************Local functions Declaration**************************/
 
 /*******************************Helper functions********************************/
 
 
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
-static int onv_pkt_send_on_alt_port(struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
+static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count);
 
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
@@ -122,15 +124,14 @@ int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
         }
         return 0;
 }
-static int onv_pkt_send_on_alt_port(struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
+static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
 
         int ret = 0;
         int i = 0;
         struct onvm_pkt_meta *meta = NULL;
         struct rte_mbuf *pkt = NULL;
-        static struct client *cl = NULL; //&clients[0];
 
-        if (rx == NULL || pkts == NULL || rx_count== 0)
+        if (pkts == NULL || rx_count== 0)
                 return ret;
 
 #ifdef SEND_DIRECT_ON_ALT_PORT
@@ -155,37 +156,116 @@ static int onv_pkt_send_on_alt_port(struct thread_info *rx, struct rte_mbuf *pkt
         }
 
         //Make use of the internal NF[0]
-        cl = &clients[0];
+        if(NULL == nf0_cl) nf0_cl = &clients[0];
         // DO ONCE: Ensure destination NF is running and ready to receive packets
-        if (!onvm_nf_is_valid(cl)) {
+        if (!onvm_nf_is_valid(nf0_cl)) {
                 start_special_nf0();
         }
 
         //Push all packets directly to the NF[0]->tx_ring
-        int enq_status = rte_ring_enqueue_bulk(cl->tx_q, (void **)pkts, rx_count);
+        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
         if (enq_status) {
                 //printf("Enqueue to NF[0] Tx Buffer failed!!");
                 onvm_pkt_drop_batch(pkts,rx_count);
-                cl->stats.rx_drop += rx_count;
+                nf0_cl->stats.rx_drop += rx_count;
         }
         return ret;
 }
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
 /*******************************File Interface functions********************************/
-int onv_pkt_send_to_special_nf0(struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
+int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
+
+        /* Note: This direct_call to onv_pkt_send_on_alt_port() here results in 14.88Mpps;
+         * while: (when No other clients registered) direct send to Rx Ring and Then process by Main thread to push packets out is resulting in 13.1Mpps.
+         * and when some clients are registered, packets are processed through default chain and directed here to send on Rx ring and then processed by main thread to push packets out results in 9.2 to 10Mpps.
+         *
+         * case 1: NIC --> Rx Thread --> NIC
+         * Configuration: Rx Thread --> onv_pkt_send_to_special_nf0() with SEND_DIRECT_ON_ALT_PORT enabled and code in onv_pkt_send_to_special_nf0() = onv_pkt_send_on_alt_port();
+         * Throughput: 14.88Mpps
+         * case 2: NIC --> Rx Thread --> NF0 Tx Ring --> Tx Thread --> NIC
+         * Configuration: Rx --> onv_pkt_send_to_special_nf0() with SEND_DIRECT_ON_ALT_PORT disabled and code in onv_pkt_send_to_special_nf0() = onv_pkt_send_on_alt_port();
+         * Throughput: 14.88Mpps
+         * case 3:  NIC --> Rx Thread (direct) --> NF0 Rx Ring --> Main Thread --> NF0 Tx Ring --> Tx Thread --> NIC
+         * Configuration: Rx --> onv_pkt_send_to_special_nf0() and code in and code in onv_pkt_send_to_special_nf0() = rte_ring_enqueue_bulk(rx_ing)
+         * Throughput: 13.0 to 13.3Mpps
+         * case 4: NIC --> Rx Thread (FT Query, def chain) --> NF0 Rx Ring --> Main Thread --> NF0 Tx Ring --> Tx Thread --> NIC
+         * Configuration: Rx --> onvm_pkt_process_rx_batch() and code in and code in onv_pkt_send_to_special_nf0() = rte_ring_enqueue_bulk(rx_ing)
+         * Throughput: 9.1Mpps and 10.1~10.5Mpps
+         */
+//#if 0
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
         return onv_pkt_send_on_alt_port(rx,pkts,rx_count);
 #else
         onvm_pkt_drop_batch(pkts, rx_count);
         return 0;
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+//#endif
+
+        //if(NULL == nf0_cl) nf0_cl = &clients[0];
+        /* Check if NF is valid */
+        if (!onvm_nf_is_valid(nf0_cl)) {
+                onvm_pkt_drop_batch(pkts, rx_count);
+                return 0;
+        }
+
+        int enq_status = rte_ring_enqueue_bulk(nf0_cl->rx_q, (void **)pkts,rx_count);
+        /* Update statistics of inserted/dropped packets */
+        if ( -ENOBUFS == enq_status) {
+                uint16_t i;
+                for (i = 0; i < rx_count; i++) {
+                        onvm_pkt_drop(pkts[i]);
+                }
+                nf0_cl->stats.rx_drop += rx_count;
+        }
+        else {
+                nf0_cl->stats.rx += rx_count;
+        }
+        return 0;
+}
+
+int process_special_nf0_rx_packets(void) {
+
+        struct rte_mbuf *pkts[PACKET_READ_SIZE];
+        //struct onvm_pkt_meta* meta = NULL;
+
+        //if(NULL == nf0_cl) nf0_cl = &clients[0];
+        /* Check if NF is valid */
+        if (!onvm_nf_is_valid(nf0_cl)) {
+                return 0;
+        }
+
+        for (; keep_running;) {
+                uint16_t nb_pkts = PACKET_READ_SIZE;
+                //uint16_t i,j=0;
+                //void *pktsTX[PACKET_READ_SIZE];
+                //uint32_t tx_batch_size = 0;
+                //int ret_act = 0;
+
+                nb_pkts = (uint16_t)rte_ring_dequeue_burst(nf0_cl->rx_q, (void**)pkts, nb_pkts);
+                if(nb_pkts == 0) {
+                        return 0;
+                }
+                /* Give each packet to the specific processing function : Based on ETH_TYPE and Registered MGR Services
+                for (i = 0; i < nb_pkts; i++) {
+                        meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
+                }
+                */
+
+                /* For now Only service is INTERNAL_BRIDGE */
+                #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                        onv_pkt_send_on_alt_port(NULL,pkts,nb_pkts);
+                #else
+                        onvm_pkt_drop_batch(pkts, nb_pkts);
+                #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+        }
+        return 0;
 }
 int start_special_nf0(void) {
         //Make use of the internal NF[0]
-        static struct client *cl = NULL;
-        cl = &clients[0];
+
+        if(NULL == nf0_cl) nf0_cl = &clients[0];
         // DO ONCE: Ensure destination NF is running and ready to receive packets
-        if (!onvm_nf_is_valid(cl)) {
+        if (!onvm_nf_is_valid(nf0_cl)) {
                 void *mempool_data = NULL;
                 struct onvm_nf_info *info = NULL;
                 struct rte_mempool *nf_info_mp = NULL;
@@ -204,16 +284,17 @@ int start_special_nf0(void) {
                 }
 
                 info = (struct onvm_nf_info*) mempool_data;
-                info->instance_id = 0;
-                info->service_id = 0;
-                info->status = NF_RUNNING;
-                info->tag = "INTERNAL_BRIDGE";
+                info->instance_id = ONVM_SPECIAL_NF_SERVICE_ID;
+                info->service_id = ONVM_SPECIAL_NF_INSTANCE_ID;
+                info->tag = "SPECIAL_NF0"; //"INTERNAL_BRIDGE";
+                info->status = NF_STARTING;
+                nf0_cl->info=info;
+                onvm_nf_register_run(info);
+                //info->status = NF_RUNNING;
 
-                cl->info=info;
         }
-        return onvm_nf_is_valid(cl);
+        return onvm_nf_is_valid(nf0_cl);
 }
 int stop_special_nf0(void) {
         return 0;
 }
-
