@@ -43,45 +43,52 @@
 #include "common.h"
 #include "onvm_sc_common.h"
 
-int
-onvm_sc_append_entry(struct onvm_service_chain *chain, uint8_t action, uint16_t destination) {
+int onvm_sc_append_entry(struct onvm_service_chain *chain, uint8_t action,
+                uint16_t destination) {
 #if 0
-    int chain_length = chain->chain_length;
+        int chain_length = chain->chain_length;
 #else
-    uint8_t chain_length = chain->chain_length;
-	if (unlikely(chain_length > ONVM_MAX_CHAIN_LENGTH)) {
-		return ENOSPC;
-	}
-	/*the first entry is reserved*/
-	chain_length++;
-	(chain->chain_length)++;
-	chain->sc[chain_length].action = action;
-	chain->sc[chain_length].destination = destination;
-	//onvm_sc_print(chain);
+        uint8_t chain_length = chain->chain_length;
+        if (unlikely(chain_length > ONVM_MAX_CHAIN_LENGTH)) {
+                return ENOSPC;
+        }
+        /*the first entry is reserved*/
+        chain_length++;
+        (chain->chain_length)++;
+        chain->sc[chain_length].action = action;
+        chain->sc[chain_length].service = destination;
+        chain->sc[chain_length].destination = destination;
+        //onvm_sc_print(chain);
 #endif
-	return 0;
+        return 0;
 }
 
-int
-onvm_sc_set_entry(struct onvm_service_chain *chain, int entry, uint8_t action, uint16_t destination) {
-	if (unlikely(entry > chain->chain_length)) {
-		return -1;
-	}
+//Use this API to MAP the resolved InstanceID
+int onvm_sc_set_entry(struct onvm_service_chain *chain, int entry,
+                uint8_t action, uint16_t destination, uint8_t service) {
+        if (unlikely(entry > chain->chain_length)) {
+                return -1;
+        }
 
-	chain->sc[entry].action = action;
-	chain->sc[entry].destination = destination;
+        chain->sc[entry].action = action;
+        if(service) {
+                chain->sc[entry].service = service;
+        }/* else if(chain->sc[entry].destination) {
+                chain->sc[entry].service = (uint8_t)chain->sc[entry].destination;
+        }*/
+        chain->sc[entry].destination = destination;
 
-	//onvm_sc_print(chain);
-	return 0;
+        //onvm_sc_print(chain);
+        return 0;
 }
 
-void
-onvm_sc_print(struct onvm_service_chain *chain) {
-	int i;
-	for (i = 1; i <= chain->chain_length; i++) {
-		printf("cur_index:%d, action:%"PRIu8", destination:%"PRIu16"\n",
-			i, chain->sc[i].action, chain->sc[i].destination);
-	}
-	//printf("refcnt:%"PRIu8", downstream:%"PRIu16"\n",chain->ref_cnt, chain->highest_downstream_nf_index_id);
-	printf("\n");
+void onvm_sc_print(struct onvm_service_chain *chain) {
+        int i;
+        for (i = 1; i <= chain->chain_length; i++) {
+                printf("cur_index:%d, action:%"PRIu8", destination:%"PRIu16"\n",
+                                i, chain->sc[i].action,
+                                chain->sc[i].destination);
+        }
+        //printf("refcnt:%"PRIu8", downstream:%"PRIu16"\n",chain->ref_cnt, chain->highest_downstream_nf_index_id);
+        printf("\n");
 }

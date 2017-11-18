@@ -474,20 +474,47 @@ onvm_nf_stats_update(__attribute__((unused)) unsigned long interval) {
         #endif //USE_CGROUPS_PER_NF_INSTANCE
 }
 
+inline int
+onvm_nf_service_to_nf_map_V2(struct onvm_pkt_meta *meta,  __attribute__((unused)) struct rte_mbuf *pkt, __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
+        int i, nfID =-1;
+
+        uint16_t service_id = meta->destination;
+        uint16_t num_nfs_available = nf_per_service_count[service_id];
+        if (num_nfs_available == 0)
+                return nfID;
+
+        for(i=0; i<num_nfs_available; i++) {
+                if(is_primary_active_nf_id(services[service_id][i])){
+                        nfID = services[service_id][i];
+                        break;
+                }
+        }
+        //If no active then set first available Instance
+        if(nfID < 0) {
+                nfID = services[service_id][0];
+        }
+        return nfID;
+}
+
 inline uint16_t
-onvm_nf_service_to_nf_map(uint16_t service_id, struct rte_mbuf *pkt) {
+onvm_nf_service_to_nf_map(uint16_t service_id, __attribute__((unused)) struct rte_mbuf *pkt) {
         uint16_t num_nfs_available = nf_per_service_count[service_id];
 
         if (num_nfs_available == 0)
-                return 0;
+                return MAX_CLIENTS; //0;
 
-        if (pkt == NULL)
-                return 0;
 #ifdef ENABLE_NFV_RESL
         //Ideally, return the Primary Active service always; only when primary is down must return secondary; Need better logic; But beware: this is fast path cannot add more complexity here.
         // I think, it would be simpler to maintain primary and secondary as two separate lists.
         return services[service_id][0];
 #else
+        //Note: The num_nfs_available can change dynamically; this results in two problems:
+        // a) When new instance is added or existing is terminated the instance_index mapping can change based on hash.rss value
+        // b) this current logic/sequence implies even for packets with mapped FT entry will be forced to resolve svc_id to instance id -- No binding of Flow to Instance (May be Good/bad)??
+
+        if (pkt == NULL)
+                return MAX_CLIENTS; //0;
+
         uint16_t instance_index = pkt->hash.rss % num_nfs_available;
         uint16_t instance_id = services[service_id][instance_index];
         return instance_id;

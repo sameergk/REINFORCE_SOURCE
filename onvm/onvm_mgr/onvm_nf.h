@@ -127,12 +127,13 @@ onvm_nf_check_status(void);
  *
  * Inputs  : the service id
              a pointer to the packet whose flow help steer it. 
- * Output  : a NF instance id
+ * Output  : a NF instance id; MAX_CLIENTS in case of no valid instance.
  *
  */
 inline uint16_t
-onvm_nf_service_to_nf_map(uint16_t service_id, struct rte_mbuf *pkt);
-
+onvm_nf_service_to_nf_map(uint16_t service_id, __attribute__((unused)) struct rte_mbuf *pkt);
+inline int
+onvm_nf_service_to_nf_map_V2(struct onvm_pkt_meta *meta,  __attribute__((unused)) struct rte_mbuf *pkt, __attribute__((unused)) struct onvm_flow_entry *flow_entry);
 
 /*
  * Interface to evaluate statistics relevant for nf_scheduling for all registered NFs.

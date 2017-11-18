@@ -86,26 +86,13 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
                 meta->src = 0;
                 meta->chain_index = 0;
 
-                get_flow_entry(pkts[i], &flow_entry); //ret = get_flow_entry(pkts[i], &flow_entry);
-                /*if((ret >=0 && flow_entry == NULL) || (flow_entry && flow_entry->sc == NULL) ) {
-                        printf("\n Aborting due to invalid hit [%d]\n", ret);
-                        exit(ret);
-                }
-                */
-
+                get_flow_entry(pkts[i], &flow_entry);
                 if (flow_entry && flow_entry->sc ) {
                         meta->action = onvm_sc_next_action(flow_entry->sc, pkts[i]);
                         meta->destination = onvm_sc_next_destination(flow_entry->sc, pkts[i]);
-                        #ifdef ENABLE_NF_BACKPRESSURE
-                        //global_bkpr_mode=0;
-                        #endif //ENABLE_NF_BACKPRESSURE
                 } else {
                         meta->action = onvm_sc_next_action(default_chain, pkts[i]);
                         meta->destination = onvm_sc_next_destination(default_chain, pkts[i]);
-                        #ifdef ENABLE_NF_BACKPRESSURE
-                        //global_bkpr_mode=0; //cannot set it here; as it could be missed rule
-                        flow_entry=NULL;
-                        #endif //ENABLE_NF_BACKPRESSURE
                 }
                 /* PERF: this might hurt performance since it will cause cache
                  * invalidations. Ideally the data modified by the NF manager
@@ -113,10 +100,23 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
                  * That may not be possible.
                  */
 
-                (meta->chain_index)++;
-                onvm_pkt_enqueue_nf(rx, pkts[i], meta, flow_entry);
+                //Fix: Note action for some flows can be configured to directly drop or send out on specific port
+                switch (meta->action) {
+                default:
+                case ONVM_NF_ACTION_DROP:
+                        onvm_pkt_drop(pkts[i]);
+                        break;
+                case ONVM_NF_ACTION_TO_NF_INSTANCE:
+                case ONVM_NF_ACTION_TONF:
+                        (meta->chain_index)++;
+                        onvm_pkt_enqueue_nf(rx, pkts[i], meta, flow_entry);
+                        break;
+                case ONVM_NF_ACTION_OUT:
+                        (meta->chain_index)++;
+                        onvm_pkt_enqueue_port(rx, meta->destination, pkts[i]);
+                        break;
+                }
         }
-
         onvm_pkt_flush_all_nfs(rx);
 }
 
@@ -147,9 +147,6 @@ onvm_pkt_process_tx_batch(struct thread_info *tx, struct rte_mbuf *pkts[], uint1
                         cl->stats.act_tonf++;
                         (meta->chain_index)++;
                         get_flow_entry(pkts[i], &flow_entry);
-                        #ifdef ENABLE_NF_BACKPRESSURE
-                        if(NULL == flow_entry) global_bkpr_mode=1;
-                        #endif //ENABLE_NF_BACKPRESSURE
                         onvm_pkt_enqueue_nf(tx, pkts[i], meta, flow_entry);
                 } else if (meta->action == ONVM_NF_ACTION_OUT) {
                         cl->stats.act_out++;
@@ -323,25 +320,44 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
                 return;
 #endif
 
-        if(ONVM_NF_ACTION_TO_NF_INSTANCE == meta->action) {
+        if(likely(ONVM_NF_ACTION_TO_NF_INSTANCE == meta->action)) {
                 dst_instance_id = meta->destination;
         } else {
                 // map service id to instance id and check one exists
                 dst_instance_id = onvm_nf_service_to_nf_map(meta->destination, pkt);
-#if 0
-                //Ignore if the dst_instance_id is 0
-                if (dst_instance_id == 0) {
+                if(unlikely(dst_instance_id >= MAX_CLIENTS)) {
+                        //printf("\n Dropping packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
                         onvm_pkt_drop(pkt);
                         return;
                 }
-#endif
+                //printf("\n Resolved packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
+                if(likely (flow_entry && flow_entry->sc)) {
+                        //update the action for this flow entry to use the instance mapping directly
+                        onvm_sc_set_entry(flow_entry->sc, meta->chain_index, ONVM_NF_ACTION_TO_NF_INSTANCE, dst_instance_id, 0);
+                } /* else {
+                        onvm_sc_set_entry(default_chain, meta->chain_index, ONVM_NF_ACTION_TO_NF_INSTANCE, dst_instance_id, 0);
+                } */
         }
-
-        // Ensure destination NF is running and ready to receive packets
-        cl = &clients[dst_instance_id];
-        if (!onvm_nf_is_valid(cl)) {
+        if(unlikely(dst_instance_id >= MAX_CLIENTS)) {
+                //printf("\n Dropping packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
                 onvm_pkt_drop(pkt);
                 return;
+        }
+        // Ensure destination NF is running and ready to receive packets
+        cl = &clients[dst_instance_id];
+        if (unlikely(!onvm_nf_is_valid(cl))) {
+#ifdef ENABLE_NFV_RESL
+                //check if associated standby/active instance is available
+                dst_instance_id = get_associated_active_or_standby_nf_id(dst_instance_id);
+                cl = &clients[dst_instance_id];
+                if(unlikely(!onvm_nf_is_valid(cl))) {
+                        onvm_pkt_drop(pkt);
+                        return;
+                }
+#else
+                onvm_pkt_drop(pkt);
+                return;
+#endif
         }
 
         #ifdef ENABLE_NF_BACKPRESSURE
@@ -435,15 +451,9 @@ onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt, struc
         if (flow_entry) {
                 meta->action = onvm_sc_next_action(flow_entry->sc, pkt);
                 meta->destination = onvm_sc_next_destination(flow_entry->sc, pkt);
-                #ifdef ENABLE_NF_BACKPRESSURE
-                //global_bkpr_mode=0;
-                #endif //ENABLE_NF_BACKPRESSURE
         } else {
                 meta->action = onvm_sc_next_action(default_chain, pkt);
                 meta->destination = onvm_sc_next_destination(default_chain, pkt);
-                #ifdef ENABLE_NF_BACKPRESSURE
-                global_bkpr_mode=1;
-                #endif //ENABLE_NF_BACKPRESSURE
         }
 
         switch (meta->action) {

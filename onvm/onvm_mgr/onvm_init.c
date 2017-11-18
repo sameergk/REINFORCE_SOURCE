@@ -169,8 +169,9 @@ init(int argc, char *argv[]) {
         /*initialize a default service chain*/
         default_chain = onvm_sc_create();
 #ifdef ONVM_ENABLE_SPEACILA_NF
-        retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TO_NF_INSTANCE, 0); //0=SPECIAL_NF
-        //retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 1);
+        retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TO_NF_INSTANCE, 0); //0= INSTANCE ID of SPECIAL_NF
+        //retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 0);   //0 = SERVICE ID of SPECIAL NF
+        //retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 1); //default: send to any NF with service ID=1
 #else
         retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 1);
 #endif

@@ -348,8 +348,12 @@ struct onvm_nf_info {
  * Define a structure to describe a service chain entry
  */
 struct onvm_service_chain_entry {
-	uint16_t destination;
-	uint8_t action;
+        uint16_t destination;
+        //denotes a service Id or Instance Id
+        uint8_t action;
+        //denotes forwarding action type.
+        uint8_t service;
+        //backup service id as set by policy in destination, when destination is InstanceID
 };
 
 struct onvm_service_chain {

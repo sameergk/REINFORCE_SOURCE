@@ -192,14 +192,12 @@ int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, 
          * Configuration: Rx --> onvm_pkt_process_rx_batch() and code in and code in onv_pkt_send_to_special_nf0() = rte_ring_enqueue_bulk(rx_ing)
          * Throughput: 9.1Mpps and 10.1~10.5Mpps
          */
-//#if 0
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
         return onv_pkt_send_on_alt_port(rx,pkts,rx_count);
 #else
         onvm_pkt_drop_batch(pkts, rx_count);
         return 0;
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
-//#endif
 
         //if(NULL == nf0_cl) nf0_cl = &clients[0];
         /* Check if NF is valid */
