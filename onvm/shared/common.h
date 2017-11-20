@@ -262,7 +262,9 @@ struct onvm_pkt_meta {
         uint8_t action; /* Action to be performed */
         uint8_t destination; /* where to go next */
         uint8_t src; /* who processed the packet last */
-        uint8_t chain_index; /*index of the current step in the service chain*/
+        uint8_t chain_index;    /*index of the current step in the service chain*/
+        uint16_t ft_index;       /* Index of the FT if the packet is mapped in SDN Flow Table */
+        uint16_t reserved_word; /* reserved word */
 };
 static inline struct onvm_pkt_meta* onvm_get_pkt_meta(struct rte_mbuf* pkt) {
         return (struct onvm_pkt_meta*)&pkt->udata64;
@@ -461,6 +463,17 @@ get_associated_active_or_standby_nf_id(unsigned nf_id) {
 static inline unsigned
 is_primary_active_nf_id(unsigned nf_id) {
         return ((nf_id < MAX_ACTIVE_CLIENTS));
+}
+static inline unsigned
+is_secondary_active_nf_id(unsigned nf_id) {
+        return ((nf_id & MAX_ACTIVE_CLIENTS));
+}
+static inline unsigned
+get_associated_active_nf_id(unsigned nf_id) {
+        if(nf_id < MAX_ACTIVE_CLIENTS) {
+                return (nf_id);
+        }
+        return (nf_id&(MAX_ACTIVE_CLIENTS-1));
 }
 #endif
 

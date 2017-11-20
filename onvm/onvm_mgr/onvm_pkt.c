@@ -90,6 +90,7 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
                 if (flow_entry && flow_entry->sc ) {
                         meta->action = onvm_sc_next_action(flow_entry->sc, pkts[i]);
                         meta->destination = onvm_sc_next_destination(flow_entry->sc, pkts[i]);
+                        meta->ft_index = (uint16_t)flow_entry->entry_index;
                 } else {
                         meta->action = onvm_sc_next_action(default_chain, pkts[i]);
                         meta->destination = onvm_sc_next_destination(default_chain, pkts[i]);
@@ -451,6 +452,7 @@ onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt, struc
         if (flow_entry) {
                 meta->action = onvm_sc_next_action(flow_entry->sc, pkt);
                 meta->destination = onvm_sc_next_destination(flow_entry->sc, pkt);
+                meta->ft_index = (uint16_t)flow_entry->entry_index;
         } else {
                 meta->action = onvm_sc_next_action(default_chain, pkt);
                 meta->destination = onvm_sc_next_destination(default_chain, pkt);

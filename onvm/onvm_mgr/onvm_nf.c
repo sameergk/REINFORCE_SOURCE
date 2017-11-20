@@ -507,6 +507,12 @@ onvm_nf_service_to_nf_map(uint16_t service_id, __attribute__((unused)) struct rt
         //Ideally, return the Primary Active service always; only when primary is down must return secondary; Need better logic; But beware: this is fast path cannot add more complexity here.
         // I think, it would be simpler to maintain primary and secondary as two separate lists.
         return services[service_id][0];
+
+        //uint16_t unique_nfs = 0;
+        //uint16_t nf_index = 0;
+        //for(; nf_index < num_nfs_available; nf_index++) {
+        //
+        //}
 #else
         //Note: The num_nfs_available can change dynamically; this results in two problems:
         // a) When new instance is added or existing is terminated the instance_index mapping can change based on hash.rss value
@@ -531,7 +537,7 @@ inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
         //Temporary solution: make sure to move the PRIMARY(Active NF) to the Top and move remaining to the bottom. Why? To fix how packets get forwarded to the NF Instance: InstList[hash%NInstances] or InstList[0];
         if( (service_count > 0) && (is_primary_active_nf_id(nf_info->instance_id) ) ) {
                 int mapIndex = service_count;
-                for (; mapIndex > 0; mapIndex--) {
+                for (; (mapIndex > 0 && is_secondary_active_nf_id(services[nf_info->service_id][mapIndex - 1])); mapIndex--) {
                         services[nf_info->service_id][mapIndex] = services[nf_info->service_id][mapIndex - 1];
                 }
                 services[nf_info->service_id][mapIndex]=nf_info->instance_id;
@@ -543,6 +549,10 @@ inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
         if((is_primary_active_nf_id(nf_info->instance_id)) && (onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)]) ) ) {
                 rte_atomic16_set(clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)].shm_server, 1);
         }
+        /* int mapIndex = 0;
+        for(mapIndex = 0; mapIndex <= service_count; mapIndex++) {
+                printf("\n services[%d][%d]= %d", nf_info->service_id, mapIndex, services[nf_info->service_id][mapIndex]);
+        } */
 #else
         // Register this NF running within its service
         services[nf_info->service_id][service_count] = nf_info->instance_id;

@@ -66,9 +66,17 @@ struct onvm_nf_info *nf_info;
 /* number of package between each print */
 static uint32_t print_delay = 5000000;
 
+/* destination port, NF serviceID or NF Instance ID*/
+static uint32_t destination = 0;
 
-static uint32_t destination;
-
+#define BASE_VLAN_TAG   (0x0001)    //Note: 0x000 is reserved
+#define MAX_VLAN_TAG    (0x0FFF)    //Note: 0xFFF is reserved, valid till 0xFFE
+static uint16_t vlan_tag_value = (BASE_VLAN_TAG);
+static int get_new_vlan_tag_value(void) {
+        //return ( ((vlan_tag_value==MAX_VLAN_TAG)?(vlan_tag_value=BASE_VLAN_TAG):(vlan_tag_value)) | ((vlan_tag_value++)%MAX_VLAN_TAG) );
+        ((vlan_tag_value==MAX_VLAN_TAG)?(vlan_tag_value=BASE_VLAN_TAG):(vlan_tag_value));
+        return ( ((vlan_tag_value++)%MAX_VLAN_TAG) );
+}
 typedef struct vlan_tag_info_table {
         uint16_t ft_index;
         uint16_t vlan_tag;
@@ -78,12 +86,22 @@ typedef struct vlan_tag_info_table {
 vlan_tag_info_table_t *vtag_tbl = NULL;
 
 typedef struct dirty_mon_state_map_tbl {
-        uint64_t dirty_index;   //Bit index to every 1K LSB=0-1K, MSB=63-64K
+        uint64_t dirty_index;
+        // Bit index to every 1K LSB=0-1K, MSB=63-64K
 }dirty_mon_state_map_tbl_t;
 dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
+#define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/sizeof(uint64_t))
+
 #ifdef ENABLE_NFV_RESL
 #define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
+#else
+#define VLAN_NF_STATE_SIZE (64*1024)
+#define MAX_STATE_ELEMENTS  ((VLAN_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
+void *vlan_state_mp = NULL;
 #endif
+
+/* We can have more entries supported in SDN_FT than this state table or vice versa: hence hash entries to available MAX_STATE_ELEMENTS */
+#define MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(sdn_ft_index) ((sdn_ft_index)%(MAX_STATE_ELEMENTS))
 
 /*
  * Print a usage message
@@ -159,6 +177,7 @@ do_stats_display(struct rte_mbuf* pkt) {
         if(vtag_tbl) {
                 printf("Share Counter: %d\n", vtag_tbl[0].tag_counter);
                 printf("Pkt Counter: %li\n", vtag_tbl[0].pkt_counter);
+                printf("Dirty Bits: 0x%lx\n", dirty_state_map->dirty_index);
         }
         printf("\n\n");
 #if 0
@@ -171,52 +190,97 @@ do_stats_display(struct rte_mbuf* pkt) {
         }
 #endif
 }
-#ifdef ENABLE_NFV_RESL
-static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
-        if(nf_info->state_mempool) {
-                if(vtag_tbl  == NULL) {
+
+#if 0
+int get_vtag_tbl_index(__attribute__((unused)) struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta);
+int get_vtag_tbl_index(__attribute__((unused)) struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
+        int tbl_index = -1;
+        if(vtag_tbl  == NULL) {
+                if(nf_info->state_mempool) {
                         dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->state_mempool;
                         vtag_tbl = (vlan_tag_info_table_t*)(dirty_state_map+1);
                         vtag_tbl[0].tag_counter+=1;
+                } else {
+                        return -1;
                 }
-                if(vtag_tbl && meta && pkt) {
-                        struct onvm_flow_entry *flow_entry = NULL;
-                        onvm_flow_dir_get_pkt(pkt, &flow_entry);
-                        if(flow_entry) {
-                                vtag_tbl[flow_entry->entry_index].ft_index = meta->src;
-                                vtag_tbl[flow_entry->entry_index].pkt_counter +=1;
-                                //vtag_tbl[flow_entry->entry_index].ft_index = 0;
-                                //vtag_tbl[flow_entry->entry_index].vlan_tag = vlan_tag;
-                        } else {
-                                vtag_tbl[0].pkt_counter+=1;
-                                //vtag_tbl[0].ft_index = 0;
-                                //vtag_tbl[0].vlan_tag = vlan_tag;
-                        }
+                if(meta->ft_index) {
+                        ;
                 }
+        }
+        return tbl_index;
+}
+#endif
+static inline uint64_t map_tag_index_to_dirty_chunk_bit_index(uint16_t vlan_tbl_index) {
+        uint32_t start_offset = sizeof(dirty_mon_state_map_tbl_t) + vlan_tbl_index*sizeof(vlan_tag_info_table_t);
+        uint32_t end_offset = start_offset + sizeof(vlan_tag_info_table_t);
+        uint64_t dirty_map_bitmask = 0;
+        dirty_map_bitmask |= (1<< (start_offset/DIRTY_MAP_PER_CHUNK_SIZE));
+        dirty_map_bitmask |= (1<< (end_offset/DIRTY_MAP_PER_CHUNK_SIZE));
+        return dirty_map_bitmask;
+}
+static inline int update_dirty_state_index(uint16_t vtag_index) {
+        if(dirty_state_map) {
+                dirty_state_map->dirty_index |= map_tag_index_to_dirty_chunk_bit_index(vtag_index);
+        }
+        return vtag_index;
+}
+static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
+        if(vtag_tbl) {
+                if(unlikely(vtag_tbl[vtag_index].vlan_tag != vlan_tag)) {
+                        vtag_tbl[vtag_index].vlan_tag = vlan_tag;
+                        vtag_tbl[vtag_index].pkt_counter =1;
+                } else {
+                        vtag_tbl[vtag_index].pkt_counter+=1;
+                }
+                update_dirty_state_index(vtag_index);
         }
         return 0;
 }
-#endif //#ifdef ENABLE_NFV_RESL
+
 static void
 do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
-        /* This function will check if it is a valid ETH Packet
-         * and if it is not a vlan_tagged, inserts a vlan tag
-         */
+        /* This function will check if it is a valid ETH Packet and if it is not a vlan_tagged, inserts a vlan tag */
         struct ether_hdr *eth = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
         if (!eth) {
                 exit(0);
                 return ;
         }
-        uint16_t vlan_tag = 0x10;
+        /* check packet type and process to insert vlan */
         if (ETHER_TYPE_IPv4 == rte_be_to_cpu_16(eth->ether_type)) {
+                //printf("\n BEFORE: PKT_SIZE:0x%x, Before NH [0x%x]!", pkt->pkt_len, rte_be_to_cpu_16(eth->ether_type));
+                /* Make space to Append VLAN tag to the Packet */
                 if (rte_vlan_insert(&pkt)) {
                         printf("\nFailed to Insert Vlan Header to the Packet!!!!\n");
                         return;
                 }
+                /* Get the FT Index and Index in VLAN STATE TABLE  */
+                uint16_t vlan_ft_index = 0;
+                if(meta->ft_index) {
+                        vlan_ft_index = (uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
+                } else {
+                        struct onvm_flow_entry *flow_entry = NULL;
+                        onvm_flow_dir_get_pkt(pkt, &flow_entry);
+                        if(flow_entry) {
+                                vlan_ft_index = (uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(flow_entry->entry_index);
+                        }
+                }
+                /* Extract the vlan tag: Reuse if entry is set; or get new one */
+                uint16_t vlan_tag = ((vtag_tbl[vlan_ft_index].vlan_tag)?(vtag_tbl[vlan_ft_index].vlan_tag):get_new_vlan_tag_value());
+
+
                 struct vlan_hdr *vlan = (struct vlan_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr));
                 vlan->vlan_tci = rte_cpu_to_be_16((uint16_t)vlan_tag);
-                //vlan->eth_proto = rte_cpu_to_be_16(ETHER_TYPE_ARP);
-                //printf("\nVLAN [0x%x, 0x%x] is already inserted!\n", rte_be_to_cpu_16(vlan->vlan_tci), rte_be_to_cpu_16(vlan->eth_proto));
+                vlan->eth_proto = eth->ether_type;
+                eth->ether_type = rte_cpu_to_be_16(ETHER_TYPE_VLAN);
+                //printf("\n PKT_SIZE:0x%x, VLAN [0x%x, 0x%x:: 0x%x] and NH [0x%x], is already inserted!", pkt->pkt_len, rte_be_to_cpu_16(vlan->vlan_tci), rte_be_to_cpu_16(vlan->eth_proto), ETHER_TYPE_IPv4, rte_be_to_cpu_16(eth->ether_type));
+
+                save_packet_state(vlan_ft_index, vlan_tag);
+
+                /* rte_vlan_strip(pkt);
+                //eth->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);  //strip function doesnt restore; hence must restore eth type explicitly,
+                //printf("\n After PKT_SIZE:0x%x, After NH [0x%x] !\n", pkt->pkt_len, rte_be_to_cpu_16(eth->ether_type));
+                 *
+                 */
         }
         else if (ETHER_TYPE_VLAN == rte_be_to_cpu_16(eth->ether_type)) {
                 /*
@@ -229,12 +293,6 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
         else {
                 printf("\nUnknown Ethernet Type [0x%x]!\n ", rte_be_to_cpu_16(eth->ether_type));
         }
-
-        //rte_vlan_strip(pkt);
-#ifdef ENABLE_NFV_RESL
-        save_packet_state(pkt,meta);
-#endif //#ifdef ENABLE_NFV_RESL
-
         return;
 }
 static int
@@ -270,7 +328,28 @@ int main(int argc, char *argv[]) {
         if (parse_app_args(argc, argv, progname) < 0)
                 rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
 
+#ifdef ENABLE_NFV_RESL
+        if(nf_info->state_mempool) {
+                dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->state_mempool;
+                vtag_tbl = (vlan_tag_info_table_t*)(dirty_state_map+1);
+                vtag_tbl[0].tag_counter+=1;
+        }
+#else
+        //Allocate for state table memory
+        vlan_state_mp = rte_calloc("vlan_state_table",1, VLAN_NF_STATE_SIZE, 0);
+        if (vlan_state_mp == NULL) {
+                rte_exit(EXIT_FAILURE, "Cannot allocate memory for vlan_state_mp program details\n");
+        } else {
+                dirty_state_map = (dirty_mon_state_map_tbl_t*)vlan_state_mp;
+                vtag_tbl = (vlan_tag_info_table_t*)(dirty_state_map+1);
+                vtag_tbl[0].tag_counter+=1;
+        }
+#endif
         onvm_nflib_run(nf_info, &packet_handler);
+
+#ifndef ENABLE_NFV_RESL
+        rte_free(vlan_state_mp);
+#endif
         printf("If we reach here, program is ending");
         return 0;
 }
