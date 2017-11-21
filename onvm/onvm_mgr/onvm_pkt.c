@@ -355,6 +355,12 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
                         onvm_pkt_drop(pkt);
                         return;
                 }
+                /* TODO: This is the place also to check/initiate chain migration
+                 * When? Both active and Standby NFs are down
+                 * How?
+                 * Who performs?
+                 * Synchronization?
+                 * ) */
 #else
                 onvm_pkt_drop(pkt);
                 return;

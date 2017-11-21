@@ -1,101 +1,84 @@
 /*********************************************************************
  *                     openNetVM
- *       https://github.com/sdnfv/openNetVM
+ *              https://sdnfv.github.io
  *
- *  Copyright 2015 George Washington University
- *            2015 University of California Riverside
+ *   BSD LICENSE
  *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ *   Copyright(c)
+ *            2015-2016 George Washington University
+ *            2015-2016 University of California Riverside
+ *            2010-2014 Intel Corporation. All rights reserved.
+ *   All rights reserved.
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *   Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions
+ *   are met:
  *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the Li¡cense for the specific language governing permissions and
- *  limitations under the License.
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in
+ *       the documentation and/or other materials provided with the
+ *       distribution.
+ *     * Neither the name of Intel Corporation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
  *
- *  schain_preload.c - NF that preloads FlowTable entries with service chains.
- *              -- List of service chains are parsed from "services.txt"
- *              Service chains are randomly assigned < Round Robin >
- *              -- List of IPv4 % Tuple Rules in the order
- *              <SRC_IP,DST_IP,SRC_PORT,DST_PORT,IP_PROTO>
- *              are parsed from ipv4rules.txt
- *              -- In addition the baseIP, MaxIPs and ports can be specified to
- *              pre-populate FlowTable rules.
- *              -- Can also dynamically set the SC on the missing FT entries.
- *              -- NF can be registered with any serviceID (preferably 1)
+ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  ********************************************************************/
 
-#include <unistd.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <inttypes.h>
-#include <stdarg.h>
-#include <errno.h>
-#include <sys/queue.h>
-#include <stdlib.h>
-#include <getopt.h>
-#include <string.h>
-#include <assert.h>
+
+/******************************************************************************
+
+                              onvm_special_nf0.c
+
+       This file contains all functions related to NF management.
+
+******************************************************************************/
+
+#include "onvm_mgr.h"
+#include "onvm_pkt.h"
+#include "onvm_nf.h"
+
+#include "shared/onvm_pkt_helper.h"
+#include "shared/onvm_sc_common.h"
+#include "shared/onvm_sc_mgr.h"
+//#include "onvm_flow_table.h"
+//#include "onvm_flow_dir.h"
+
+
+#include "onvm_ft_install.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-#include <rte_common.h>
-#include <rte_mbuf.h>
-#include <rte_ip.h>
-#include <rte_malloc.h>
-#include <rte_memzone.h>
-#include <rte_memory.h>
-#include <rte_cycles.h>
 
-#include "onvm_nflib.h"
-#include "onvm_pkt_helper.h"
-#include "onvm_flow_table.h"
-#include "onvm_sc_common.h"
-#include "onvm_flow_dir.h"
-#include "onvm_sc_mgr.h"
-
-#define NF_TAG "schain_preload"
-
-#define MIN(a,b) ((a) < (b)? (a):(b))
-#define MAX(a,b) ((a) > (b)? (a):(b))
-
-/* Struct that contains information about this NF */
-struct onvm_nf_info *nf_info;
-
-/* Service Chain Related entries */
-#define MAX_SERVICE_CHAINS 32
-int services[MAX_SERVICE_CHAINS][ONVM_MAX_CHAIN_LENGTH];
-int max_service_chains=0;
-
-/* IPv4 5Tuple Rules for Flow Table Entries */
-#define MAX_FLOW_TABLE_ENTRIES 1024
-struct onvm_ft_ipv4_5tuple ipv4_5tRules[MAX_FLOW_TABLE_ENTRIES];
-uint32_t max_ft_entries=0;
-//static const char *base_ip_addr = "10.0.0.1";
-
+/**************************Macros and Feature Definitions**********************/
 /* List of Global Command Line Arguments */
-typedef struct globalArgs {
-        uint32_t destination;               /* -d <destination_service ID> */
-        uint32_t print_delay;               /* -p <print delay in num_pakets> */
+typedef struct onvm_ft_args {
         const char* servicechain_file;      /* -s <service chain listings> */
         const char* ipv4rules_file;         /* -r <IPv45Tuple Flow Table entries> */
         const char* base_ip_addr;           /* -b <IPv45Tuple Base Ip Address> */
         uint32_t max_ip_addrs;              /* -m <Maximum number of IP Addresses> */
         uint32_t max_ft_rules;              /* -M <Maximum number of FT entries> */
-}globalArgs_t;
-static const char *optString = "d:p:s:r:b:m:M";
+}onvm_ft_args_t;
+//static const char *optString = ":s:r:b:m:M";
 
-static globalArgs_t globals = {
-        .destination = 0,
-        .print_delay = 1, //1000000,
+#define MAX_FLOW_TABLE_ENTRIES SDN_FT_ENTRIES
+static onvm_ft_args_t globals = {
         .servicechain_file = "services.txt",
         .ipv4rules_file = "ipv4rules.txt",
         .base_ip_addr   = "10.0.0.1",
@@ -103,134 +86,16 @@ static globalArgs_t globals = {
         .max_ft_rules   = MAX_FLOW_TABLE_ENTRIES,
 };
 
+/* Service Chain Related entries */
+#define MAX_SERVICE_CHAINS 32
+int schains[MAX_SERVICE_CHAINS][ONVM_MAX_CHAIN_LENGTH];
+int max_service_chains=0;
+struct onvm_ft_ipv4_5tuple ipv4_5tRules[MAX_FLOW_TABLE_ENTRIES];
+uint32_t max_ft_entries=0;
+//#define DEBUG_0
 
-static void
-usage(const char *progname) {
-        printf("Usage: %s [EAL args] -- [NF_LIB args] -- -d <destination> -p <print_delay>"
-                "-s <service_chain_file> -r <IPv4_5tuple Rules file>"
-                "-b <base_ip_address> -m <max_num_ips>        \n\n", progname);
-}
-
-static int
-parse_app_args(int argc, char *argv[], const char *progname) {
-        int c;
-
-        while ((c = getopt(argc, argv, optString)) != -1) {
-                switch (c) {
-                case 'd':
-                        globals.destination = strtoul(optarg, NULL, 10);
-                        break;
-                case 'p':
-                        globals.print_delay = strtoul(optarg, NULL, 10);
-                        break;
-                case 's':
-                        globals.servicechain_file = optarg;
-                        break;
-                case 'r':
-                        globals.ipv4rules_file = optarg;
-                        break;
-                case 'b':
-                        globals.base_ip_addr = optarg;
-                        break;
-                case 'm':
-                        globals.max_ip_addrs = strtoul(optarg, NULL, 10);
-                        break;
-                case 'M':
-                        globals.max_ft_rules = strtoul(optarg, NULL, 10);
-                        break;
-                case '?':
-                        usage(progname);
-                        if (optopt == 'd')
-                                RTE_LOG(INFO, APP, "Option -%c requires an argument.\n", optopt);
-                        else if (optopt == 'p')
-                                RTE_LOG(INFO, APP, "Option -%c requires an argument.\n", optopt);
-                        else if (isprint(optopt))
-                                RTE_LOG(INFO, APP, "Unknown option `-%c'.\n", optopt);
-                        else
-                                RTE_LOG(INFO, APP, "Unknown option character `\\x%x'.\n", optopt);
-                        return -1;
-                default:
-                        usage(progname);
-                        return -1;
-                }
-        }
-        return optind;
-}
-
-static void
-parse_services(int services[][ONVM_MAX_CHAIN_LENGTH]) {
-        FILE *fp = fopen(globals.servicechain_file, "rb");
-        int i=0;
-        
-        printf("parsing services in file services.txt\n\n");
-        if (fp == NULL) {
-                fprintf(stderr, "Can not open services.txt file\n");
-                exit(1);
-        }
-
-        while (fp && !feof(fp)) {
-                char line[64] = "";
-                char svc[64] = "";
-                if (fgets(line, 63, fp) == NULL) {
-                        continue;
-                }
-                printf("parsing services in line[%s]", line);
-
-                int llen = strlen(line);
-                int slen = 0;
-                int svc_index = 0;
-                int added = 0;
-                for(i=0; i< llen; i++) {
-                        if(( (',' == line[i])  || ('\0' == line[i]) || ('\n' == line[i]) ) && (slen > 0)) {
-                                svc[slen++] = '\0';
-                                int svc_id = atoi(svc);
-                                if (svc_id > 0) {
-                                        services[max_service_chains][svc_index++] = svc_id;
-                                }
-                                slen = 0;
-                                added+=1;
-                                
-                        }              
-                        if (line[i] != '\0' && line[i] != ',') {
-                                svc[slen++] = line[i];
-                        }
-                        if(ONVM_MAX_CHAIN_LENGTH <= svc_index) {
-                                printf("service chain reached maximum length: %d",(int)svc_index);    
-                                svc_index = 0;
-                                break;
-                        }
-                }
-                if (added) {
-                        max_service_chains++;
-                        added = 0;
-                }
-                if (MAX_SERVICE_CHAINS <= max_service_chains ) {
-                        printf("Reached the limit on allowed num of service chains [%d]!", max_service_chains);
-                        break;
-                }
-        }
-        if (fp) {
-                fclose(fp);
-        }
-#define DEBUG
-#ifdef DEBUG
-        int j = 0;
-        printf("Read Service List!\n");
-        for(i=0; i< max_service_chains; i++){
-                for(j=0; j< ONVM_MAX_CHAIN_LENGTH; j++){
-                        printf("%d ", services[i][j]);
-                }
-                printf("\n");
-        }
-        printf("\n\n************\n\n");
-#else
-        printf("Total Service Chains = [%d]", max_service_chains);
-#endif
-        return;
-}
-
+/*************************Local functions Declaration**************************/
 static uint32_t get_ipv4_value(const char *ip_addr){
-
 
         if (NULL == ip_addr) {
                 return 0;
@@ -260,15 +125,97 @@ static uint32_t get_ipv4_value(const char *ip_addr){
         return rte_be_to_cpu_32(ipv4_val2);
         #endif
 }
+/******************Parse Files: Policies (Chains) and Preset IP Rules *********/
+static void
+parse_service_chains(int schains[][ONVM_MAX_CHAIN_LENGTH]) {
+        FILE *fp = fopen(globals.servicechain_file, "rb");
+        int i=0;
+
+#ifdef DEBUG_0
+        printf("parsing schains in file services.txt\n\n");
+#endif
+        if (fp == NULL) {
+                fprintf(stderr, "Can not open services.txt file\n");
+                return; //exit(1);
+        }
+
+        while (fp && !feof(fp)) {
+                char line[64] = "";
+                char svc[64] = "";
+                if (fgets(line, 63, fp) == NULL) {
+                        continue;
+                }
+#ifdef DEBUG_0
+                printf("parsing schains in line[%s]\n", line);
+#endif
+
+                int llen = strlen(line);
+                int slen = 0;
+                int svc_index = 0;
+                int added = 0;
+                for(i=0; i< llen; i++) {
+                        if(( (',' == line[i])  || ('\0' == line[i]) || ('\n' == line[i]) ) && (slen > 0)) {
+                                svc[slen++] = '\0';
+                                int svc_id = atoi(svc);
+                                if (svc_id > 0) {
+                                        schains[max_service_chains][svc_index++] = svc_id;
+                                }
+                                slen = 0;
+                                added+=1;
+
+                        }
+                        if (line[i] != '\0' && line[i] != ',') {
+                                svc[slen++] = line[i];
+                        }
+                        if(ONVM_MAX_CHAIN_LENGTH <= svc_index) {
+#ifdef DEBUG_0
+                                printf("service chain reached maximum length: %d",(int)svc_index);
+#endif
+                                svc_index = 0;
+                                break;
+                        }
+                }
+                if (added) {
+                        max_service_chains++;
+                        added = 0;
+                }
+                if (MAX_SERVICE_CHAINS <= max_service_chains ) {
+#ifdef DEBUG_0
+                        printf("Reached the limit on allowed num of service chains [%d]!", max_service_chains);
+#endif
+                        break;
+                }
+        }
+        if (fp) {
+                fclose(fp);
+        }
+//#define DEBUG
+#ifdef DEBUG
+        int j = 0;
+        printf("Read Service List!\n");
+        for(i=0; i< max_service_chains; i++){
+                for(j=0; j< ONVM_MAX_CHAIN_LENGTH; j++){
+                        printf("%d ", schains[i][j]);
+                }
+                printf("\n");
+        }
+        printf("\n\n************\n\n");
+#else
+        printf("Total Service Chains = [%d]", max_service_chains);
+#endif
+        return;
+}
+
 static void
 parse_ipv4_5t_rules(void) {
         FILE *fp = fopen(globals.ipv4rules_file, "rb");
         uint32_t i=0;
-
-        printf("parsing services in file ipv4rules_file.txt\n\n");
+#ifdef DEBUG_0
+        printf("parsing schains in file ipv4rules_file.txt\n\n");
+#endif
         if (fp == NULL) {
                 fprintf(stderr, "Can not open ipv4rules_file.txt file\n");
-                exit(1);
+                return; //exit(1);
         }
         while (fp && !feof(fp)) {
                 char line[256] = "";
@@ -297,18 +244,19 @@ parse_ipv4_5t_rules(void) {
                             (IP_PROTOCOL_TCP == ipv4_5tRules[max_ft_entries].proto  || IP_PROTOCOL_UDP == ipv4_5tRules[max_ft_entries].proto)) {
                                 max_ft_entries++;
                         }
-
                 }
                 //if (MAX_FLOW_TABLE_ENTRIES <= max_ft_entries ) {
                 if (globals.max_ft_rules <= max_ft_entries ) {
+#ifdef DEBUG_0
                         printf("Reached the limit on allowed num of flow entries [%d]!", max_ft_entries);
+#endif
                         break;
                 }
         }
         if (fp) {
                 fclose(fp);
         }
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
         printf("Read IPv4-5T List!\n");
         for(i=0; i< max_ft_entries; i++){
@@ -322,14 +270,14 @@ parse_ipv4_5t_rules(void) {
         return;
 }
 
-static int 
+/*******************************Helper functions********************************/
+static int
 setup_service_chain_for_flow_entry(struct onvm_service_chain *sc, int sc_index, int rev_order) {
         static uint32_t next_sc = 0;
         int index = 0, service_id=0, chain_len = 0;
         if (0 == max_service_chains) {
                 return -1;
         }
-
 
         //Get the sc_index based on either valid passed value or static incremental
         //sc_index = (sc_index >= 0 && sc_index < max_service_chains)? (sc_index):((int)next_sc);
@@ -340,40 +288,38 @@ setup_service_chain_for_flow_entry(struct onvm_service_chain *sc, int sc_index, 
         else {
                 sc_index =  (int)next_sc;
         }
+
         /* Setup the chain in reverse order makes sense only when use_input_sc_index=1 */
         if (1 == use_input_sc_index && 1 == rev_order) {
                 int last_index = 0;
-                while(services[sc_index][last_index++] != -1 || last_index < ONVM_MAX_CHAIN_LENGTH);
+                while(schains[sc_index][last_index++] != -1 || last_index < ONVM_MAX_CHAIN_LENGTH);
+#ifdef DEBUG_0
                 printf("\n Adding Flip Service chain of Length [%d]: ", last_index-1);
+#endif
                 for(index =last_index-1; index >=0; index--) {
-                        service_id = services[sc_index][index]; //service_id = services[next_sc][index];
+                        service_id = schains[sc_index][index]; //service_id = schains[next_sc][index];
                         if (service_id > 0){
-                                /* if(chain_len == 0){
-                                        onvm_sc_set_entry(sc, 0, ONVM_NF_ACTION_TONF, service_id);
-                                }
-                                else */{
-                                        onvm_sc_append_entry(sc, ONVM_NF_ACTION_TONF, service_id);
-                                        printf(" [%d] \t ", service_id);
-                                }
+                               onvm_sc_append_entry(sc, ONVM_NF_ACTION_TONF, service_id);
+#ifdef DEBUG_0
+                                printf(" [%d] \t ", service_id);
+#endif
                                 chain_len++;
                         }
                 }
         }
         else {
                 for(index =0; index < ONVM_MAX_CHAIN_LENGTH; index++) {
-                        service_id = services[sc_index][index]; //service_id = services[next_sc][index];
+                        service_id = schains[sc_index][index]; //service_id = schains[next_sc][index];
                         if (service_id > 0){
-                                /* if(chain_len == 0){
-                                        onvm_sc_set_entry(sc, 0, ONVM_NF_ACTION_TONF, service_id);
-                                }
-                                else */{
-                                        onvm_sc_append_entry(sc, ONVM_NF_ACTION_TONF, service_id);
-                                        printf(" [%d] \t ", service_id);
-                                }
+                                onvm_sc_append_entry(sc, ONVM_NF_ACTION_TONF, service_id);
+#ifdef DEBUG_0
+                                printf(" [%d] \t ", service_id);
+#endif
                                 chain_len++;
                         }
                 }
         }
+#ifdef DEBUG_0
         if(chain_len){
                 printf("setup the service chain of length: %d\n ",chain_len);
                 //next_sc = (next_sc+1)%max_service_chains;
@@ -381,12 +327,12 @@ setup_service_chain_for_flow_entry(struct onvm_service_chain *sc, int sc_index, 
         else {
                 printf("Didn't setup the service chain of length: %d\n ",chain_len);
         }
+#endif
         if(!use_input_sc_index) {
                 next_sc = (next_sc == ((uint32_t)(max_service_chains-1))?(0):(next_sc+1));
         }
 
-        //return chain_len;
-        return sc_index;
+        return sc_index; //chain_len
 }
 static int
 setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int sc_index);
@@ -401,7 +347,9 @@ setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int 
         struct onvm_ft_ipv4_5tuple *fk = NULL;
         fk = rte_calloc("flow_key",1, sizeof(struct onvm_ft_ipv4_5tuple), 0); //RTE_CACHE_LINE_SIZE
         if (fk == NULL) {
+#ifdef DEBUG_0
                 printf("failed in rte_calloc \n");
+#endif
                 return -ENOMEM;
                 rte_exit(EXIT_FAILURE, "Cannot allocate memory for flow key\n");
                 exit(1);
@@ -412,9 +360,9 @@ setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int 
         fk->src_port = fk_in->dst_port;
         fk->dst_port = fk_in->src_port;
         fk->proto    = fk_in->proto;
-
+#ifdef DEBUG_0
         printf("\nAdding Flip rule for FlowKey [%x:%u:, %x:%u, %u]", fk->src_addr, fk->src_port, fk->dst_addr, fk->dst_port, fk->proto);
-
+#endif
         struct onvm_flow_entry *flow_entry = NULL;
         ret = onvm_flow_dir_get_key(fk, &flow_entry);
 
@@ -432,21 +380,18 @@ setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int 
         }
         /* Entry already exists  */
         else if (ret >= 0) {
-                //rte_free(flow_entry->key);
-                //rte_free(flow_entry->sc);
-                //printf("Flow Entry already exits for Key [%x] for flow_entry [%x] \n", fk->src_addr, flow_entry->key->src_addr);
-                  printf("Flow Entry in Table already exits at index [%d]\n\n", ret);
+#ifdef DEBUG_0
+                printf("Flow Entry in Table already exits at index [%d]\n\n", ret);
+#endif
                 return -EEXIST;
         }
         else {
+#ifdef DEBUG_0
                 printf("\n Existing due to unknown Failure in get_key()! \n");
+#endif
                 return ret;
                 rte_exit(EXIT_FAILURE, "onvm_flow_dir_get parameters are invalid");
                 exit(2);
-        }
-
-        if(NULL == flow_entry) {
-                printf("Failed flow_entry Allocations!!" ); return -ENOMEM;
         }
 
         onvm_flow_dir_reset_entry(flow_entry); //memset(flow_entry, 0, sizeof(struct onvm_flow_entry));
@@ -506,8 +451,9 @@ add_flow_key_to_sc_flow_table(struct onvm_ft_ipv4_5tuple *ft)
         fk->src_port = rte_cpu_to_be_16(ft->src_port); //ft->src_port;
         fk->dst_addr = rte_cpu_to_be_32(ft->dst_addr); //ft->dst_addr;
         fk->dst_port = rte_cpu_to_be_16(ft->dst_port); //ft->dst_port;
-
+#ifdef DEBUG_0
         printf("\nAdding [%x:%u:, %x:%u, %u]", fk->src_addr, fk->src_port, fk->dst_addr, fk->dst_port, fk->proto);
+#endif
 
         ret = onvm_flow_dir_get_key(fk, &flow_entry);
 
@@ -525,21 +471,18 @@ add_flow_key_to_sc_flow_table(struct onvm_ft_ipv4_5tuple *ft)
         }
         /* Entry already exists  */
         else if (ret >= 0) {
-                //rte_free(flow_entry->key);
-                //rte_free(flow_entry->sc);
-                //printf("Flow Entry already exits for Key [%x] for flow_entry [%x] \n", fk->src_addr, flow_entry->key->src_addr);
-                  printf("Flow Entry in Table already exits at index [%d]\n\n", ret);
+#ifdef DEBUG_0
+                printf("Flow Entry in Table already exits at index [%d]\n\n", ret);
+#endif
                 return -EEXIST;
         }
         else {
+#ifdef DEBUG_0
                 printf("\n Existing due to unknown Failure in get_key()! \n");
+#endif
                 return ret;
                 rte_exit(EXIT_FAILURE, "onvm_flow_dir_get parameters are invalid");
                 exit(2);
-        }
-
-        if(NULL == flow_entry) {
-                printf("Failed flow_entry Allocations!!" ); return -ENOMEM;
         }
 
         onvm_flow_dir_reset_entry(flow_entry); //memset(flow_entry, 0, sizeof(struct onvm_flow_entry));
@@ -567,59 +510,6 @@ add_flow_key_to_sc_flow_table(struct onvm_ft_ipv4_5tuple *ft)
 
         return 0;
 }
-#if 0
-static int populate_random_flow_rules_with_pkts(uint32_t max_rules) {
-        int ret = 0;
-
-//#define DEBUG_ALLOC
-#ifdef DEBUG_ALLOC
-        for(ret = 0; ret < 1024; ret++) {
-                base_ip++;
-                fk = rte_calloc("flow_key",1, sizeof(struct onvm_ft_ipv4_5tuple), 0);
-                if (fk == NULL) {
-                        printf("failed in rte_calloc [%u] \n", base_ip);
-                        rte_exit(EXIT_FAILURE, "Cannot allocate memory for flow key\n");
-                        exit(1);
-                }
-                sc = onvm_sc_create();
-                setup_service_chain_for_flow_entry(sc);
-                printf("[%d] \n",ret);
-        }
-#endif
-#define NUM_PKTS 10
-#define PKTMBUF_POOL_NAME "MProc_pktmbuf_pool"
-        
-        /* Generate dummy packets and setup the keys
-        struct onvm_ft_ipv4_5tuple *fk = NULL;
-        struct onvm_service_chain *sc = NULL;
-        struct onvm_flow_entry *flow_entry = NULL;
-        struct rte_mbuf* pkts[2];
-        int i;
-
-        pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
-        if(pktmbuf_pool == NULL) {
-                rte_exit(EXIT_FAILURE, "Cannot find mbuf pool!\n");
-        }
-        printf("Creating %d packets to prepopulate \n", NUM_PKTS);
-        for (i=0; i < 2; i++) {
-                struct onvm_pkt_meta* pmeta;
-                pkts[i] = rte_pktmbuf_alloc(pktmbuf_pool);
-                pmeta = onvm_get_pkt_meta(pkts[i]);
-                pmeta->destination = globals.destination;
-                pmeta->action = ONVM_NF_ACTION_TONF;
-                pkts[i]->port = 3;
-                pkts[i]->hash.rss = i;
-                
-                setup_rule_for_packet(pkts[i]);
-                
-                onvm_nflib_return_pkt(pkts[i]);
-        }
-        //printf("%x", max_rules);
-        */
-        return (ret=max_rules);
-}
-#endif
-
 uint32_t populate_random_flow_rules(uint32_t max_rules);
 uint32_t
 populate_random_flow_rules(uint32_t max_rules) {
@@ -650,7 +540,8 @@ populate_random_flow_rules(uint32_t max_rules) {
                                 ipv4_5tRules[rules_added].src_port = bs_port;
                                 ipv4_5tRules[rules_added].dst_addr = (base_ip + (sip_inc+1+dip_inc)%max_ips);
                                 ipv4_5tRules[rules_added].dst_port = bd_port;
-                                #ifdef DEBUG_0
+
+#ifdef DEBUG_0
                                 struct onvm_ft_ipv4_5tuple *fk = &ipv4_5tRules[rules_added];
                                 printf("\nAdding to ipv4FT [TCP, %x:%x:, %x:%x]", fk->src_addr,
                                                 fk->src_port, fk->dst_addr, fk->dst_port);
@@ -678,6 +569,7 @@ populate_random_flow_rules(uint32_t max_rules) {
                 bd_port+=10;
         }
         ret = (rules_added - max_ft_entries);
+
         //#ifdef DEBUG_0
         printf("Total random_rules_added: %u", ret);
         //#endif
@@ -688,7 +580,7 @@ static int
 setup_flow_rule_and_sc_entries(void) {
 
         int ret = 0;
-        uint32_t random_flows = 0; //populate_random_flow_rules(MIN(globals.max_ft_rules/2,MAX_FLOW_TABLE_ENTRIES));
+        uint32_t random_flows = 0; //(MIN(globals.max_ft_rules/2,MAX_FLOW_TABLE_ENTRIES));   populate_random_flow_rules
         max_ft_entries+= random_flows;
 
         /* Now add the Flow Tuples to the Global Flow Table with appropriate Service chains */
@@ -696,38 +588,38 @@ setup_flow_rule_and_sc_entries(void) {
         for (;i < max_ft_entries;i++) {
                 ret = add_flow_key_to_sc_flow_table(&ipv4_5tRules[i]);
         }
+#ifdef DEBUG_0
         printf("\n\n Populated %d flow table rules with service chains!\n", max_ft_entries);
+#endif
         return ret;
 }
 
-static int setup_rule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta* meta) {
+static int setup_flowrule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta* meta) {
+
         int ret = 0;
-        //struct onvm_pkt_meta* meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkt)->udata64);
-        meta->src = 0;
-        meta->chain_index = 0;
+        uint8_t ipv4_pkt = 0;
+
         struct onvm_flow_entry *flow_entry = NULL;
+        struct onvm_ft_ipv4_5tuple fk;
 
+        /* Unknown packet type */
         if (pkt->hash.rss == 0) {
-                //meta->action = ONVM_NF_ACTION_DROP;
-                //meta->destination = 0;
-                //printf("Setting to drop packet \n");
-
                 printf("Setting to redirect on alternate port\n ");
                 meta->destination = (pkt->port == 0)? (1):(0);
-                meta->action = ONVM_NF_ACTION_OUT;
+                meta->action = ONVM_NF_ACTION_OUT; //ONVM_NF_ACTION_DROP;
                 return 0;
         }
+        meta->src = 0;
+        meta->chain_index = 0;
 
-        struct onvm_ft_ipv4_5tuple fk;
-        uint8_t ipv4_pkt = 0;
         /* Check if it is IPv4 packet and get Ipv4 tuple Key*/
-        if (onvm_ft_fill_key(&fk, pkt)) {
-                // Not and Ipv4 pkt
-                printf("No IP4 header found\n");
-        }
-        else {
-                onvm_pkt_print(pkt);
+        if (!onvm_ft_fill_key(&fk, pkt)) {
                 ipv4_pkt = 1;
+        } else { // Not and Ipv4 pkt
+#ifdef DEBUG_0
+                printf("No IP4 header found\n");
+                onvm_pkt_print(pkt);
+#endif
         }
 
         /* Get the Flow Entry for this packet:: Must fail if there is no entry in flow_table */
@@ -737,7 +629,7 @@ static int setup_rule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta* met
                 #ifdef DEBUG_0
                 printf("Exisitng_S:[%x] \n", pkt->hash.rss);
                 #endif
-                meta->action = flow_entry->sc->sc[meta->chain_index].action;//ONVM_NF_ACTION_NEXT;
+                meta->action = flow_entry->sc->sc[meta->chain_index].action;            //ONVM_NF_ACTION_NEXT;
                 meta->destination = flow_entry->sc->sc[meta->chain_index].destination;  //globals.destination;
                 meta->chain_index -=1; //  (meta->chain_index)--;
                 #ifdef DEBUG_0
@@ -751,7 +643,9 @@ static int setup_rule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta* met
                 #endif
                 ret = onvm_flow_dir_add_pkt(pkt, &flow_entry);
                 if (NULL == flow_entry) {
-                        printf("Couldnt! get the flow entry!!");
+#ifdef DEBUG_0
+                        printf("Couldn't get the flow entry!!");
+#endif
                         return 0;
                 }
                 onvm_flow_dir_reset_entry(flow_entry); //memset(flow_entry, 0, sizeof(struct onvm_flow_entry));
@@ -762,94 +656,38 @@ static int setup_rule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta* met
                         //set the same schain for flow_entry with flipped ipv4 % Tuple rule
                         sc_index = setup_schain_and_flow_entry_for_flip_key(&fk, sc_index);
                 } else {
+#ifdef DEBUG_0
                         printf("Skipped adding Flip rule \n");
+#endif
                 }
 
                 //onvm_sc_append_entry(flow_entry->sc, ONVM_NF_ACTION_TONF, globals.destination);
                 #ifdef DEBUG_0
                 printf("Setting new_E:\n");//onvm_sc_print(flow_entry->sc);
                 #endif
-                meta->action = ONVM_NF_ACTION_NEXT;//ONVM_NF_ACTION_NEXT;
-                //meta->action = ONVM_NF_ACTION_DROP;
-                //meta->destination = 0;
-                //sleep(1);
+                meta->action = ONVM_NF_ACTION_NEXT;//ONVM_NF_ACTION_NEXT; ONVM_NF_ACTION_DROP;
         }
                return 0;
 }
 
-static int
-packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) { // __attribute__((unused))
-        int ret=0;
-        
-        //reactive rule setup: check/lookup if packet already has entry 
-        printf("inside flow_rule_instaler packet handler\n");
-        ret = setup_rule_for_packet(pkt, meta);
+/*******************************File Interface functions********************************/
+int init_onvm_ft_install(void) {
+        memset(schains, -1, sizeof(int) * ONVM_MAX_CHAIN_LENGTH*MAX_SERVICE_CHAINS );
 
-        return ret;
-}
+        //return 0;
+        /* Get service chain types */
+        parse_service_chains(schains);
 
-static int
-clear_flow_rule_and_sc_entries(void) {
-
-        int ret = 0;
-
-        ret = onvm_flow_dir_clear_all_entries();
-        return ret;
-}
-int clear_thread_start(void *pdata);
-int clear_thread_start(void *pdata) {
-        printf("Waiting on clear signal: enter 999 to clear and 0 to exit \n:");
-        int ret = 0;
-        int input = 1;
-        if(pdata){};
-        while(input) {
-                ret = scanf("%d",&input);
-                if(input == 999) {
-                       ret= clear_flow_rule_and_sc_entries();
-                       printf("clear flow_rule_return_Status [%d]\n",ret);
-                       printf("Waiting on clear signal: enter 999 to clear and 0 to exit \n:");
-                }
-        }
-        return ret;
-}
-int main(int argc, char *argv[]) {
-        int arg_offset;
-
-        const char *progname = argv[0];
-
-        if ((arg_offset = onvm_nflib_init(argc, argv, NF_TAG)) < 0)
-                return -1;
-        argc -= arg_offset;
-        argv += arg_offset;
-
-        if (parse_app_args(argc, argv, progname) < 0)
-                rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
-        
-        /* Map the sdn_ft table */
-        onvm_flow_dir_nf_init();
-        
-        memset(services, -1, sizeof(int) * ONVM_MAX_CHAIN_LENGTH*MAX_SERVICE_CHAINS );
-
-        /* get service type */
-        parse_services(services);
-
-        /* Get Flow rule entries */
+        /* Get IP-5Tuple entries to pre install Flow rules */
         parse_ipv4_5t_rules();
 
-        /* Setup pre-defined set of FT entries UDP protocol: Extend optargs as necessary */ 
+        /* Setup pre-defined set of FT entries UDP protocol: Extend optargs as necessary */
         setup_flow_rule_and_sc_entries();
 
-        int pid = fork();
-        if (pid == 0) {
-                return clear_thread_start(&pid);
-        }
-
-        if (0 == globals.destination || globals.destination == nf_info->service_id) {
-                        globals.destination = nf_info->service_id + 1;
-        }
-
-        onvm_nflib_run(nf_info, &packet_handler);
-        printf("If we reach here, program is ending");
-        
         return 0;
+}
+
+int onvm_ft_handle_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta* meta) {
+
+        return setup_flowrule_for_packet(pkt,meta);
 }

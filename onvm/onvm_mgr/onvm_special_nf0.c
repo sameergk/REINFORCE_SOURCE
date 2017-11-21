@@ -51,7 +51,13 @@
 #include "onvm_pkt.h"
 #include "onvm_nf.h"
 #include "onvm_special_nf0.h"
-#include "onvm_stats.h"
+//#include "onvm_stats.h"
+#include "onvm_ft_install.h"
+//#include "shared/onvm_pkt_helper.h"
+#include <rte_common.h>
+#include <rte_mbuf.h>
+#include <rte_ip.h>
+#include <rte_ether.h>
 
 /**************************Macros and Feature Definitions**********************/
 /* Enable the ONVM_MGR to act as a 2-port bridge without any NFs */
@@ -224,7 +230,7 @@ int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, 
 int process_special_nf0_rx_packets(void) {
 
         struct rte_mbuf *pkts[PACKET_READ_SIZE];
-        //struct onvm_pkt_meta* meta = NULL;
+        struct onvm_pkt_meta* meta = NULL;
 
         //if(NULL == nf0_cl) nf0_cl = &clients[0];
         /* Check if NF is valid */
@@ -243,18 +249,30 @@ int process_special_nf0_rx_packets(void) {
                 if(nb_pkts == 0) {
                         return 0;
                 }
-                /* Give each packet to the specific processing function : Based on ETH_TYPE and Registered MGR Services
-                for (i = 0; i < nb_pkts; i++) {
-                        meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
+                /* Give each packet to the specific processing function : Based on ETH_TYPE and Registered MGR Services */
+                uint32_t i = 0;
+                for (; i < nb_pkts; i++) {
+                        struct ether_hdr *eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
+                        switch(rte_be_to_cpu_16(eth->ether_type)) {
+                        default:
+                        case ETHER_TYPE_IPv4:
+                                meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
+                                onvm_ft_handle_packet(pkts[i], meta);
+                                break;
+                        case ETHER_TYPE_ARP:
+                        case ETHER_TYPE_RARP:
+                                /* For now Only service is INTERNAL_BRIDGE */
+                                #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                                        onv_pkt_send_on_alt_port(NULL,pkts,nb_pkts);
+                                #else
+                                        onvm_pkt_drop_batch(pkts, nb_pkts);
+                                #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                                break;
+                        }
                 }
-                */
+#if 0
 
-                /* For now Only service is INTERNAL_BRIDGE */
-                #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
-                        onv_pkt_send_on_alt_port(NULL,pkts,nb_pkts);
-                #else
-                        onvm_pkt_drop_batch(pkts, nb_pkts);
-                #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+#endif
         }
         return 0;
 }
@@ -290,7 +308,10 @@ int start_special_nf0(void) {
                 onvm_nf_register_run(info);
                 //info->status = NF_RUNNING;
 
+                /* Add all services of Special NF: IDeally Register services from callback */
+                init_onvm_ft_install();
         }
+
         return onvm_nf_is_valid(nf0_cl);
 }
 int stop_special_nf0(void) {
