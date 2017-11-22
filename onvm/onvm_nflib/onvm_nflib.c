@@ -60,14 +60,19 @@
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
 #ifdef HAS_CLOCK_GETTIME_MONOTONIC
   struct timespec start, stop;
+  struct timespec gstart, gstop;
 #else
   struct timeval start, stop;
+  struct timeval gstart, gstop;
 #endif
 int64_t delta = 0;
 int get_cur_time(void* ct);
 int get_start_time(void);
 int get_stop_time(void);
 int64_t get_elapsed_time(void);
+int get_gstart_time(void);
+int get_gstop_time(void);
+int64_t get_gelapsed_time(void);
 int get_cur_time(void* ct)
 {
 #ifdef HAS_CLOCK_GETTIME_MONOTONIC
@@ -77,6 +82,21 @@ int get_cur_time(void* ct)
     }
 #else
     if (gettimeofday(&ct, NULL) == -1) {
+      perror("gettimeofday");
+      return 1;
+    }
+#endif
+    return 0;
+}
+int get_gstart_time(void)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+    if (clock_gettime(USE_THIS_CLOCK, &gstart) == -1) {
+      perror("clock_gettime");
+      return 1;
+    }
+#else
+    if (gettimeofday(&gstart, NULL) == -1) {
       perror("gettimeofday");
       return 1;
     }
@@ -115,6 +135,22 @@ int get_stop_time(void)
 #endif
     return 0;
 }
+int get_gstop_time(void)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+    if (clock_gettime(USE_THIS_CLOCK, &gstop) == -1) {
+      perror("clock_gettime");
+      return 1;
+    }
+#else
+    if (gettimeofday(&gstop, NULL) == -1) {
+      perror("gettimeofday");
+      return 1;
+    }
+#endif
+    return 0;
+}
+
 #ifdef HAS_CLOCK_GETTIME_MONOTONIC
 int64_t get_ttl_time(struct timespec start, struct timespec stop);
 int64_t get_ttl_time(struct timespec start, struct timespec stop)
@@ -140,6 +176,17 @@ int64_t get_elapsed_time(void)
 #else
         delta = (stop.tv_sec - start.tv_sec) * 1000000000 +
              (stop.tv_usec - start.tv_usec) * 1000;
+#endif
+        return delta;
+}
+int64_t get_gelapsed_time(void)
+{
+#ifdef HAS_CLOCK_GETTIME_MONOTONIC
+        delta = ((gstop.tv_sec - gstart.tv_sec) * 1000000000 +
+             (gstop.tv_nsec - gstart.tv_nsec));
+#else
+        delta = (gstop.tv_sec - gstart.tv_sec) * 1000000000 +
+             (gstop.tv_usec - gstart.tv_usec) * 1000;
 #endif
         return delta;
 }
@@ -244,6 +291,9 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         struct onvm_service_chain **scp;
         int retval_eal, retval_parse, retval_final;
 
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_gstart_time();
+#endif
         if ((retval_eal = rte_eal_init(argc, argv)) < 0)
                 return -1;
 
@@ -298,6 +348,10 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         if (nf_info_ring == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get nf_info ring");
 
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_start_time();
+#endif
+
         /* Put this NF's info struct onto queue for manager to process startup */
         if (rte_ring_enqueue(nf_info_ring, nf_info) < 0) {
                 rte_mempool_put(nf_info_mp, nf_info); // give back mermory
@@ -306,10 +360,16 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
 
         /* Wait for a client id to be assigned by the manager */
         RTE_LOG(INFO, APP, "Waiting for manager to assign an ID...\n");
+        struct timespec req = {0,1000}, res = {0,0};
         for (; nf_info->status == (uint16_t)NF_WAITING_FOR_ID ;) {
-                sleep(1);
+                nanosleep(&req,&res);//sleep(1);
         }
 
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_stop_time();
+        int64_t ttl_elapsed = get_elapsed_time();
+        printf("WAIT_TIME(INIT-->START): %li ns\n", ttl_elapsed);
+#endif
         /* This NF is trying to declare an ID already in use. */
         if (nf_info->status == NF_ID_CONFLICT) {
                 rte_mempool_put(nf_info_mp, nf_info);
@@ -472,7 +532,7 @@ onvm_nflib_run(
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         get_stop_time();
         int64_t ttl_elapsed = get_elapsed_time();
-        printf("WAIT_TIME: %li ns\n", ttl_elapsed);
+        printf("WAIT_TIME(START-->RUN): %li ns\n", ttl_elapsed);
 #endif
         /* Note: There is no need for synchronization here; as NF Manager will update the status to Running and only then it will be registered to deliver the packets.
         Also the NF MANGER will put the NF to the RUNNING STATE */
@@ -482,7 +542,17 @@ onvm_nflib_run(
         //By default: let the process start in waiting state and let NF Manage wake up the thread when necessary.
         //if(!is_primary_active_nf_id(nf_info->instance_id)) {
                 printf("\n Client [%d] is Waiting for SYNC Signal\n", nf_info->instance_id);
+                #ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                        get_start_time();
+                #endif
+
                 onvm_nf_yeild(info);
+                #ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                        get_stop_time();
+                        ttl_elapsed = get_elapsed_time();
+                        printf("SIGNAL_TIME(RUN-->RUNNING): %li ns\n", ttl_elapsed);
+                #endif
+
                 printf("\n Client [%d] is starting to process packets \n", nf_info->instance_id);
         /* }
         else {
@@ -491,6 +561,11 @@ onvm_nflib_run(
         }*/
 #endif
 
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_gstop_time();
+        ttl_elapsed = get_gelapsed_time();
+        printf("WAIT_TIME(INIT-->START-->RUN-->RUNNING): %li ns\n", ttl_elapsed);
+#endif
         for (; keep_running;) {
                 uint16_t i, j, nb_pkts = PKT_READ_SIZE;
                 void *pktsTX[PKT_READ_SIZE];

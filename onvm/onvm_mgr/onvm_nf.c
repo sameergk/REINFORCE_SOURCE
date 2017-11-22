@@ -476,19 +476,24 @@ onvm_nf_stats_update(__attribute__((unused)) unsigned long interval) {
 
 inline int
 onvm_nf_service_to_nf_map_V2(struct onvm_pkt_meta *meta,  __attribute__((unused)) struct rte_mbuf *pkt, __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
-        int i, nfID =-1;
+        int nfID =-1;
 
         uint16_t service_id = meta->destination;
         uint16_t num_nfs_available = nf_per_service_count[service_id];
         if (num_nfs_available == 0)
                 return nfID;
 
+#ifdef ENABLE_NFV_RESL
+        int i = 0;
         for(i=0; i<num_nfs_available; i++) {
                 if(is_primary_active_nf_id(services[service_id][i])){
                         nfID = services[service_id][i];
                         break;
                 }
         }
+#else
+        nfID = services[service_id][pkt->hash.rss % num_nfs_available];
+#endif
         //If no active then set first available Instance
         if(nfID < 0) {
                 nfID = services[service_id][0];

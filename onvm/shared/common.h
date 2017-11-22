@@ -59,6 +59,9 @@
 #include <sys/resource.h>
 #include "onvm_sort.h"
 
+//check on each node by executing command  $"getconf LEVEL1_DCACHE_LINESIZE" or cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
+#define ONVM_CACHE_LINE_SIZE (64)
+
 #define MIN(a,b) ((a) < (b)? (a):(b))
 #define MAX(a,b) ((a) > (b)? (a):(b))
 
@@ -192,6 +195,7 @@ struct onvm_service_chain;
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
+#define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
 
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)
@@ -263,9 +267,13 @@ struct onvm_pkt_meta {
         uint8_t destination; /* where to go next */
         uint8_t src; /* who processed the packet last */
         uint8_t chain_index;    /*index of the current step in the service chain*/
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_FT_INDEX_IN_META
         uint16_t ft_index;       /* Index of the FT if the packet is mapped in SDN Flow Table */
         uint16_t reserved_word; /* reserved word */
-};
+#endif
+#endif
+};//__attribute__((__aligned__(ONVM_CACHE_LINE_SIZE)));
 static inline struct onvm_pkt_meta* onvm_get_pkt_meta(struct rte_mbuf* pkt) {
         return (struct onvm_pkt_meta*)&pkt->udata64;
 }

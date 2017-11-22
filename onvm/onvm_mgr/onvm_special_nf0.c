@@ -144,6 +144,7 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         return send_direct_on_alt_port(pkts, rx_count);
 #endif //SEND_DIRECT_ON_ALT_PORT
 
+        /* Set Packet action to OUTPUT on Port and Push the packets directly to the Tx Ring of the Speacial NF[0] */
         for (i = 0; i < rx_count; i++) {
                meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
                meta->src = 0;
@@ -198,6 +199,7 @@ int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, 
          * Configuration: Rx --> onvm_pkt_process_rx_batch() and code in and code in onv_pkt_send_to_special_nf0() = rte_ring_enqueue_bulk(rx_ing)
          * Throughput: 9.1Mpps and 10.1~10.5Mpps
          */
+
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
         return onv_pkt_send_on_alt_port(rx,pkts,rx_count);
 #else
@@ -240,10 +242,6 @@ int process_special_nf0_rx_packets(void) {
 
         for (; keep_running;) {
                 uint16_t nb_pkts = PACKET_READ_SIZE;
-                //uint16_t i,j=0;
-                //void *pktsTX[PACKET_READ_SIZE];
-                //uint32_t tx_batch_size = 0;
-                //int ret_act = 0;
 
                 nb_pkts = (uint16_t)rte_ring_dequeue_burst(nf0_cl->rx_q, (void**)pkts, nb_pkts);
                 if(nb_pkts == 0) {
@@ -314,6 +312,7 @@ int start_special_nf0(void) {
 
         return onvm_nf_is_valid(nf0_cl);
 }
+
 int stop_special_nf0(void) {
         return 0;
 }

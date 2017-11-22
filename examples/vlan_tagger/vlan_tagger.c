@@ -53,6 +53,7 @@
 #include <rte_mbuf.h>
 #include <rte_ip.h>
 #include <rte_ether.h>
+#include <rte_malloc.h>
 
 #include "onvm_nflib.h"
 #include "onvm_pkt_helper.h"
@@ -90,12 +91,13 @@ typedef struct dirty_mon_state_map_tbl {
         // Bit index to every 1K LSB=0-1K, MSB=63-64K
 }dirty_mon_state_map_tbl_t;
 dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
-#define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/sizeof(uint64_t))
 
 #ifdef ENABLE_NFV_RESL
+#define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/sizeof(uint64_t))
 #define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
 #else
 #define VLAN_NF_STATE_SIZE (64*1024)
+#define DIRTY_MAP_PER_CHUNK_SIZE (VLAN_NF_STATE_SIZE/sizeof(uint64_t))
 #define MAX_STATE_ELEMENTS  ((VLAN_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
 void *vlan_state_mp = NULL;
 #endif
@@ -239,6 +241,7 @@ static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
 
 static void
 do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
+        return;
         /* This function will check if it is a valid ETH Packet and if it is not a vlan_tagged, inserts a vlan tag */
         struct ether_hdr *eth = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
         if (!eth) {
@@ -255,9 +258,14 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
                 }
                 /* Get the FT Index and Index in VLAN STATE TABLE  */
                 uint16_t vlan_ft_index = 0;
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_FT_INDEX_IN_META
                 if(meta->ft_index) {
                         vlan_ft_index = (uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
-                } else {
+                } else
+#endif
+#endif
+                {
                         struct onvm_flow_entry *flow_entry = NULL;
                         onvm_flow_dir_get_pkt(pkt, &flow_entry);
                         if(flow_entry) {
