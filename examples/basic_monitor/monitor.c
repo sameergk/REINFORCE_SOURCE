@@ -157,9 +157,9 @@ do_stats_display(struct rte_mbuf* pkt) {
 }
 #ifdef ENABLE_NFV_RESL
 static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
-        if(nf_info->state_mempool) {
+        if(nf_info->nf_state_mempool) {
                 if(mon_state_tbl  == NULL) {
-                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->state_mempool;
+                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
                         mon_state_tbl = (monitor_state_info_table_t*)(dirty_state_map+1);
                         //mon_state_tbl[0].ft_index = 0;
                         mon_state_tbl[0].tag_counter+=1;

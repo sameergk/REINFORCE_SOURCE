@@ -102,7 +102,7 @@
 #define RTE_MP_RX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define RTE_MP_TX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 //#define CLIENT_QUEUE_RINGSIZE  (512) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
-#define CLIENT_QUEUE_RINGSIZE  (4096) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#define CLIENT_QUEUE_RINGSIZE  (128) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
 //For TCP UDP use 70,40
 //For TCP TCP, IO use 80 20
 
@@ -217,7 +217,14 @@ struct client {
 
         #endif //INTERRUPT_SEM
 #ifdef ENABLE_NFV_RESL
-        void *state_mempool;
+        void *nf_state_mempool;     // shared state exclusively between the active and standby NFs
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+        void *service_state_pool;   // shared state between all the NFs of the same service type
+#endif
+#ifdef ENABLE_SHADOW_RINGS
+        struct rte_ring *rx_sq;
+        struct rte_ring *tx_sq;
+#endif
 #endif //#ifdef ENABLE_NFV_RESL
 };
 
@@ -287,6 +294,15 @@ extern struct onvm_ft *sdn_ft;
 #ifdef ENABLE_NF_MGR_IDENTIFIER
 extern uint32_t nf_mgr_id;
 #endif // ENABLE_NF_MGR_IDENTIFIER
+
+#ifdef ENABLE_SHADOW_RINGS
+#define CLIENT_SHADOW_RING_SIZE     (ONVM_PACKETS_BATCH_SIZE*2) //(32*2)  //(PACKET_READ_SIZE*2)
+#endif //ENABLE_SHADOW_RINGS
+
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+extern void **services_state_pool;
+#endif  //ENABLE_PER_SERVICE_MEMPOOL
+
 #endif // ENABLE_NFV_RESL
 
 /**********************************Functions**********************************/

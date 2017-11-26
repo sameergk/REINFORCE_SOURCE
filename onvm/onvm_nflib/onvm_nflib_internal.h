@@ -82,7 +82,7 @@
 
 
 // Number of packets to attempt to read from queue
-#define PKT_READ_SIZE  ((uint16_t)32)
+#define PKT_READ_SIZE  (ONVM_PACKETS_BATCH_SIZE)    //((uint16_t)1)
 
 
 /******************************Global Variables*******************************/
@@ -95,6 +95,9 @@ static struct rte_ring *nf_info_ring;
 // rings used to pass packets between NFlib and NFmgr
 static struct rte_ring *tx_ring, *rx_ring;
 
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+static struct rte_ring *tx_sring, *rx_sring;
+#endif
 
 // shared data from server. We update statistics here
 static volatile struct client_tx_stats *tx_stats;

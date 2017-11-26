@@ -61,6 +61,7 @@
 
 //check on each node by executing command  $"getconf LEVEL1_DCACHE_LINESIZE" or cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
 #define ONVM_CACHE_LINE_SIZE (64)
+#define ONVM_PACKETS_BATCH_SIZE (32)
 
 #define MIN(a,b) ((a) < (b)? (a):(b))
 #define MAX(a,b) ((a) > (b)? (a):(b))
@@ -196,10 +197,18 @@ struct onvm_service_chain;
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
 #define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
+#define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
+#define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)
 #define _NF_STATE_CACHE     (16)
+
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+#define _SERVICE_STATE_MEMPOOL_NAME "SERVICE_STATE_MEMPOOL"
+#define _SERVICE_STATE_SIZE      (64*1024)
+#define _SERVICE_STATE_CACHE     (16)
+#endif
 
 #define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
 #define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
@@ -349,7 +358,10 @@ struct onvm_nf_info {
 #endif  //ENABLE_ECN_CE
 
 #ifdef ENABLE_NFV_RESL
-        void *state_mempool;
+        void *nf_state_mempool;     // shared state exclusively between the active and standby NFs
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+        void *service_state_pool;   // shared state between all the NFs of the same service type
+#endif
 #endif //#ifdef ENABLE_NFV_RESL
 
 };
@@ -461,6 +473,23 @@ get_tx_queue_name(unsigned id) {
 }
 
 #ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_SHADOW_RINGS
+#define MP_CLIENT_RXSQ_NAME "MProc_Client_%u_RX_S"
+#define MP_CLIENT_TXSQ_NAME "MProc_Client_%u_TX_S"
+static inline const char *
+get_rx_squeue_name(unsigned id) {
+        static char buffer[sizeof(MP_CLIENT_RXSQ_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_RXSQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+        return buffer;
+}
+
+static inline const char *
+get_tx_squeue_name(unsigned id) {
+        static char buffer[sizeof(MP_CLIENT_TXSQ_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_TXSQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+        return buffer;
+}
+#endif  //ENABLE_SHADOW_RINGS
 static inline unsigned
 get_associated_active_or_standby_nf_id(unsigned nf_id) {
         if(nf_id < MAX_ACTIVE_CLIENTS) {

@@ -394,6 +394,16 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         if (tx_ring == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get TX ring - is server process running?\n");
 
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+        rx_sring = rte_ring_lookup(get_rx_squeue_name(nf_info->instance_id));
+        if (rx_sring == NULL)
+                rte_exit(EXIT_FAILURE, "Cannot get RX Shadow ring - is server process running?\n");
+
+        tx_sring = rte_ring_lookup(get_tx_squeue_name(nf_info->instance_id));
+        if (tx_sring == NULL)
+                rte_exit(EXIT_FAILURE, "Cannot get TX Shadow ring - is server process running?\n");
+#endif
+
         /* Tell the manager we're ready to recieve packets */
         //nf_info->status = NF_RUNNING;
 
@@ -492,6 +502,42 @@ uint64_t compute_total_cycles(uint64_t start_t)
        return (end_t - start_t);
 }
 
+static inline void start_ppkt_processing_cost(uint64_t *start_tsc) {
+        if (counter % SAMPLING_RATE == 0) {
+                *start_tsc = compute_start_cycles(); //rte_rdtsc();
+        }
+}
+static inline void end_ppkt_processing_cost(uint64_t start_tsc) {
+        if (counter % SAMPLING_RATE == 0) {
+                tx_stats->comp_cost[nf_info->instance_id] = compute_total_cycles(start_tsc);
+                if (tx_stats->comp_cost[nf_info->instance_id] > RTDSC_CYCLE_COST) {
+                        tx_stats->comp_cost[nf_info->instance_id] -= RTDSC_CYCLE_COST;
+                }
+
+                #ifdef USE_CGROUPS_PER_NF_INSTANCE
+
+                #ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+                hist_store_v2(&info->ht2, tx_stats->comp_cost[info->instance_id]);  //hist_store(&ht,tx_stats->comp_cost[info->instance_id]); //tx_stats->comp_cost[info->instance_id] = max_nf_computation_cost;
+                //avoid updating 'nf_info->comp_cost' as it will be calculated in the weight assignment function
+                //nf_info->comp_cost  = hist_extract_v2(&nf_info->ht2,VAL_TYPE_RUNNING_AVG);
+                #endif //STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+                #else   //just use the running average
+                nf_info->comp_cost  = (nf_info->comp_cost == 0)? (tx_stats->comp_cost[nf_info->instance_id]): ((nf_info->comp_cost+tx_stats->comp_cost[nf_info->instance_id])/2);
+                #endif //USE_CGROUPS_PER_NF_INSTANCE
+
+                #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+                counter = 1;
+                #endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+                #ifdef ENABLE_ECN_CE
+                hist_store_v2(&info->ht2_q, rte_ring_count(rx_ring));
+                #endif
+        }
+
+        #ifndef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+        counter++;  //computing for first packet makes also account reasonable cycles for cache-warming.
+        #endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+}
 #endif  //INTERRUPT_SEM
 
 int
@@ -567,7 +613,8 @@ onvm_nflib_run(
         printf("WAIT_TIME(INIT-->START-->RUN-->RUNNING): %li ns\n", ttl_elapsed);
 #endif
         for (; keep_running;) {
-                uint16_t i, j, nb_pkts = PKT_READ_SIZE;
+                uint16_t i=0;
+                uint16_t nb_pkts = PKT_READ_SIZE;
                 void *pktsTX[PKT_READ_SIZE];
                 uint32_t tx_batch_size = 0;
                 int ret_act;
@@ -583,8 +630,42 @@ onvm_nflib_run(
                 #endif  // INTERRUPT_SEM
                 #endif  // defined(ENABLE_NF_BACKPRESSURE) && defined(NF_BACKPRESSURE_APPROACH_2)
 
-                nb_pkts = (uint16_t)rte_ring_dequeue_burst(rx_ring, pkts, nb_pkts);
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+                /* Foremost Move left over processed packets from Tx shadow ring to the Tx Ring if any */
+                if(unlikely( (rte_ring_count(tx_sring)))) {
+                        uint16_t tx_spkts = rte_ring_dequeue_burst(tx_sring, pkts, nb_pkts);
+                        fprintf(stderr, "\n Move processed packets from Shadow Tx Ring to Tx Ring [%d] packets from shadow ring( Re-queue)!\n", tx_spkts);
+                        if(unlikely(rte_ring_sp_enqueue_bulk(tx_ring, pkts, tx_spkts) == -ENOBUFS)) {
+                                #if defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
+                                ret_act = -ENOBUFS;
+                                do
+                                {
+                                        #ifdef INTERRUPT_SEM
+                                        onvm_nf_yeild(info);
+                                        #endif
 
+                                        if (tx_spkts <= rte_ring_free_count(tx_ring)) {
+                                                ret_act = rte_ring_enqueue_bulk(tx_ring, pkts, tx_spkts);
+                                                if ( 0 ==  ret_act){
+                                                        tx_stats->tx[info->instance_id] += tx_spkts;
+                                                }
+                                        }
+                                }while(ret_act);
+                                #endif //defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
+                        } else {
+                                tx_stats->tx[info->instance_id] += tx_spkts;
+                        }
+                }
+
+                /* First Dequeue the packets pulled from Rx Shadow Ring if not empty*/
+                if (unlikely( (rte_ring_count(rx_sring)))) {
+                        nb_pkts = rte_ring_dequeue_burst(rx_sring, pkts, nb_pkts);
+                        fprintf(stderr, "Dequeued [%d] packets from shadow ring( Re-Run)!\n", nb_pkts);
+                }
+                /* ELSE: Get Packets from Main Rx Ring */
+                else
+#endif
+                nb_pkts = (uint16_t)rte_ring_dequeue_burst(rx_ring, pkts, nb_pkts);
                 if(nb_pkts == 0) {
                         #ifdef INTERRUPT_SEM
                         onvm_nf_yeild(info);                     
@@ -592,59 +673,45 @@ onvm_nflib_run(
                         continue;
                 }
 
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+                /* First Enqueue the packets pulled from Rx ring into Rx Shadow Ring */
+                if (unlikely(rte_ring_enqueue_bulk(rx_sring, pkts, nb_pkts) == -ENOBUFS)) {
+                        fprintf(stderr, "Enqueue: %d packets to shadow ring Failed!\n", nb_pkts);
+                }
+#endif
                 /* Give each packet to the user processing function */
                 for (i = 0; i < nb_pkts; i++) {
                         meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
 
 
                         #ifdef INTERRUPT_SEM
-                        //meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
-                        if (counter % SAMPLING_RATE == 0) {
-                                start_tsc = compute_start_cycles(); //rte_rdtsc();
-                        }
+                        start_ppkt_processing_cost(&start_tsc);
                         #endif
 
                         ret_act = (*handler)((struct rte_mbuf*)pkts[i], meta);
                         
                         #ifdef INTERRUPT_SEM
-                        if (counter % SAMPLING_RATE == 0) {
-                                tx_stats->comp_cost[info->instance_id] = compute_total_cycles(start_tsc);
-                                if (tx_stats->comp_cost[info->instance_id] > RTDSC_CYCLE_COST) {
-                                        tx_stats->comp_cost[info->instance_id] -= RTDSC_CYCLE_COST;
-                                }
-
-                                #ifdef USE_CGROUPS_PER_NF_INSTANCE
-
-                                #ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
-                                hist_store_v2(&info->ht2, tx_stats->comp_cost[info->instance_id]);  //hist_store(&ht,tx_stats->comp_cost[info->instance_id]); //tx_stats->comp_cost[info->instance_id] = max_nf_computation_cost;
-                                //avoid updating 'nf_info->comp_cost' as it will be calculated in the weight assignment function
-                                //nf_info->comp_cost  = hist_extract_v2(&nf_info->ht2,VAL_TYPE_RUNNING_AVG);
-                                #endif //STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
-                                #else   //just use the running average
-                                nf_info->comp_cost  = (nf_info->comp_cost == 0)? (tx_stats->comp_cost[info->instance_id]): ((nf_info->comp_cost+tx_stats->comp_cost[info->instance_id])/2);
-                                #endif //USE_CGROUPS_PER_NF_INSTANCE
-
-                                #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
-                                counter = 1;
-                                #endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
-
-                                #ifdef ENABLE_ECN_CE
-                                hist_store_v2(&info->ht2_q, rte_ring_count(rx_ring));
-                                #endif
-                        }
-
-                        #ifndef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
-                        counter++;  //computing for first packet makes also account reasonable cycles for cache-warming.
-                        #endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
-
+                        end_ppkt_processing_cost(start_tsc);
                         #endif  //INTERRUPT_SEM
 
                         /* NF returns 0 to return packets or 1 to buffer */
                         if(likely(ret_act == 0)) {
                                 pktsTX[tx_batch_size++] = pkts[i];
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+                                /* Move this processed packet ( Head of Rx shadow Ring) to Tx Shadow Ring */
+                                void *pkt_rx;
+                                rte_ring_sc_dequeue(rx_sring,&pkt_rx);
+                                rte_ring_sp_enqueue(tx_sring,pkts[i]);
+#endif
                         }
                         else {
                                 tx_stats->tx_buffer[info->instance_id]++;
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+                                /* Move this buffered packet (Head of Rx shadow Ring) to tail of Rx Shadow Ring */
+                                void *pkt_rx;
+                                rte_ring_sc_dequeue(rx_sring,&pkt_rx);
+                                rte_ring_sp_enqueue(rx_sring,pkts[i]);
+#endif
                         }
                 }
 
@@ -654,16 +721,12 @@ onvm_nflib_run(
 
                 if (unlikely(tx_batch_size > 0 && rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size) == -ENOBUFS)) {
 
-                        #ifdef PRE_PROCESS_DROP_ON_RX
-
-                        #ifdef DROP_APPROACH_3
+                        #if defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
                         int ret_status = -ENOBUFS;
                         do
                         {
-                                #ifdef DROP_APPROACH_3_WITH_SYNC
                                 #ifdef INTERRUPT_SEM
                                 onvm_nf_yeild(info);
-                                #endif
                                 #endif
 
                                 if (tx_batch_size <= rte_ring_free_count(tx_ring)) {
@@ -671,22 +734,22 @@ onvm_nflib_run(
                                         if ( 0 ==  ret_status){
                                                 tx_stats->tx[info->instance_id] += tx_batch_size;
                                                 tx_batch_size=0;
-                                                //break;
                                         }
                                 }
                         }while(ret_status);
-                        //printf("Total Retry attempts [%d]:", j);
                         #endif  //DROP_APPROACH_3
-
-                        #endif  //PRE_PROCESS_DROP_ON_RX
-
-                        tx_stats->tx_drop[info->instance_id] += tx_batch_size;
-                        for (j = 0; j < tx_batch_size; j++) {
-                                rte_pktmbuf_free(pktsTX[j]);
-                        }
                 } else {
                         tx_stats->tx[info->instance_id] += tx_batch_size;
                 }
+
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+                /* Finally clear all packets from the Tx Shadow Ring */
+                rte_ring_sc_dequeue_burst(tx_sring,pkts,rte_ring_count(tx_sring));
+                if(unlikely(rte_ring_count(rx_sring))) {
+                        //These are the held packets in the NF in this round:
+                        rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring));
+                }
+#endif
         }
 
         nf_info->status = NF_STOPPED;

@@ -65,7 +65,7 @@
 struct onvm_nf_info *nf_info;
 
 /* number of package between each print */
-static uint32_t print_delay = 5000000;
+static uint32_t print_delay = 25000000;
 
 /* destination port, NF serviceID or NF Instance ID*/
 static uint32_t destination = 0;
@@ -198,8 +198,8 @@ int get_vtag_tbl_index(__attribute__((unused)) struct rte_mbuf* pkt, __attribute
 int get_vtag_tbl_index(__attribute__((unused)) struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
         int tbl_index = -1;
         if(vtag_tbl  == NULL) {
-                if(nf_info->state_mempool) {
-                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->state_mempool;
+                if(nf_info->nf_state_mempool) {
+                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
                         vtag_tbl = (vlan_tag_info_table_t*)(dirty_state_map+1);
                         vtag_tbl[0].tag_counter+=1;
                 } else {
@@ -337,8 +337,8 @@ int main(int argc, char *argv[]) {
                 rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
 
 #ifdef ENABLE_NFV_RESL
-        if(nf_info->state_mempool) {
-                dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->state_mempool;
+        if(nf_info->nf_state_mempool) {
+                dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
                 vtag_tbl = (vlan_tag_info_table_t*)(dirty_state_map+1);
                 vtag_tbl[0].tag_counter+=1;
         }
