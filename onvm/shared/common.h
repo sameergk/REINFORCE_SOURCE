@@ -68,6 +68,7 @@
 
 #define ARBITER_PERIOD_IN_US            (100)       // 250 micro seconds or 100 micro seconds
 
+//#define USE_SINGLE_NIC_PORT        // NEEDED FOR VXLAN?
 
 #define ONVM_MAX_CHAIN_LENGTH 12   // the maximum chain length
 #define MAX_CLIENTS 32            // total number of NFs allowed
@@ -213,6 +214,13 @@ struct onvm_service_chain;
 #define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
 #define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
 #endif  //#ifdef ENABLE_NFV_RESL
+/******************************************************************************/
+//#define ENABLE_VXLAN
+//#define ENABLE_ZOOKEEPER
+
+#ifdef ENABLE_VXLAN
+#define DISTRIBUTED_NIC_PORT 1 // NIC port connects to the remote server
+#endif //ENABLE_VXLAN
 /******************************************************************************/
 #define SET_BIT(x,bitNum) ((x)|=(1<<(bitNum-1)))
 static inline void set_bit(long *x, unsigned bitNum) {

@@ -263,6 +263,7 @@ struct tx_stats{
 struct port_info {
         uint8_t num_ports;
         uint8_t id[RTE_MAX_ETHPORTS];
+        struct ether_addr mac[RTE_MAX_ETHPORTS];
         volatile struct rx_stats rx_stats;
         volatile struct tx_stats tx_stats;
 };
@@ -305,6 +306,12 @@ extern void **services_state_pool;
 
 #endif // ENABLE_NFV_RESL
 
+#ifdef ENABLE_VXLAN
+#ifndef ENABLE_ZOOKEEPER
+extern uint8_t remote_eth_addr[6];
+extern struct ether_addr remote_eth_addr_struct;
+#endif //ENABLE_ZOOKEEPER
+#endif //ENABLE_VXLAN
 /**********************************Functions**********************************/
 
 /*

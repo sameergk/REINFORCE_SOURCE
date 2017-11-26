@@ -342,3 +342,11 @@ onvm_stats_print_MAC(uint8_t port) {
         }
         return addresses[port];
 }
+
+void
+onvm_print_ethaddr(const char *name, struct ether_addr *eth_addr)
+{
+        char buf[ETHER_ADDR_FMT_SIZE];
+        ether_format_addr(buf, ETHER_ADDR_FMT_SIZE, eth_addr);
+        printf("%s: %s\n", name, buf);
+}

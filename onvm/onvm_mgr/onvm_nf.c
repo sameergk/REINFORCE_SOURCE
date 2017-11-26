@@ -52,6 +52,10 @@
 #include "onvm_nf.h"
 #include "onvm_stats.h"
 
+#ifdef ENABLE_ZOOKEEPER
+#include "onvm_zookeeper.h"
+#endif
+
 uint16_t next_instance_id = 1; //start from 1.
 
 #ifdef ENABLE_NF_BACKPRESSURE
@@ -562,6 +566,14 @@ inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
         // Register this NF running within its service
         services[nf_info->service_id][service_count] = nf_info->instance_id;
 #endif
+
+/** TODO: Verify if this is the correct place to call the ZooKeerper NF START? **/
+#ifdef ENABLE_ZOOKEEPER
+        // Register this NF with ZooKeeper
+        // Need to add 1 to service_count because var++ is used above
+        onvm_zk_nf_start(nf_info->service_id, service_count + 1, nf_info->instance_id);
+#endif
+
         nf_info->status = NF_RUNNING;
         return nf_per_service_count[nf_info->service_id];
 }
@@ -667,6 +679,12 @@ onvm_nf_stop(struct onvm_nf_info *nf_info) {
                         services[service_id][mapIndex + 1] = 0;
                 }
         }
+
+#ifdef ENABLE_ZOOKEEPER
+        uint16_t service_count = nf_per_service_count[service_id];
+        // Unregister this NF with ZooKeeper
+        onvm_zk_nf_stop(service_id, service_count, nf_id);
+#endif
 
         /* Free info struct */
         /* Lookup mempool for nf_info struct */

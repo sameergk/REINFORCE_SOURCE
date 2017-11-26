@@ -86,6 +86,11 @@ void *zmq_ctx;
 void *onvm_socket_id;
 void *onvm_socket_ctx;
 #endif
+
+#ifdef ENABLE_VXLAN
+uint8_t remote_eth_addr[6] = {0x68,0x05,0xCA,0x30,0x5A,0x51};
+struct ether_addr remote_eth_addr_struct;
+#endif
 /*********************************Prototypes**********************************/
 
 

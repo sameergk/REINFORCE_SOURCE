@@ -50,7 +50,7 @@
 
 #ifndef _ONVM_STATS_H_
 #define _ONVM_STATS_H_
-
+#include <rte_ether.h>
 
 /*********************************Interfaces**********************************/
 typedef struct onvm_stats_snapshot {
@@ -151,5 +151,11 @@ void onvm_stats_clear_terminal(void);
  */
 const char * onvm_stats_print_MAC(uint8_t port);
 
+/*
+ * Function printing MAC address 
+ * 
+ */
+
+void onvm_print_ethaddr(const char *name, struct ether_addr *eth_addr);
 
 #endif  // _ONVM_STATS_H_

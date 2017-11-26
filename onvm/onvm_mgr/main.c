@@ -60,6 +60,14 @@
 #include "onvm_bfd.h"
 #endif
 
+#ifdef ENABLE_ZOOKEEPER
+#include "onvm_zookeeper.h"
+#include "onvm_zk_common.h"
+#else
+uint8_t remote_eth_addr[6];
+struct ether_addr remote_eth_addr_struct;
+#endif
+
 typedef struct thread_core_map_t {
         unsigned rx_th_core[ONVM_NUM_RX_THREADS];
         unsigned tx_t_core[8];
@@ -485,9 +493,37 @@ main(int argc, char *argv[]) {
         onvm_bfd_init(nf_mgr_id);
 #endif
 
+#ifdef ENABLE_VXLAN
+        uint16_t nic_port = DISTRIBUTED_NIC_PORT;
+        printf("Distributed Mode: nic_port: %u mac addr: %s\n", ports->id[nic_port],
+        onvm_stats_print_MAC(ports->id[nic_port]));
+        rte_eth_macaddr_get(nic_port, &ports->mac[nic_port]);
+#ifdef ENABLE_ZOOKEEPER
+        // Do Zookeeper init
+        onvm_zk_connect(ZK_CONNECT_BLOCKING);
+        RTE_LOG(INFO, APP, "Connected to ZooKeeper, id %" PRId64 "\n", onvm_zk_client_id());
+
+        const char *port_mac = onvm_stats_print_MAC(ports->id[nic_port]);
+        int ret = onvm_zk_init(port_mac);
+        if (ret != ZOK) {
+                RTE_LOG(ERR, APP, "Error doing zookeeper init, bailing. %s\n", zk_status_to_string(ret));
+                return -1;
+        }
+#else
+        printf("Zookeeper is disabled, use static setting\n");
+        ether_addr_copy((struct ether_addr *)&remote_eth_addr, &remote_eth_addr_struct);
+        onvm_print_ethaddr("remote addr:", &remote_eth_addr_struct);
+#endif
+#endif
+
+
         /* Master thread handles statistics and NF management */
         thread_core_map.mn_th_core=rte_lcore_id();
         master_thread_main();
+
+#ifdef ENABLE_ZOOKEEPER
+        onvm_zk_disconnect();
+#endif
         return 0;
 }
 

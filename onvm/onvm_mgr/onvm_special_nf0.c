@@ -59,6 +59,13 @@
 #include <rte_ip.h>
 #include <rte_ether.h>
 
+#ifdef ENABLE_VXLAN
+#include "onvm_vxlan.h"
+#ifdef ENABLE_ZOOKEEPER
+#include "onvm_zookeeper.h"
+#endif
+#endif
+
 /**************************Macros and Feature Definitions**********************/
 /* Enable the ONVM_MGR to act as a 2-port bridge without any NFs */
 #define ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE    // Work as bridge < without any NFs :: only testing purpose.. >
@@ -150,7 +157,11 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                meta->src = 0;
                meta->chain_index = 0;
                pkt = (struct rte_mbuf*)pkts[i];
-                if (pkt->port == 0) {
+
+#ifdef USE_SINGLE_NIC_PORT
+               meta->destination = pkt->port;
+#else
+               if (pkt->port == 0) {
                         meta->destination = 0;
                         if(ports->num_ports > 1 ) {
                                 meta->destination = 1;
@@ -159,6 +170,7 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                 else {
                         meta->destination = 0;
                 }
+#endif
                 meta->action = ONVM_NF_ACTION_OUT;
         }
 
@@ -233,6 +245,15 @@ int process_special_nf0_rx_packets(void) {
 
         struct rte_mbuf *pkts[PACKET_READ_SIZE];
         struct onvm_pkt_meta* meta = NULL;
+#ifdef ENABLE_VXLAN
+uint16_t nic_port = DISTRIBUTED_NIC_PORT;
+        int ret;
+#ifdef ENABLE_ZOOKEEPER
+        struct ether_addr dst_addr;
+        uint16_t dst_service_id;
+        int64_t remote_id;
+#endif
+#endif
 
         //if(NULL == nf0_cl) nf0_cl = &clients[0];
         /* Check if NF is valid */
@@ -254,8 +275,37 @@ int process_special_nf0_rx_packets(void) {
                         switch(rte_be_to_cpu_16(eth->ether_type)) {
                         default:
                         case ETHER_TYPE_IPv4:
+                        #ifdef ENABLE_VXLAN
+                                /* Encapsulate vxlan pkt */
+                                printf("before encap\n");
+                                rte_pktmbuf_dump(stdout, pkts[i], pkts[i]->pkt_len);
+
+                        #ifdef ENABLE_ZOOKEEPER
+                                meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
+                                dst_service_id = meta->destination;
+                                remote_id = onvm_zk_lookup_service(pkts[i], dst_service_id, &dst_addr);
+                                if (remote_id != 0) onvm_encapsulate_pkt(pkts[i], &ports->mac[nic_port], &dst_addr);
+                                //onvm_pkt_enqueue_port(NULL, nic_port, pkts[i]);
+                        #else
+                                onvm_encapsulate_pkt(pkts[i], &ports->mac[nic_port], &remote_eth_addr_struct);
+                        #endif
+                                printf("after encap\n");
+                                rte_pktmbuf_dump(stdout, pkts[i], pkts[i]->pkt_len);
+
+                                /* Decapsulate vxlan pkt */
+                                ret = onvm_decapsulate_pkt(pkts[i]);
+                                if (ret == -1) {
+                                    meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
+                                    onvm_ft_handle_packet(pkts[i], meta);
+                                }
+                                printf("after decap\n");
+                                rte_pktmbuf_dump(stdout, pkts[i], pkts[i]->pkt_len);
+                                onvm_pkt_drop(pkts[i]);
+                                //rte_ring_enqueue(nf0_cl->tx_q, (void *)pkts[i]);
+                        #else
                                 meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
                                 onvm_ft_handle_packet(pkts[i], meta);
+                        #endif
                                 break;
                         case ETHER_TYPE_ARP:
                         case ETHER_TYPE_RARP:
