@@ -60,11 +60,15 @@
 #include <signal.h>
 
 //#ifdef INTERRUPT_SEM  //move maro to makefile, otherwise uncomemnt or need to include these after including common.h
+#include <unistd.h>
 #include <sys/shm.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#include <mqueue.h>
+#include <sys/stat.h>
+
 //#endif //INTERRUPT_SEM
 
 /*****************************Internal headers********************************/
@@ -72,13 +76,13 @@
 
 #include "onvm_includes.h"
 #include "onvm_sc_common.h"
-
+#include "onvm_flow_dir.h"
 
 /**********************************Macros*************************************/
 
 
 // Number of packets to attempt to read from queue
-#define PKT_READ_SIZE  ((uint16_t)32) 
+#define PKT_READ_SIZE  (ONVM_PACKETS_BATCH_SIZE)    //((uint16_t)1)
 
 
 /******************************Global Variables*******************************/
@@ -91,6 +95,9 @@ static struct rte_ring *nf_info_ring;
 // rings used to pass packets between NFlib and NFmgr
 static struct rte_ring *tx_ring, *rx_ring;
 
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+static struct rte_ring *tx_sring, *rx_sring;
+#endif
 
 // shared data from server. We update statistics here
 static volatile struct client_tx_stats *tx_stats;
@@ -122,15 +129,19 @@ static struct onvm_service_chain *default_chain;
 
 #ifdef INTERRUPT_SEM
 // to track packets per NF <used for sampling computation cost>
-uint64_t counter = 0;
+uint64_t counter = 1;
 
 // flag (shared mem variable) to track state of NF and trigger wakeups
 // flag_p=1 => NF sleeping (waiting on semaphore)
-// flag_p=0 => NF is running and processing (not waiting on semaphore)   
+// flag_p=0 => NF is running and processing (not waiting on semaphore)
+// flag_p=2 => "Internal NF Msg to wakeup NF and do processing .. Yet To be Finalized."   
 static rte_atomic16_t *flag_p;
 
+#ifdef USE_SEMAPHORE
 // Mutex for sem_wait
 static sem_t *mutex;
+#endif //USE_SIGNAL
+
 #endif  //INTERRUPT_SEM
 
 /******************************Internal functions*****************************/

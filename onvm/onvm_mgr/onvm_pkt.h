@@ -113,6 +113,42 @@ void
 onvm_pkt_drop_batch(struct rte_mbuf **pkts, uint16_t size);
 
 
+
+/* Interface to check and set ECN CE FLAG status after enqueue of packets to RX queue.
+ *
+ * Inputs :
+ *          an array of packets
+ *          the size/count of buffers in the array
+ *          a pointer to the client possessing the RX queue.
+ *
+ */
+void
+onvm_detect_and_set_ecn_ce(struct rte_mbuf *pkts[], uint16_t count, struct client *cl);
+
+/* Interface to check and set back-pressure status after enqueue of packets to RX queue.
+ *
+ * Inputs :
+ *          an array of packets
+ *          the size/count of buffers in the array
+ *          a pointer to the client possessing the RX queue.
+ *
+ */
+void
+onvm_detect_and_set_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struct client *cl);
+
+/* Interface to check and reset back-pressure status after dequeue of packets from a TX queue.
+ *
+ * Inputs :
+ *          an array of packets
+ *          the size/count of buffers in the array
+ *          a pointer to the client possessing the TX queue.
+ *
+ */
+void
+onvm_check_and_reset_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struct client *cl);
+
+void onvm_detect_and_set_back_pressure_v2(struct client *cl);
+void onvm_check_and_reset_back_pressure_v2(__attribute__((unused)) struct rte_mbuf *pkts[], __attribute__((unused)) uint16_t count, struct client *cl);
 /*****************************Internal functions******************************/
 
 
@@ -157,7 +193,7 @@ onvm_pkt_enqueue_port(struct thread_info *tx, uint16_t port, struct rte_mbuf *bu
  *
  */
 inline void
-onvm_pkt_enqueue_nf(struct thread_info *thread, uint16_t dst_service_id, struct rte_mbuf *pkt);
+onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onvm_pkt_meta *meta, struct onvm_flow_entry *flow_entry);
 
 
 /*
@@ -169,8 +205,8 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, uint16_t dst_service_id, struct 
  *
  */
 inline void
-onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt, struct client *cl);
-
+onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt,  __attribute__((unused)) struct onvm_pkt_meta *meta,
+                __attribute__((unused)) struct onvm_flow_entry *flow_entry, struct client *cl);
 
 /******************************Helper functions*******************************/
 

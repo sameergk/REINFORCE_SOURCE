@@ -55,6 +55,9 @@
 
 #include "onvm_nflib.h"
 #include "onvm_pkt_helper.h"
+#include "onvm_flow_dir.h"
+
+
 
 #define NF_TAG "basic_monitor"
 
@@ -63,6 +66,20 @@ struct onvm_nf_info *nf_info;
 
 /* number of package between each print */
 static uint32_t print_delay = 1000000;
+
+typedef struct monitor_state_info_table {
+        uint16_t ft_index;
+        uint16_t tag_counter;
+        uint32_t pkt_counter;
+}monitor_state_info_table_t;
+monitor_state_info_table_t *mon_state_tbl = NULL;
+typedef struct dirty_mon_state_map_tbl {
+        uint64_t dirty_index;   //Bit index to every 1K LSB=0-1K, MSB=63-64K
+}dirty_mon_state_map_tbl_t;
+dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
+#ifdef ENABLE_NFV_RESL
+#define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(monitor_state_info_table_t))
+#endif
 
 /*
  * Print a usage message
@@ -125,17 +142,43 @@ do_stats_display(struct rte_mbuf* pkt) {
         printf("Port : %d\n", pkt->port);
         printf("Size : %d\n", pkt->pkt_len);
         printf("Hash : %u\n", pkt->hash.rss);
-	printf("N°   : %d\n", pkt_process);
+        printf("N°   : %d\n", pkt_process);
+#ifdef ENABLE_NFV_RESL
+        printf("MAX State: %lu\n", MAX_STATE_ELEMENTS);
+#endif
         printf("\n\n");
 
         ip = onvm_pkt_ipv4_hdr(pkt);
         if (ip != NULL) {
                 onvm_pkt_print(pkt);
         } else {
-                printf("No IP4 header found\n");
+                printf("No IP4 header found [%d]\n", pkt_process);
         }
 }
-
+#ifdef ENABLE_NFV_RESL
+static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
+        if(nf_info->nf_state_mempool) {
+                if(mon_state_tbl  == NULL) {
+                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
+                        mon_state_tbl = (monitor_state_info_table_t*)(dirty_state_map+1);
+                        //mon_state_tbl[0].ft_index = 0;
+                        mon_state_tbl[0].tag_counter+=1;
+                }
+                if(mon_state_tbl) {
+                        if(meta && pkt) {
+                                struct onvm_flow_entry *flow_entry = NULL;
+                                onvm_flow_dir_get_pkt(pkt, &flow_entry);
+                                if(flow_entry) {
+                                        mon_state_tbl[flow_entry->entry_index].ft_index = meta->src;
+                                        mon_state_tbl[flow_entry->entry_index].pkt_counter +=1;
+                                }
+                        }
+                        mon_state_tbl[0].pkt_counter+=1;
+                }
+        }
+        return 0;
+}
+#endif //#ifdef ENABLE_NFV_RESL
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
@@ -147,9 +190,14 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         meta->action = ONVM_NF_ACTION_OUT;
         meta->destination = pkt->port;
 
+/*
         if (onvm_pkt_mac_addr_swap(pkt, 0) != 0) {
                 printf("ERROR: MAC failed to swap!\n");
         }
+*/
+#ifdef ENABLE_NFV_RESL
+        save_packet_state(pkt,meta);
+#endif //#ifdef ENABLE_NFV_RESL
         return 0;
 }
 

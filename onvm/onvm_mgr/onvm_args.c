@@ -56,7 +56,7 @@
 
 
 /* global var for number of clients - extern in header init.h */
-uint16_t num_clients;
+volatile uint16_t num_clients;
 
 /* global var for number of services - extern in header init.h */
 uint16_t num_services = MAX_SERVICES;
@@ -71,7 +71,7 @@ uint8_t is_static_clients;
 static const char *progname;
 
 
-/****************************Internal prototypes******************************/
+/***********************Internal Functions prototypes*************************/
 
 
 static void
@@ -89,7 +89,7 @@ parse_default_service(const char *services);
 static int
 parse_num_services(const char *services);
 
-
+#define USE_STATIC_IDS
 #ifdef USE_STATIC_IDS
 
 static int

@@ -44,6 +44,8 @@
 #include "common.h"
 #include "onvm_flow_table.h"
 
+#define SDN_FT_ENTRIES  (1024) //(1024*10*10) //(1024*4)
+
 extern struct onvm_ft *sdn_ft;
 extern struct onvm_ft **sdn_ft_p;
 
@@ -55,6 +57,7 @@ struct onvm_flow_entry {
         uint16_t hard_timeout;
         uint64_t packet_count;
         uint64_t byte_count;
+        uint64_t entry_index;
 };
 
 /* Get a pointer to the flow entry entry for this packet.
@@ -74,4 +77,12 @@ int onvm_flow_dir_get_key(struct onvm_ft_ipv4_5tuple* key, struct onvm_flow_entr
 int onvm_flow_dir_add_key(struct onvm_ft_ipv4_5tuple* key, struct onvm_flow_entry **flow_entry);
 int onvm_flow_dir_del_key(struct onvm_ft_ipv4_5tuple* key);
 int onvm_flow_dir_del_and_free_key(struct onvm_ft_ipv4_5tuple* key);
+void onvm_flow_dir_print_stats(void);
+int onvm_flow_dir_clear_all_entries(void);
+int onvm_flow_dir_reset_entry(struct onvm_flow_entry *flow_entry);
+void onvm_flow_dir_set_index(void);
+
+#ifdef ENABLE_NF_BACKPRESSURE
+uint32_t extract_sc_list(uint32_t *bft_count, sc_entries_list *c_list);
+#endif
 #endif // _ONVM_FLOW_DIR_H_

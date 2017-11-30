@@ -43,28 +43,254 @@
 
 #include <rte_mbuf.h>
 #include <stdint.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sched.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/file.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include "onvm_sort.h"
 
-#define ONVM_MAX_CHAIN_LENGTH 4   // the maximum chain length
-#define MAX_CLIENTS 16            // total number of NFs allowed
-#define MAX_SERVICES 16           // total number of unique services allowed
+//check on each node by executing command  $"getconf LEVEL1_DCACHE_LINESIZE" or cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
+#define ONVM_CACHE_LINE_SIZE (64)
+#define ONVM_PACKETS_BATCH_SIZE (32)
+
+#define MIN(a,b) ((a) < (b)? (a):(b))
+#define MAX(a,b) ((a) > (b)? (a):(b))
+
+#define ARBITER_PERIOD_IN_US            (100)       // 250 micro seconds or 100 micro seconds
+
+//#define USE_SINGLE_NIC_PORT        // NEEDED FOR VXLAN?
+
+#define ONVM_MAX_CHAIN_LENGTH 12   // the maximum chain length
+#define MAX_CLIENTS 32            // total number of NFs allowed
+#define MAX_SERVICES 32           // total number of unique services allowed
 #define MAX_CLIENTS_PER_SERVICE 8 // max number of NFs per service.
+
+#define ONVM_ENABLE_SPEACILA_NF //Enable Special NF0 service in onvm_mgr
+#define ONVM_SPECIAL_NF_SERVICE_ID      (0)
+#define ONVM_SPECIAL_NF_INSTANCE_ID     (0)
 
 #define ONVM_NF_ACTION_DROP 0   // drop packet
 #define ONVM_NF_ACTION_NEXT 1   // to whatever the next action is configured by the SDN controller in the flow table
 #define ONVM_NF_ACTION_TONF 2   // send to the NF specified in the argument field (assume it is on the same host)
 #define ONVM_NF_ACTION_OUT 3    // send the packet out the NIC port set in the argument field
+#define ONVM_NF_ACTION_TO_NF_INSTANCE   4   //send to NF Instance ID (specified in the meta->destination. Note unlike ONVM_NF_ACTION_TONF which means to NF SERVICE ID, this is direct destination instance ID.
+
+/* Note: Make the PACKET_READ_SIZE defined in onvm_mgr.h same as PKT_READ_SIZE defined in onvm_nflib_internal.h, better get rid of latter */
+// enable: PRE_PROCESS_DROP_ON_RX, DROP_APPROACH_3,DROP_APPROACH_3_WITH_SYNC
+#define PRE_PROCESS_DROP_ON_RX  // Feature flag for addressing NF Local Back-pressure:: To lookup NF Tx queue occupancy and drop packets pro-actively before pushing to NFs Rx Ring.
+#define DROP_APPROACH_3         // Handle inside NF_LIB:: Make the NF to block until it cannot push the packets to the Tx Ring, Subsequent packets will be dropped in onvm_mgr context by Rx/Tx Threads < 3 options: Poll till Tx is free, Yield or Block on Semaphore>
+#define DROP_APPROACH_3_WITH_SYNC       //sub-option for approach 3: Results are good, preferred approach.
 
 #define INTERRUPT_SEM           // To enable NF thread interrupt mode wake.  Better to move it as option in Makefile
 
+#define USE_SEMAPHORE           // Use Semaphore for IPC
+#if (defined(INTERRUPT_SEM) && !defined(USE_SEMAPHORE))
+#define USE_POLL_MODE
+#endif
+
+#ifdef USE_ZMQ
+#include <zmq.h>
+#endif
+
+/* Enable Extra Debug Logs on all components */
+//#define __DEBUG_LOGS__
+
+/* Enable this flag to assign a distinct CGROUP for each NF instance */
+// enable: All 3 (USE_CGROUPS_PER_NF_INSTANCE, ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT,USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE)
+//#define USE_CGROUPS_PER_NF_INSTANCE                 // To create CGroup per NF instance
+//#define ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT     // To dynamically evaluate and periodically adjust weight on NFs cpu share
+//#define USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE       // Enable Load*comp_cost (Helpful for TCP but not so for UDP (pktgen Moongen)
+
+/* For Bottleneck on Rx Ring; whether or not to Drop packets from Rx/Tx buf during flush_operation
+ * Note: This is one of the likely cause of Out-of_order packets in the OpenNetVM (with Bridge) case: */
+//#define DO_NOT_DROP_PKTS_ON_FLUSH_FOR_BOTTLENECK_NF   //Disable drop of existing packets -- may have caveats on when next flush would operate on that Tx/Rx buffer..
+                                                        //Repercussions in onvm_pkt.c: onvm_pkt_enqueue_nf() to handle overflow and stop putting packet in full buffer and drop new ones instead.
+                                                        //Observation: Good for TCP use cases, but with PktGen,Moongen dents line rate approx 0.3Mpps slow down
+
+/* Enable watermark level NFs Tx and Rx Rings */
+// enable: ENABLE_RING_WATERMARK
+//#define ENABLE_RING_WATERMARK // details on count in the onvm_init.h
+
+/* Enable ECN CE FLAG : Feature Flag to enable marking ECN_CE flag on the flows that pass through the NFs with Rx Ring buffers exceeding the watermark level.
+ * Dependency: Must have ENABLE_RING_WATERMARK feature defined. and HIGH and LOW Thresholds to be set. otherwise, marking may not happen at all.. Ideally, marking should be done after dequeue from Tx, to mark if Rx is overbudget..
+ * On similar lines, even the back-pressure marking must be done for all flows after dequeue from the Tx Ring.. */
+// enable: ENABLE_ECN_CE
+//#define ENABLE_ECN_CE
+
+
+/* Enable back-pressure handling to throttle NFs upstream */
+//#define ENABLE_NF_BACKPRESSURE
+
+#ifdef ENABLE_NF_BACKPRESSURE
+//#define ENABLE_GLOBAL_BACKPRESSURE  //Enable this if want to test with default chain and choose one of the below backpressure modes
+
+#define NF_BACKPRESSURE_APPROACH_1    //Throttle enqueue of packets to the upstream NFs (handle in onvm_pkts_enqueue)
+//#define NF_BACKPRESSURE_APPROACH_2  //Throttle upstream NFs from getting scheduled (handle in wakeup mgr)
+//#define NF_BACKPRESSURE_APPROACH_3  //Throttle enqueue of packets to the upstream NFs (handle in NF_LIB with HOL blocking or pre-buffering of packets internally for bottlenecked chains)
+
+// Extensions and sub-options for Back_Pressure handling
+#define DROP_PKTS_ONLY_AT_BEGGINING           // Extension to approach 1 to make packet drops only at the beginning on the chain (i.e only at the time to enqueue to first NF). (Note: can Enable)
+
+//#define USE_BKPR_V2_IN_TIMER_MODE       //Use this flag if the Timer Thread can perform the Backpressure setting
+#if !defined(USE_BKPR_V2_IN_TIMER_MODE) && defined(NF_BACKPRESSURE_APPROACH_1)
+#define ENABLE_SAVE_BACKLOG_FT_PER_NF           // save backlog Flow Entries per NF (Note: Enable)
+#define BACKPRESSURE_USE_RING_BUFFER_MODE       // Use Ring buffer to store and delete backlog Flow Entries per NF  (Note: Enable, sub define  under ENABLE_SAVE_BACKLOG_FT_PER_NF)
+#endif //USE_BKPR_V2_IN_TIMER_MODE
+
+//#define RECHECK_BACKPRESSURE_MARK_ON_TX_DEQUEUE //Enable to re-check for back-pressure marking, at the time of packet dequeue from the NFs Tx Ring.
+//#define BACKPRESSURE_EXTRA_DEBUG_LOGS           // Enable extra profile logs for back-pressure: Move all prints and additional variables under this flag (as optimization)
+
+//Need Early bind to NF for the chain and determine the bottlneck status: Avoid passing first few packets of a flow till the chain, only to drop them later: Helps for TCP and issue with storing multiple flows at earlier NF
+//#define ENABLE_EARLY_NF_BIND
+
+//other test-variants and disregarded options: not to be used!!
+//#define HOP_BY_HOP_BACKPRESSURE     //Option to enable [ON] = HOP by HOP propagation of back-pressure vs [OFF] = direct First NF to N-1 Discard(Drop)/block.
+//#define ENABLE_NF_BKLOG_BUFFERING   //Extension to Approach 3 wherein each NF can pre-buffer internally the  packets for bottlenecked service chains. (Not Implemented!!)
+//#define DUMMY_FT_LOAD_ONLY //Load Only onvm_ft and Bypass ENABLE_NF_BACKPRESSURE/NF_BACKPRESSURE_APPROACH_3
+
+#endif //ENABLE_NF_BACKPRESSURE
+
+
+/* Enable the Arbiter Logic to control the NFs scheduling and period on each core */
+//#define ENABLE_ARBITER_MODE
+//#define USE_ARBITER_NF_EXEC_PERIOD      //NFLib check for wake;/sleep state and Wakeup thread to put the the NFs to sleep after timer expiry (This feature is not working as expected..)
+//enable: ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD, ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
+#define ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
+#define ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
+
+
+/* ENABLE TIMER BASED WEIGHT COMPUTATION IN NF_LIB */
+//enable: ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+#define ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+#if defined(ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION) || defined (ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD)
+#include <rte_timer.h>
+#define STATS_PERIOD_IN_MS 1       //(use 1 or 10 or 100ms)
+#endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+//enable: STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+#define STORE_HISTOGRAM_OF_NF_COMPUTATION_COST  //Store the Histogram of NF Comp Cost   (in critical path, costing around 0.3 to 0.6Mpps)
+#ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+#include "histogram.h"                          //Histogra Library
+#endif //STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+
+#ifdef ENABLE_NF_BACKPRESSURE
+//forward declaration either store reference of onvm_flow_entry or onvm_service_chain (latter may be sufficient)
+struct onvm_flow_entry;
+struct onvm_service_chain;
+#endif  //ENABLE_NF_BACKPRESSURE
+
+
+/******************************************************************************/
+// NFV RESILIENCY related extensions, control macros and defines
+#define ENABLE_NFV_RESL             // global nvf_Resl feature flag
+
+#ifdef ENABLE_NFV_RESL
+#define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
+#define ENABLE_BFD                  // BFD management
+#define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
+#define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
+#define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
+
+#define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
+#define _NF_STATE_SIZE      (64*1024)
+#define _NF_STATE_CACHE     (16)
+
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+#define _SERVICE_STATE_MEMPOOL_NAME "SERVICE_STATE_MEMPOOL"
+#define _SERVICE_STATE_SIZE      (64*1024)
+#define _SERVICE_STATE_CACHE     (16)
+#endif
+
+#define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
+#define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
+#endif  //#ifdef ENABLE_NFV_RESL
+/******************************************************************************/
+//#define ENABLE_VXLAN
+//#define ENABLE_ZOOKEEPER
+
+#ifdef ENABLE_VXLAN
+#define DISTRIBUTED_NIC_PORT 1 // NIC port connects to the remote server
+#endif //ENABLE_VXLAN
+/******************************************************************************/
+#define SET_BIT(x,bitNum) ((x)|=(1<<(bitNum-1)))
+static inline void set_bit(long *x, unsigned bitNum) {
+    *x |= (1L << (bitNum-1));
+}
+
+#define CLEAR_BIT(x,bitNum) ((x) &= ~(1<<(bitNum-1)))
+static inline void clear_bit(long *x, unsigned bitNum) {
+    *x &= (~(1L << (bitNum-1)));
+}
+
+#define TOGGLE_BIT(x,bitNum) ((x) ^= (1<<(bitNum-1)))
+static inline void toggle_bit(long *x, unsigned bitNum) {
+    *x ^= (1L << (bitNum-1));
+}
+#define TEST_BIT(x,bitNum) ((x) & (1<<(bitNum-1)))
+static inline long test_bit(long x, unsigned bitNum) {
+    return (x & (1L << (bitNum-1)));
+}
+
+static inline long is_upstream_NF(long chain_throttle_value, long chain_index) {
+#ifndef HOP_BY_HOP_BACKPRESSURE
+        long chain_index_value = 0;
+        SET_BIT(chain_index_value, chain_index);
+        CLEAR_BIT(chain_throttle_value, chain_index);
+        return ((chain_throttle_value > chain_index_value)? (1):(0) );
+#else
+        long chain_index_value = 0;
+        SET_BIT(chain_index_value, (chain_index+1));
+        return ((chain_throttle_value & chain_index_value));
+        //return is_immediate_upstream_NF(chain_throttle_value,chain_index);
+#endif //HOP_BY_HOP_BACKPRESSURE
+        //1 => NF component at chain_index is an upstream component w.r.t where the bottleneck is seen in the chain (do not drop/throttle)
+        //0 => NF component at chain_index is an downstream component w.r.t where the bottleneck is seen in the chain (so drop/throttle)
+}
+static inline long is_immediate_upstream_NF(long chain_throttle_value, long chain_index) {
+#ifdef HOP_BY_HOP_BACKPRESSURE
+        long chain_index_value = 0;
+        SET_BIT(chain_index_value, (chain_index+1));
+        return ((chain_throttle_value & chain_index_value));
+#else
+        return is_upstream_NF(chain_throttle_value,chain_index);
+#endif  //HOP_BY_HOP_BACKPRESSURE
+        //1 => NF component at chain_index is an immediate upstream component w.r.t where the bottleneck is seen in the chain (do not drop/throttle)
+        //0 => NF component at chain_index is an downstream component w.r.t where the bottleneck is seen in the chain (so drop/throttle)
+}
+
+static inline long get_index_of_highest_set_bit(long x) {
+        long next_set_index = 0;
+        //SET_BIT(chain_index_value, chain_index);
+        //while ((1<<(next_set_index++)) < x);
+        //for(; (x > (1<<next_set_index));next_set_index++)
+        for(; (x >= (1<<next_set_index));next_set_index++);
+        return next_set_index;
+}
 
 //extern uint8_t rss_symmetric_key[40];
-
+//size of onvm_pkt_meta cannot exceed 8 bytes, so how to add onvm_service_chain* sc pointer?
 struct onvm_pkt_meta {
         uint8_t action; /* Action to be performed */
-        uint16_t destination; /* where to go next */
-        uint16_t src; /* who processed the packet last */
-	uint8_t chain_index; /*index of the current step in the service chain*/
-};
+        uint8_t destination; /* where to go next */
+        uint8_t src; /* who processed the packet last */
+        uint8_t chain_index;    /*index of the current step in the service chain*/
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_FT_INDEX_IN_META
+        uint16_t ft_index;       /* Index of the FT if the packet is mapped in SDN Flow Table */
+        uint16_t reserved_word; /* reserved word */
+#endif
+#endif
+};//__attribute__((__aligned__(ONVM_CACHE_LINE_SIZE)));
 static inline struct onvm_pkt_meta* onvm_get_pkt_meta(struct rte_mbuf* pkt) {
         return (struct onvm_pkt_meta*)&pkt->udata64;
 }
@@ -80,15 +306,19 @@ struct client_tx_stats {
         /* these stats hold how many packets the manager will actually receive,
          * and how many packets were dropped because the manager's queue was full.
          */
-        uint64_t tx[MAX_CLIENTS];
-        uint64_t tx_drop[MAX_CLIENTS];
-        uint64_t tx_buffer[MAX_CLIENTS];
-        uint64_t tx_returned[MAX_CLIENTS];
+        volatile uint64_t tx[MAX_CLIENTS];
+        volatile uint64_t tx_drop[MAX_CLIENTS];
+        volatile uint64_t tx_buffer[MAX_CLIENTS];
+        volatile uint64_t tx_returned[MAX_CLIENTS];
+
         #ifdef INTERRUPT_SEM
+        volatile uint64_t wkup_count[MAX_CLIENTS];
         volatile uint64_t prev_tx[MAX_CLIENTS];
         volatile uint64_t prev_tx_drop[MAX_CLIENTS];
         volatile uint64_t comp_cost[MAX_CLIENTS];
-        #endif
+        volatile uint64_t prev_wkup_count[MAX_CLIENTS];
+        #endif  //INTERRUPT_SEM
+
         /* FIXME: Why are these stats kept separately from the rest?
          * Would it be better to have an array of struct client_tx_stats instead
          * of putting the array inside the struct? How can we avoid cache
@@ -106,20 +336,67 @@ struct onvm_nf_info {
         uint16_t service_id;
         uint8_t status;
         const char *tag;
+
+        pid_t pid;
+        uint32_t comp_cost;     //indicates the computation cost of NF in num_of_cycles
+
+#if defined (USE_CGROUPS_PER_NF_INSTANCE)
+        //char cgroup_name[256];
+        uint32_t cpu_share;     //indicates current share of NFs cpu
+        uint32_t core_id;       //indicates the core ID the NF is running on
+        uint32_t comp_pkts;     //[usage: TBD] indicates the number of pkts processed by NF over specific sampling period (demand (new pkts arrival) = Rx, better? or serviced (new pkts sent out) = Tx better?)
+        uint32_t load;          //indicates instantaneous load on the NF ( = num_of_packets on the rx_queue + pkts dropped on Rx)
+        uint32_t avg_load;      //indicates the average load on the NF
+        uint32_t svc_rate;      //indicates instantaneous service rate of the NF ( = num_of_packets processed in the sampling period)
+        uint32_t avg_svc;       //indicates the average service rate of the NF
+        uint32_t drop_rate;     //indicates the drops observed within the sampled period.
+        uint64_t exec_period;   //indicates the number_of_cycles/timeperiod alloted for execution in this epoch == normalized_load*comp_cost -- how to get this metric: (total_cycles_in_epoch)*(total_load_on_core)/(load_of_nf)
+#endif
+
+#ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+        struct rte_timer stats_timer;
+#endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+#ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+        histogram_v2_t ht2;
+#endif  //STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
+
+#ifdef ENABLE_ECN_CE
+        histogram_v2_t ht2_q;
+#endif  //ENABLE_ECN_CE
+
+#ifdef ENABLE_NFV_RESL
+        void *nf_state_mempool;     // shared state exclusively between the active and standby NFs
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+        void *service_state_pool;   // shared state between all the NFs of the same service type
+#endif
+#endif //#ifdef ENABLE_NFV_RESL
+
 };
 
 /*
  * Define a structure to describe a service chain entry
  */
 struct onvm_service_chain_entry {
-	uint16_t destination;
-	uint8_t action;
+        uint16_t destination;
+        //denotes a service Id or Instance Id
+        uint8_t action;
+        //denotes forwarding action type.
+        uint8_t service;
+        //backup service id as set by policy in destination, when destination is InstanceID
 };
 
 struct onvm_service_chain {
-	struct onvm_service_chain_entry sc[ONVM_MAX_CHAIN_LENGTH];
+	struct onvm_service_chain_entry sc[ONVM_MAX_CHAIN_LENGTH+1];
 	uint8_t chain_length;
-	int ref_cnt;
+	uint8_t ref_cnt;
+#ifdef ENABLE_NF_BACKPRESSURE
+	volatile uint8_t highest_downstream_nf_index_id;     // bit index of each NF in the chain that is overflowing
+//#ifdef NF_BACKPRESSURE_APPROACH_2
+	uint8_t nf_instances_mapped; //set when all nf_instances are populated in the below array
+	uint8_t nf_instance_id[ONVM_MAX_CHAIN_LENGTH+1];
+//#endif //NF_BACKPRESSURE_APPROACH_2
+#endif //ENABLE_NF_BACKPRESSURE
 };
 
 /* define common names for structures shared between server and client */
@@ -135,14 +412,24 @@ struct onvm_service_chain {
 #ifdef INTERRUPT_SEM
 #define SHMSZ 4                         // size of shared memory segement (page_size)
 #define KEY_PREFIX 123                  // prefix len for key
+
+#ifdef USE_SEMAPHORE
 #define MP_CLIENT_SEM_NAME "MProc_Client_%u_SEM"
-#define MONITOR                         // Unused remove it
-#define ONVM_NUM_WAKEUP_THREADS 1
-#define CHAIN_LEN 4                     // Duplicate, remove and instead use ONVM_MAX_CHAIN_LENGTH
-#define SAMPLING_RATE 1000000           // sampling rate to estimate NFs computation cost
+#endif //USE_SEMAPHORE
+
+
+//1000003 1000033 1000037 1000039 1000081 1000099 1000117 1000121 1000133
+//#define SAMPLING_RATE 1000000           // sampling rate to estimate NFs computation cost
+#define SAMPLING_RATE 1000003           // sampling rate to estimate NFs computation cost
 #define ONVM_SPECIAL_NF 0               // special NF for flow table entry management
 #endif
 
+
+#ifdef ENABLE_ARBITER_MODE
+#define ONVM_NUM_WAKEUP_THREADS ((int)0)       //1 ( Must remove this as well)
+#else
+#define ONVM_NUM_WAKEUP_THREADS ((int)1)       //1 ( Must remove this as well)
+#endif
 
 /* common names for NF states */
 #define _NF_QUEUE_NAME "NF_INFO_QUEUE"
@@ -150,11 +437,12 @@ struct onvm_service_chain {
 
 #define NF_WAITING_FOR_ID 0     // First step in startup process, doesn't have ID confirmed by manager yet
 #define NF_STARTING 1           // When a NF is in the startup process and already has an id
-#define NF_RUNNING 2            // Running normally
-#define NF_PAUSED  3            // NF is not receiving packets, but may in the future
-#define NF_STOPPED 4            // NF has stopped and in the shutdown process
-#define NF_ID_CONFLICT 5        // NF is trying to declare an ID already in use
-#define NF_NO_IDS 6             // There are no available IDs for this NF
+#define NF_WAITING_FOR_RUN  2   // When NF asserts itself to run and ready to process packets ; requests manager to be considered for delivering packets.
+#define NF_RUNNING 3            // Running normally
+#define NF_PAUSED  4            // NF is not receiving packets, but may in the future
+#define NF_STOPPED 5            // NF has stopped and in the shutdown process
+#define NF_ID_CONFLICT 6        // NF is trying to declare an ID already in use
+#define NF_NO_IDS 7             // There are no available IDs for this NF
 
 #define NF_NO_ID -1
 
@@ -163,11 +451,16 @@ struct onvm_service_chain {
  */
 static inline const char *
 get_rx_queue_name(unsigned id) {
+
         /* buffer for return value. Size calculated by %u being replaced
          * by maximum 3 digits (plus an extra byte for safety) */
         static char buffer[sizeof(MP_CLIENT_RXQ_NAME) + 2];
 
+#ifdef ENABLE_NFV_RESL
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_RXQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+#else
         snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_RXQ_NAME, id);
+#endif
         return buffer;
 }
 
@@ -179,10 +472,55 @@ get_tx_queue_name(unsigned id) {
         /* buffer for return value. Size calculated by %u being replaced
          * by maximum 3 digits (plus an extra byte for safety) */
         static char buffer[sizeof(MP_CLIENT_TXQ_NAME) + 2];
-
+#ifdef ENABLE_NFV_RESL
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_TXQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+#else
         snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_TXQ_NAME, id);
+#endif
         return buffer;
 }
+
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_SHADOW_RINGS
+#define MP_CLIENT_RXSQ_NAME "MProc_Client_%u_RX_S"
+#define MP_CLIENT_TXSQ_NAME "MProc_Client_%u_TX_S"
+static inline const char *
+get_rx_squeue_name(unsigned id) {
+        static char buffer[sizeof(MP_CLIENT_RXSQ_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_RXSQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+        return buffer;
+}
+
+static inline const char *
+get_tx_squeue_name(unsigned id) {
+        static char buffer[sizeof(MP_CLIENT_TXSQ_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_TXSQ_NAME, id&(MAX_ACTIVE_CLIENTS-1));
+        return buffer;
+}
+#endif  //ENABLE_SHADOW_RINGS
+static inline unsigned
+get_associated_active_or_standby_nf_id(unsigned nf_id) {
+        if(nf_id < MAX_ACTIVE_CLIENTS) {
+                return (nf_id|MAX_ACTIVE_CLIENTS);
+        }
+        return (nf_id&(MAX_ACTIVE_CLIENTS-1));
+}
+static inline unsigned
+is_primary_active_nf_id(unsigned nf_id) {
+        return ((nf_id < MAX_ACTIVE_CLIENTS));
+}
+static inline unsigned
+is_secondary_active_nf_id(unsigned nf_id) {
+        return ((nf_id & MAX_ACTIVE_CLIENTS));
+}
+static inline unsigned
+get_associated_active_nf_id(unsigned nf_id) {
+        if(nf_id < MAX_ACTIVE_CLIENTS) {
+                return (nf_id);
+        }
+        return (nf_id&(MAX_ACTIVE_CLIENTS-1));
+}
+#endif
 
 #ifdef INTERRUPT_SEM
 /*
@@ -208,7 +546,201 @@ get_sem_name(unsigned id)
         return buffer;
 }
 #endif
+#ifdef USE_CGROUPS_PER_NF_INSTANCE
+#define MP_CLIENT_CGROUP_NAME "nf_%u"
+static inline const char *
+get_cgroup_name(unsigned id)
+{
+        static char buffer[sizeof(MP_CLIENT_CGROUP_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_CGROUP_NAME, id);
+        return buffer;
+}
+#define MP_CLIENT_CGROUP_PATH "/sys/fs/cgroup/cpu/nf_%u/"
+static inline const char *
+get_cgroup_path(unsigned id)
+{
+        static char buffer[sizeof(MP_CLIENT_CGROUP_PATH) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_CGROUP_PATH, id);
+        return buffer;
+}
+#define MP_CLIENT_CGROUP_CREAT "mkdir /sys/fs/cgroup/cpu/nf_%u"
+static inline const char *
+get_cgroup_create_cgroup_cmd(unsigned id)
+{
+        static char buffer[sizeof(MP_CLIENT_CGROUP_CREAT) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_CGROUP_CREAT, id);
+        return buffer;
+}
+#define MP_CLIENT_CGROUP_ADD_TASK "echo %u > /sys/fs/cgroup/cpu/nf_%u/tasks"
+static inline const char *
+get_cgroup_add_task_cmd(unsigned id, pid_t pid)
+{
+        static char buffer[sizeof(MP_CLIENT_CGROUP_ADD_TASK) + 10];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_CGROUP_ADD_TASK, pid, id);
+        return buffer;
+}
+#define MP_CLIENT_CGROUP_SET_CPU_SHARE "echo %u > /sys/fs/cgroup/cpu/nf_%u/cpu.shares"
+static inline const char *
+get_cgroup_set_cpu_share_cmd(unsigned id, unsigned share)
+{
+        static char buffer[sizeof(MP_CLIENT_CGROUP_SET_CPU_SHARE) + 20];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_CGROUP_SET_CPU_SHARE, share, id);
+        return buffer;
+}
+#define MP_CLIENT_CGROUP_SET_CPU_SHARE_ONVM_MGR "/sys/fs/cgroup/cpu/nf_%u/cpu.shares"
+static inline const char *
+get_cgroup_set_cpu_share_cmd_onvm_mgr(unsigned id)
+{
+        static char buffer[sizeof(MP_CLIENT_CGROUP_SET_CPU_SHARE) + 20];
+        snprintf(buffer, sizeof(buffer) - 1, MP_CLIENT_CGROUP_SET_CPU_SHARE_ONVM_MGR, id);
+        return buffer;
+}
+#include <stdlib.h>
+static inline int
+set_cgroup_nf_cpu_share(uint16_t instance_id, uint32_t share_val) {
+        /*
+        unsigned long shared_bw_val = (share_val== 0) ?(1024):(1024*share_val/100); //when share_val is relative(%)
+        if (share_val >=100) {
+                shared_bw_val = shared_bw_val/100;
+        }*/
+
+        uint32_t shared_bw_val = (share_val== 0) ?(1024):(share_val);  //when share_val is absolute bandwidth
+        const char* cg_set_cmd = get_cgroup_set_cpu_share_cmd(instance_id, shared_bw_val);
+        //printf("\n CMD_TO_SET_CPU_SHARE: %s \n", cg_set_cmd);
+
+        int ret = system(cg_set_cmd);
+        return ret;
+}
+static inline int
+set_cgroup_nf_cpu_share_from_onvm_mgr(uint16_t instance_id, uint32_t share_val) {
+#ifdef SET_CPU_SHARE_FROM_NF
+#else
+        FILE *fp = NULL;
+        uint32_t shared_bw_val = (share_val== 0) ?(1024):(share_val);  //when share_val is absolute bandwidth
+        const char* cg_set_cmd = get_cgroup_set_cpu_share_cmd_onvm_mgr(instance_id);
+
+        //printf("\n CMD_TO_SET_CPU_SHARE: %s \n", cg_set_cmd);
+        fp = fopen(cg_set_cmd, "w");            //optimize with mmap if that is allowed!!
+        if (fp){
+                fprintf(fp,"%d",shared_bw_val);
+                fclose(fp);
+        }
+        return 0;
+#endif
+}
+#endif //USE_CGROUPS_PER_NF_INSTANCE
 
 #define RTE_LOGTYPE_APP RTE_LOGTYPE_USER1
+
+#ifdef ENABLE_NF_BACKPRESSURE
+typedef struct per_core_nf_pool {
+        uint16_t nf_count;
+        uint32_t nf_ids[MAX_CLIENTS];
+}per_core_nf_pool_t;
+#endif //ENABLE_NF_BACKPRESSURE
+
+#define SECOND_TO_MICRO_SECOND          (1000*1000)
+#define NANO_SECOND_TO_MICRO_SECOND(x)  (double)((x)/(1000))
+#define MICRO_SECOND_TO_SECOND(x)       (double)((x)/(SECOND_TO_MICRO_SECOND))
+#define USE_THIS_CLOCK  CLOCK_MONOTONIC //CLOCK_THREAD_CPUTIME_ID //CLOCK_PROCESS_CPUTIME_ID //CLOCK_MONOTONIC
+typedef struct stats_time_info {
+        uint8_t in_read;
+        struct timespec prev_time;
+        struct timespec cur_time;
+}nf_stats_time_info_t;
+static inline int get_current_time(struct timespec *pTime);
+static inline unsigned long get_difftime_us(struct timespec *start, struct timespec *end);
+static inline int get_current_time(struct timespec *pTime) {
+        if (clock_gettime(USE_THIS_CLOCK, pTime) == -1) {
+              perror("\n clock_gettime");
+              return 1;
+        }
+        return 0;
+}
+static inline unsigned long get_difftime_us(struct timespec *pStart, struct timespec *pEnd) {
+        unsigned long delta = ( ((pEnd->tv_sec - pStart->tv_sec) * SECOND_TO_MICRO_SECOND) +
+                     ((pEnd->tv_nsec - pStart->tv_nsec) /1000) );
+        //printf("Delta [%ld], sec:[%ld]: nanosec [%ld]", delta, (pEnd->tv_sec - pStart->tv_sec), (pEnd->tv_nsec - pStart->tv_nsec));
+        return delta;
+}
+#include <rte_cycles.h>
+typedef struct stats_cycle_info {
+        uint8_t in_read;
+        uint64_t prev_cycles;
+        uint64_t cur_cycles;
+}stats_cycle_info_t;
+static inline uint64_t get_current_cpu_cycles(void);
+static inline uint64_t get_diff_cpu_cycles_in_us(uint64_t start, uint64_t end);
+static inline uint64_t get_current_cpu_cycles(void) {
+        return rte_rdtsc_precise();
+}
+static inline uint64_t get_diff_cpu_cycles_in_us(uint64_t start, uint64_t end) {
+        if(end > start) {
+                return (uint64_t) (((end -start)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz());
+        }
+        return 0;
+}
+
+#ifdef ENABLE_NF_BACKPRESSURE
+typedef struct sc_entries {
+        struct onvm_service_chain *sc;
+        uint16_t sc_count;
+        uint16_t bneck_flag;
+}sc_entries_list;
+
+#define BOTTLENECK_NF_STATUS_WAIT_ENQUEUED   (0x01)
+#define BOTTLENECK_NF_STATUS_DROP_MARKED     (0x02)
+#define BOTTLENECK_NF_STATUS_RESET           (0x00)
+typedef struct bottleneck_nf_entries {
+        struct timespec s_time;
+        uint16_t enqueue_status;
+        uint16_t nf_id;
+        uint16_t enqueued_ctr;
+        uint16_t marked_ctr;
+}bottleneck_nf_entries_t;
+typedef struct bottlenec_nf_info {
+        uint16_t entires;
+        //struct rte_timer nf_timer[MAX_CLIENTS];   // not worth it, as it would still be called at granularity of invoking the rte_timer_manage()
+        bottleneck_nf_entries_t nf[MAX_CLIENTS];
+}bottlenec_nf_info_t;
+bottlenec_nf_info_t bottleneck_nf_list;
+#endif //ENABLE_NF_BACKPRESSURE
+
+#define WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US   (0*SECOND_TO_MICRO_SECOND)
+
+int onvm_mark_all_entries_for_bottleneck(uint16_t nf_id);
+int onvm_clear_all_entries_for_bottleneck(uint16_t nf_id);
+
+#ifdef ENABLE_NF_BACKPRESSURE
+/******************************** DATA STRUCTURES FOR FIPO SUPPORT *********************************
+*     fipo_buf_node_t:      each rte_buf_node (packet) added to the fipo_per_flow_list -- Need basic Queue add/remove
+*     fipo_per_flow_list:   Ordered list of buffers for each flow   -- Need Queue add/remove
+*     nf_flow_list_t:       Priority List of Flows for each NF      -- Need Queue add/remove
+*     Memory sharing Model is tedious to support this..
+*     Rx/Tx should access fipo_buf_node to create a pkt entry, then fipo_per_flow_list to insert into
+*
+******************************** DATA STRUCTURES FOR FIPO SUPPORT *********************************/
+typedef struct fipo_buf_node {
+        void *pkt;
+        struct fipo_buf_node *next;
+        struct fipo_buf_node *prev;
+}fipo_buf_node_t;
+
+typedef struct fipo_list {
+        uint32_t buf_count;
+        fipo_buf_node_t *head;
+        fipo_buf_node_t *tail;
+}fipo_list_t;
+typedef fipo_list_t fipo_per_flow_list;
+//Each entry of the list must be shared with the NF, i.e. unique memzone must be created per NF per flow as FIPO_%NFID_%FID
+//Fix the MAX_NUMBER_OF_FLOWS, cannot have dynamic memzones per NF, too expensive as it has to have locks..
+#define MAX_NUM_FIPO_FLOWS  (16)
+#define MAX_BUF_PER_FLOW  ((128)/(MAX_NUM_FIPO_FLOWS))//((CLIENT_QUEUE_RINGSIZE)/(MAX_NUM_FIPO_FLOWS))
+typedef struct nf_flow_list {
+        uint32_t flow_count;
+        fipo_per_flow_list *head;
+        fipo_per_flow_list *tail;
+}nf_flow_list_t;
+#endif //ENABLE_NF_BACKPRESSURE
 
 #endif  // _COMMON_H_

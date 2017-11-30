@@ -60,6 +60,5 @@ onvm_sc_create(void)
         if (chain == NULL) {
                 rte_exit(EXIT_FAILURE, "Cannot allocate memory for service chain\n");
         }
-
 	return chain;
 }

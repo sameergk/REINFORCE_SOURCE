@@ -60,14 +60,37 @@ struct port_info *ports = NULL;
 
 struct rte_mempool *pktmbuf_pool;
 struct rte_mempool *nf_info_pool;
+
+#ifdef ENABLE_NFV_RESL
+struct rte_mempool *nf_state_pool;
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+struct rte_mempool *service_state_pool;
+void **services_state_pool;
+#endif //ENABLE_PER_SERVICE_MEMPOOL
+#endif //#ifdef ENABLE_NFV_RESL
+
 struct rte_ring *nf_info_queue;
 uint16_t **services;
 uint16_t *nf_per_service_count;
+
 struct client_tx_stats *clients_stats;
 struct onvm_service_chain *default_chain;
 struct onvm_service_chain **default_sc_p;
 
+#if defined (INTERRUPT_SEM) && defined (USE_SOCKET)
+int onvm_socket_id;
+#endif
 
+#if defined (INTERRUPT_SEM) && defined (USE_ZMQ)
+void *zmq_ctx;
+void *onvm_socket_id;
+void *onvm_socket_ctx;
+#endif
+
+#ifdef ENABLE_VXLAN
+uint8_t remote_eth_addr[6] = {0x68,0x05,0xCA,0x30,0x5A,0x51};
+struct ether_addr remote_eth_addr_struct;
+#endif
 /*********************************Prototypes**********************************/
 
 
@@ -79,6 +102,17 @@ static int init_info_queue(void);
 static void check_all_ports_link_status(uint8_t port_num, uint32_t port_mask);
 
 
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+#include <unistd.h>
+uint32_t nf_mgr_id;
+static uint32_t read_onvm_mgr_id_from_system(void);
+#endif // ENABLE_NF_MGR_IDENTIFIER
+static int init_nf_state_pool(void);
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+static int init_service_state_pool(void);
+#endif //ENABLE_PER_SERVICE_MEMPOOL
+#endif // ENABLE_NFV_RESL
 /*********************************Interfaces**********************************/
 
 
@@ -146,10 +180,16 @@ init(int argc, char *argv[]) {
 
         /*initialize a default service chain*/
         default_chain = onvm_sc_create();
+#ifdef ONVM_ENABLE_SPEACILA_NF
+        retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TO_NF_INSTANCE, 0); //0= INSTANCE ID of SPECIAL_NF
+        //retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 0);   //0 = SERVICE ID of SPECIAL NF
+        //retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 1); //default: send to any NF with service ID=1
+#else
         retval = onvm_sc_append_entry(default_chain, ONVM_NF_ACTION_TONF, 1);
+#endif
         if (retval == ENOSPC) {
                 printf("chain length can not be larger than the maximum chain length\n");
-                exit(1);
+                exit(5);
         }
         printf("Default service chain: send to sdn NF\n");        
         
@@ -165,9 +205,19 @@ init(int argc, char *argv[]) {
 
         onvm_flow_dir_init();
 
+#if defined(ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD) || defined(ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD)
+        rte_timer_subsystem_init();
+#endif //ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
+
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+        uint32_t my_id = read_onvm_mgr_id_from_system();
+        printf("Read the ONVM_MGR Identifier as: [%d (0x%x)] \n", my_id,my_id);
+#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif // ENABLE_NFV_RESL
+
         return 0;
 }
-
 
 /*****************************Internal functions******************************/
 
@@ -193,6 +243,42 @@ init_mbuf_pools(void) {
         return (pktmbuf_pool == NULL); /* 0  on success */
 }
 
+#ifdef ENABLE_NFV_RESL
+static int init_nf_state_pool(void) {
+        //printf("Cache size:[%d,max:%d], Creating mbuf pool '%s' ...\n", _NF_STATE_CACHE, RTE_MEMPOOL_CACHE_MAX_SIZE, _NF_MEMPOOL_NAME);
+        //setting Cache size parameter seems to have inconsistent behavior; it is better to allocate first with cached; and on failure change to 0 cache size;
+        nf_state_pool = rte_mempool_create(_NF_STATE_MEMPOOL_NAME, MAX_CLIENTS,
+                        _NF_STATE_SIZE, _NF_STATE_CACHE,
+                        0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+
+        if(NULL == nf_state_pool) {
+                printf("Failed to Create mbuf NF state pool '%s' with cache size...\n", _NF_STATE_MEMPOOL_NAME);
+                nf_state_pool = rte_mempool_create(_NF_STATE_MEMPOOL_NAME, MAX_CLIENTS,
+                        _NF_STATE_SIZE, 0,
+                        0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+        }
+
+        if(nf_state_pool == NULL) { printf("Failed to Create mbuf state pool '%s' without cache size!...\n", _NF_STATE_MEMPOOL_NAME);}
+        return (nf_state_pool == NULL); /* 0 on success */
+}
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+static int init_service_state_pool(void) {
+        service_state_pool = rte_mempool_create(_SERVICE_STATE_MEMPOOL_NAME, MAX_SERVICES,
+                        _SERVICE_STATE_SIZE, _SERVICE_STATE_CACHE,
+                        0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+
+        if(NULL == service_state_pool) {
+                printf("Failed to Create mbuf service state pool '%s' with cache size...\n", _SERVICE_STATE_MEMPOOL_NAME);
+                nf_state_pool = rte_mempool_create(_SERVICE_STATE_MEMPOOL_NAME, MAX_SERVICES,
+                        _SERVICE_STATE_SIZE, 0,
+                        0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+        }
+
+        if(service_state_pool == NULL) { printf("Failed to Create mbuf Service state pool '%s' without cache size!...\n", _SERVICE_STATE_MEMPOOL_NAME);}
+        return (service_state_pool == NULL); /* 0 on success */
+}
+#endif
+#endif
 /**
  * Set up a mempool to store nf_info structs
  */
@@ -202,9 +288,28 @@ init_client_info_pool(void)
         /* don't pass single-producer/single-consumer flags to mbuf
          * create as it seems faster to use a cache instead */
         printf("Creating mbuf pool '%s' ...\n", _NF_MEMPOOL_NAME);
+
+        //setting Cache size parameter seems to have inconsistent behavior; it is better to allocate first with cached; and on failure change to 0 cache size;
         nf_info_pool = rte_mempool_create(_NF_MEMPOOL_NAME, MAX_CLIENTS,
                         NF_INFO_SIZE, NF_INFO_CACHE,
                         0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+
+        if(NULL == nf_info_pool) {
+                printf("Failed to Create mbuf state pool '%s' with cache size...\n", _NF_MEMPOOL_NAME);
+                nf_info_pool = rte_mempool_create(_NF_MEMPOOL_NAME, MAX_CLIENTS,
+                                NF_INFO_SIZE, 0,
+                                0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+        }
+#ifdef ENABLE_NFV_RESL
+        if(init_nf_state_pool()) {
+               rte_exit(EXIT_FAILURE, "Cannot create client state mbuf pool: %s\n", rte_strerror(rte_errno));
+        }
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+        if(init_service_state_pool()) {
+               rte_exit(EXIT_FAILURE, "Cannot create service state mbuf pool: %s\n", rte_strerror(rte_errno));
+        }
+#endif  //ENABLE_PER_SERVICE_MEMPOOL
+#endif  //ENABLE_NFV_RESL
 
         return (nf_info_pool == NULL); /* 0 on success */
 }
@@ -286,15 +391,23 @@ init_shm_rings(void) {
         const char * tq_name;
         const unsigned ringsize = CLIENT_QUEUE_RINGSIZE;
 
-        // mutex and semaphores for N
         #ifdef INTERRUPT_SEM
         const char * sem_name;
-        sem_t *mutex;
         key_t key;
         int shmid;
         char *shm;
+
+        #ifdef USE_SEMAPHORE
+        sem_t *mutex;
+        #endif
         #endif
         
+#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+        const char * rsq_name;
+        const char * tsq_name;
+        const unsigned sringsize = CLIENT_SHADOW_RING_SIZE;
+#endif
+
         // use calloc since we allocate for all possible clients
         // ensure that all fields are init to 0 to avoid reading garbage
         // TODO plopreiato, move to creation when a NF starts
@@ -305,48 +418,92 @@ init_shm_rings(void) {
 
         services = rte_calloc("service to nf map",
                 num_services, sizeof(uint16_t*), 0);
-        for (i = 0; i < num_services; i++) {
-                services[i] = rte_calloc("one service NFs",
-                        MAX_CLIENTS_PER_SERVICE, sizeof(uint16_t), 0);
-        }
         nf_per_service_count = rte_calloc("count of NFs active per service",
                 num_services, sizeof(uint16_t), 0);
         if (services == NULL || nf_per_service_count == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot allocate memory for service to NF mapping\n");
-
+        for (i = 0; i < num_services; i++) {
+                services[i] = rte_calloc("one service NFs",
+                        MAX_CLIENTS_PER_SERVICE, sizeof(uint16_t), 0);
+        }
         for (i = 0; i < MAX_CLIENTS; i++) {
                 /* Create an RX queue for each client */
                 socket_id = rte_socket_id();
                 rq_name = get_rx_queue_name(i);
                 tq_name = get_tx_queue_name(i);
                 clients[i].instance_id = i;
+
+#ifdef ENABLE_NFV_RESL
+                if(i < MAX_ACTIVE_CLIENTS) { //if(is_primary_active_nf_id(i)) {
+                        clients[i].rx_q = rte_ring_create(rq_name,
+                                        ringsize, socket_id,
+                                        RING_F_SC_DEQ);                 /* multi prod, single cons (Enqueue can be by either Rx/Tx Threads, but dequeue only by NF thread)*/
+                        clients[i].tx_q = rte_ring_create(tq_name,
+                                        ringsize, socket_id,
+                                        RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by dedicated Tx thread) */
+                        if(rte_mempool_get(nf_state_pool,&clients[i].nf_state_mempool) < 0) {
+                                rte_exit(EXIT_FAILURE, "Failed to get client state memory");;
+                        }
+#ifdef ENABLE_SHADOW_RINGS
+                        rsq_name = get_rx_squeue_name(i);
+                        tsq_name = get_tx_squeue_name(i);
+                        clients[i].rx_sq = rte_ring_create(rsq_name,
+                                        sringsize, socket_id,
+                                        RING_F_SP_ENQ|RING_F_SC_DEQ);                 /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by NF thread)*/
+                        clients[i].tx_sq = rte_ring_create(tsq_name,
+                                        sringsize, socket_id,
+                                        RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by dedicated Tx thread) */
+#endif
+                } else {
+                        clients[i].rx_q = clients[get_associated_active_or_standby_nf_id(i)].rx_q;
+                        clients[i].tx_q = clients[get_associated_active_or_standby_nf_id(i)].tx_q;
+                        clients[i].nf_state_mempool = clients[get_associated_active_or_standby_nf_id(i)].nf_state_mempool;
+                        fprintf(stderr, "re-using rx and tx queue rings for client %d with %d\n", i, get_associated_active_or_standby_nf_id(i));
+#ifdef ENABLE_SHADOW_RINGS
+                        clients[i].rx_sq = clients[get_associated_active_or_standby_nf_id(i)].rx_sq;
+                        clients[i].tx_sq = clients[get_associated_active_or_standby_nf_id(i)].tx_sq;
+#endif
+                }
+#else
                 clients[i].rx_q = rte_ring_create(rq_name,
                                 ringsize, socket_id,
-                                RING_F_SC_DEQ);                 /* multi prod, single cons */
+                                //RING_F_SP_ENQ|RING_F_SC_DEQ);     /* single prod, single cons */
+                                RING_F_SC_DEQ);                 /* multi prod, single cons (Enqueue can be by either Rx/Tx Threads, but dequeue only by NF thread)*/
                 clients[i].tx_q = rte_ring_create(tq_name,
                                 ringsize, socket_id,
-                                RING_F_SC_DEQ);                 /* multi prod, single cons */
+                                RING_F_SP_ENQ|RING_F_SC_DEQ);      /* single prod, single cons (Enqueue only by NF Thread, and dequeue only by dedicated Tx thread) */
+                                //RING_F_SC_DEQ);                 /* multi prod, single cons */
+                                //but it should be RING_F_SP_ENQ
 
+#endif
                 if (clients[i].rx_q == NULL)
                         rte_exit(EXIT_FAILURE, "Cannot create rx ring queue for client %u\n", i);
 
                 if (clients[i].tx_q == NULL)
                         rte_exit(EXIT_FAILURE, "Cannot create tx ring queue for client %u\n", i);
 
+
+                #ifdef ENABLE_RING_WATERMARK
+                rte_ring_set_water_mark(clients[i].rx_q, CLIENT_QUEUE_RING_WATER_MARK_SIZE);
+                //rte_ring_set_water_mark(clients[i].tx_q, CLIENT_QUEUE_RING_WATER_MARK_SIZE);
+                #endif
+
                 #ifdef INTERRUPT_SEM
                 sem_name = get_sem_name(i);
-                clients[i].sem_name = sem_name;        
+                clients[i].sem_name = sem_name;
+                //fprintf(stderr, "sem_name=%s for client %d\n", sem_name, i);
 
-                fprintf(stderr, "sem_name=%s for client %d\n", sem_name, i);
+                #ifdef USE_SEMAPHORE                
                 mutex = sem_open(sem_name, O_CREAT, 06666, 0);
                 if(mutex == SEM_FAILED) {
                         fprintf(stderr, "can not create semaphore for client %d\n", i);
                         sem_unlink(sem_name);
                         exit(1);
                 }
-                clients[i].mutex = mutex;        
-                
-                key = get_rx_shmkey(i);        
+                clients[i].mutex = mutex;
+                #endif
+
+                key = get_rx_shmkey(i);       
                 if ((shmid = shmget(key, SHMSZ, IPC_CREAT | 0666)) < 0) {
                         fprintf(stderr, "can not create the shared memory segment for client %d\n", i);
                         exit(1);
@@ -358,8 +515,25 @@ init_shm_rings(void) {
                     }
 
                 clients[i].shm_server = (rte_atomic16_t *)shm;
-                #endif        
+                rte_atomic16_set(clients[i].shm_server, 0);
+                #endif
+
+                //#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+                #ifdef ENABLE_NF_BACKPRESSURE
+                memset(&clients[i].bft_list, 0, sizeof(clients[i].bft_list));
+                clients[i].bft_list.max_len=CLIENT_QUEUE_RINGSIZE*2;
+                #endif
         }
+#if defined(ENABLE_NFV_RESL) && defined (ENABLE_PER_SERVICE_MEMPOOL)
+        services_state_pool = rte_calloc("services_state_pool", num_services, sizeof(struct rte_mempool*), 0);
+        if (services_state_pool == NULL)
+                rte_exit(EXIT_FAILURE, "Cannot allocate memory for services_state_pool details\n");
+        for(i=0; i< num_services; i++) {
+                if(rte_mempool_get(service_state_pool,&services_state_pool[i]) < 0) {
+                        rte_exit(EXIT_FAILURE, "Failed to get service state memory from service_state_pool");;
+                }
+        }
+#endif
         return 0;
 }
 
@@ -439,3 +613,13 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask) {
  * Main init function for the multi-process server app,
  * calls subfunctions to do each stage of the initialisation.
  */
+
+
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+static uint32_t read_onvm_mgr_id_from_system(void) {
+        nf_mgr_id = gethostid();
+        return nf_mgr_id;
+}
+#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif // ENABLE_NFV_RESL

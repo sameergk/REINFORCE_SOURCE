@@ -48,7 +48,7 @@
 int onvm_sc_append_entry(struct onvm_service_chain *chain, uint8_t action, uint16_t destination);
 
 /*set entry to a new action and destination, 0 means setting successful, 1 means failed */
-int onvm_sc_set_entry(struct onvm_service_chain *chain, int entry, uint8_t action, uint16_t destination);
+int onvm_sc_set_entry(struct onvm_service_chain *chain, int entry, uint8_t action, uint16_t destination, uint8_t service);
 
 void onvm_sc_print(struct onvm_service_chain *chain);
 #endif //_SC_COMMON_H_

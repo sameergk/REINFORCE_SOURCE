@@ -61,6 +61,7 @@
 #include <sys/ipc.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#include <mqueue.h>
 //#endif //INTERRUPT_SEM
 
 /********************************DPDK library*********************************/
@@ -88,30 +89,62 @@
 /***********************************Macros************************************/
 
 
-#define MBUFS_PER_CLIENT 1536
-#define MBUFS_PER_PORT 1536
+#define MBUFS_PER_CLIENT 1536 //65536 //10240 //1536                            (use U: 1536, T:1536)
+#define MBUFS_PER_PORT 10240 //(10240) //2048 //10240 //65536 //10240 //1536    (use U: 10240, T:10240)
 #define MBUF_CACHE_SIZE 512
 #define MBUF_OVERHEAD (sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 #define RX_MBUF_DATA_SIZE 2048
 #define MBUF_SIZE (RX_MBUF_DATA_SIZE + MBUF_OVERHEAD)
 
 #define NF_INFO_SIZE sizeof(struct onvm_nf_info)
-#define NF_INFO_CACHE 8
+#define NF_INFO_CACHE (16)    //(8); 16 seems slightly better than 8 increase of 0.1mpps at a client NF; may be same...
 
-#define RTE_MP_RX_DESC_DEFAULT 512
-#define RTE_MP_TX_DESC_DEFAULT 512
-#define CLIENT_QUEUE_RINGSIZE 128
+#define RTE_MP_RX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define RTE_MP_TX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+//#define CLIENT_QUEUE_RINGSIZE  (512) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#define CLIENT_QUEUE_RINGSIZE  (128) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+//For TCP UDP use 70,40
+//For TCP TCP, IO use 80 20
 
+// Note: Based on the approach the tuned values change. For NF Throttling (80/75,20/25) works better, for Packet Throttling (70,50 or 70,40 or 80,40) seems better -- must be tuned and set accordingly.
+#ifdef NF_BACKPRESSURE_APPROACH_1
+#define CLIENT_QUEUE_RING_THRESHOLD (80)
+#define CLIENT_QUEUE_RING_THRESHOLD_GAP (20) //(25)
+#else  // defined NF_BACKPRESSURE_APPROACH_2 or other
+#define CLIENT_QUEUE_RING_THRESHOLD (80)
+#define CLIENT_QUEUE_RING_THRESHOLD_GAP (20)
+#endif //NF_BACKPRESSURE_APPROACH_1
+
+#define CLIENT_QUEUE_RING_WATER_MARK_SIZE ((uint32_t)((CLIENT_QUEUE_RINGSIZE*CLIENT_QUEUE_RING_THRESHOLD)/100))
+#define CLIENT_QUEUE_RING_LOW_THRESHOLD ((CLIENT_QUEUE_RING_THRESHOLD > CLIENT_QUEUE_RING_THRESHOLD_GAP) ? (CLIENT_QUEUE_RING_THRESHOLD-CLIENT_QUEUE_RING_THRESHOLD_GAP):(CLIENT_QUEUE_RING_THRESHOLD))
+#define CLIENT_QUEUE_RING_LOW_WATER_MARK_SIZE ((uint32_t)((CLIENT_QUEUE_RINGSIZE*CLIENT_QUEUE_RING_LOW_THRESHOLD)/100))
+#define ECN_EWMA_ALPHA  (0.25)
+#define CLIENT_QUEUE_RING_ECN_MARK_SIZE ((uint32_t)(((1-ECN_EWMA_ALPHA)*CLIENT_QUEUE_RING_WATER_MARK_SIZE) + ((ECN_EWMA_ALPHA)*CLIENT_QUEUE_RING_LOW_WATER_MARK_SIZE)))///2)
 #define NO_FLAGS 0
 
 #define ONVM_NUM_RX_THREADS 1
 
-#define DYNAMIC_CLIENTS 0
-#define STATIC_CLIENTS 1
+#define DYNAMIC_CLIENTS 1
+#define STATIC_CLIENTS 0
 
 
 /******************************Data structures********************************/
+#ifdef ENABLE_NF_BACKPRESSURE //NF_BACKPRESSURE_APPROACH_1
+//#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+typedef struct bottleneck_ft_data {
+        uint16_t chain_index;           //index of NF (bottleneck) in the chain
+         struct onvm_flow_entry* bft;   //flow_entry field
+}bottleneck_ft_data_t;
+typedef struct bottleneck_ft_info {
+        uint16_t bft_count;         // num of entries in the bft[]
+        uint16_t r_h;               // read_head in the bft[]
+        uint16_t w_h;               // write head in the bft[]
+        uint16_t max_len;           // Max size/count of bft[]
+        //struct onvm_flow_entry* bft[CLIENT_QUEUE_RINGSIZE];
+        bottleneck_ft_data_t bft[CLIENT_QUEUE_RINGSIZE*2+1];
+}bottlenect_ft_info_t;
 
+#endif //ENABLE_NF_BACKPRESSURE
 
 /*
  * Define a client structure with all needed info, including
@@ -136,19 +169,74 @@ struct client {
                 volatile uint64_t act_next;
                 volatile uint64_t act_buffer;
                 #ifdef INTERRUPT_SEM
+                volatile uint64_t wakeup_count;
                 volatile uint64_t prev_rx;
-		volatile uint64_t prev_rx_drop;
+                volatile uint64_t prev_rx_drop;
+                volatile uint64_t prev_wakeup_count;
                 #endif
+
+//#ifdef ENABLE_NF_BACKPRESSURE
+#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+                volatile uint64_t bkpr_drop;
+                volatile uint64_t prev_bkpr_drop;
+#endif //#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+
+
+//#ifdef ENABLE_NF_BACKPRESSURE
+#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+                uint16_t max_rx_q_len;
+                uint16_t max_tx_q_len;
+                uint16_t bkpr_count;
+#endif //defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
         } stats;
         
+#ifdef ENABLE_NF_BACKPRESSURE
+//#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+        uint16_t is_bottleneck;         //status: not marked=0/marked for enqueue=1/enqueued as bottleneck=2
+        bottlenect_ft_info_t bft_list;
+#endif //defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
+
         /* mutex and semaphore name for NFs to wait on */ 
-        #ifdef INTERRUPT_SEM
+        #ifdef INTERRUPT_SEM        
         const char *sem_name;
-        sem_t *mutex;
         key_t shm_key;
-        rte_atomic16_t *shm_server;
+        rte_atomic16_t *shm_server;     //0=running; 1=blocked_on_rx (no pkts to process); 2=blocked_on_tx (cannot push packets)
+
+        #ifdef USE_SEMAPHORE        
+        sem_t *mutex;
         #endif
+
+        #ifdef ENABLE_NF_BACKPRESSURE
+        //uint8_t highest_downstream_nf_index_id;   // can get rid of this field
+        //uint8_t rx_buffer_overflow;     // can get_rid of this field
+        #ifdef NF_BACKPRESSURE_APPROACH_2
+        uint8_t throttle_this_upstream_nf; // rename downstream_nf_overflow to throttle_this_upstream_nf;
+        uint64_t throttle_count;
+        #endif // NF_BACKPRESSURE_APPROACH_2
+        #endif //ENABLE_NF_BACKPRESSURE
+
+        #endif //INTERRUPT_SEM
+#ifdef ENABLE_NFV_RESL
+        void *nf_state_mempool;     // shared state exclusively between the active and standby NFs
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+        void *service_state_pool;   // shared state between all the NFs of the same service type
+#endif
+#ifdef ENABLE_SHADOW_RINGS
+        struct rte_ring *rx_sq;
+        struct rte_ring *tx_sq;
+#endif
+#endif //#ifdef ENABLE_NFV_RESL
 };
+
+#if defined (INTERRUPT_SEM) && defined (USE_SOCKET)
+extern int onvm_socket_id;
+#endif
+
+#if defined (INTERRUPT_SEM) && defined (USE_ZMQ)
+extern void *zmq_ctx;
+extern void *onvm_socket_id;
+extern void *onvm_socket_ctx;
+#endif
 
 /*
  * Shared port info, including statistics information for display by server.
@@ -175,6 +263,7 @@ struct tx_stats{
 struct port_info {
         uint8_t num_ports;
         uint8_t id[RTE_MAX_ETHPORTS];
+        struct ether_addr mac[RTE_MAX_ETHPORTS];
         volatile struct rx_stats rx_stats;
         volatile struct tx_stats tx_stats;
 };
@@ -187,12 +276,13 @@ struct port_info {
 extern struct client *clients;
 
 extern struct rte_ring *nf_info_queue;
+extern struct rte_mempool *nf_info_pool;
 
 /* the shared port information: port numbers, rx and tx stats etc. */
 extern struct port_info *ports;
 
 extern struct rte_mempool *pktmbuf_pool;
-extern uint16_t num_clients;
+extern volatile uint16_t num_clients;
 extern uint16_t num_services;
 extern uint16_t default_service;
 extern uint16_t **services;
@@ -201,7 +291,27 @@ extern unsigned num_sockets;
 extern struct onvm_service_chain *default_chain;
 extern struct onvm_ft *sdn_ft;
 
+#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_NF_MGR_IDENTIFIER
+extern uint32_t nf_mgr_id;
+#endif // ENABLE_NF_MGR_IDENTIFIER
 
+#ifdef ENABLE_SHADOW_RINGS
+#define CLIENT_SHADOW_RING_SIZE     (ONVM_PACKETS_BATCH_SIZE*2) //(32*2)  //(PACKET_READ_SIZE*2)
+#endif //ENABLE_SHADOW_RINGS
+
+#ifdef ENABLE_PER_SERVICE_MEMPOOL
+extern void **services_state_pool;
+#endif  //ENABLE_PER_SERVICE_MEMPOOL
+
+#endif // ENABLE_NFV_RESL
+
+#ifdef ENABLE_VXLAN
+#ifndef ENABLE_ZOOKEEPER
+extern uint8_t remote_eth_addr[6];
+extern struct ether_addr remote_eth_addr_struct;
+#endif //ENABLE_ZOOKEEPER
+#endif //ENABLE_VXLAN
 /**********************************Functions**********************************/
 
 /*
