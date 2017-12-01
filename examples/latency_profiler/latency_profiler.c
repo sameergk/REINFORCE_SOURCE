@@ -1063,6 +1063,51 @@ int test_signal_latency()
         exit(EXIT_SUCCESS);
     }
 }
+
+#define TOTAL_MEMBLOCK_SIZE (64*1024)
+#define	COPY_BLOCK_SIZE	    (1*1024)
+int test_memcpy_latency()
+{
+    int64_t min = 0, max = 0, avg = 0, ttl_elapsed=0;
+    int count = 1000, i =0;
+                
+    void *base_memory = calloc(1,TOTAL_MEMBLOCK_SIZE);
+    void *scratch_memory = calloc(1,TOTAL_MEMBLOCK_SIZE);
+
+    if(base_memory == NULL || scratch_memory == NULL) return 0;
+
+    for (i = 0; i < count; i++) {
+            char* src = (char*)scratch_memory;
+	    char *dst = (char*)base_memory;
+	    src[0] = (char)1;
+            get_start_time();
+	    memcpy(dst,src,COPY_BLOCK_SIZE); //take care of not overflowing last 1KB block
+            get_stop_time();
+	    ttl_elapsed = get_elapsed_time();
+            min = ((min == 0)? (ttl_elapsed): (ttl_elapsed < min ? (ttl_elapsed): (min)));
+            max = ((ttl_elapsed > max) ? (ttl_elapsed):(max));
+            avg += ttl_elapsed;
+            //printf("Run latency: %li ns\n", ttl_elapsed);
+        }
+        printf("MEMCPY(1KB) Min: %li, Max:%li and Avg latency: %li ns\n", min, max, avg/count);
+
+    min=0; max=0; avg=0;
+    for (i = 0; i < count; i++) {
+            char* src = (char*)scratch_memory;
+	    char *dst = (char*)base_memory;
+	    src[0] = (char)'A';
+            get_start_time();
+	    memcpy(dst,src,TOTAL_MEMBLOCK_SIZE); //take care of not overflowing last 1KB block
+	    get_stop_time();
+            ttl_elapsed = get_elapsed_time();
+            min = ((min == 0)? (ttl_elapsed): (ttl_elapsed < min ? (ttl_elapsed): (min)));
+            max = ((ttl_elapsed > max) ? (ttl_elapsed):(max));
+            avg += ttl_elapsed;
+            //printf("Run latency: %li ns\n", ttl_elapsed);
+        }
+        printf("MEMCPY(64KB) Min: %li, Max:%li and Avg latency: %li ns\n", min, max, avg/count);
+}
+
 int main()
 {
         #if defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) && defined(_POSIX_MONOTONIC_CLOCK)
@@ -1073,7 +1118,7 @@ int main()
 
         #if 1
         test_clk_overhead();
-        //#if 0        
+        #if 0        
         test_cgroup_update1();
         test_cgroup_update2();
         test_mq();
@@ -1083,8 +1128,9 @@ int main()
         test_nanosleep();
         test_sched_yield();
         test_group_prio();
-        //#endif
         test_signal_latency();
+        #endif
+        test_memcpy_latency();
         #endif
        
 #if 0
