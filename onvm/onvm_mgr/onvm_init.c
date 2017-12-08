@@ -515,7 +515,11 @@ init_shm_rings(void) {
                     }
 
                 clients[i].shm_server = (rte_atomic16_t *)shm;
+#ifdef USE_POLL_MODE
                 rte_atomic16_set(clients[i].shm_server, 0);
+#else
+                rte_atomic16_set(clients[i].shm_server, 1);
+#endif
                 #endif
 
                 //#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)

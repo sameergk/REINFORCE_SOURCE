@@ -391,7 +391,12 @@ void monitor_nf_node_liveliness_via_pid_monitoring(void) {
 
 inline int
 onvm_nf_is_valid(struct client *cl) {
+        return cl && cl->info && (cl->info->status&NF_RUNNING);  //can be both running and paused
         return cl && cl->info && cl->info->status == NF_RUNNING;
+}
+inline int
+onvm_nf_is_paused(struct client *cl){
+        return cl->info->status&NF_PAUSED_BIT;
 }
 
 inline int
@@ -553,10 +558,22 @@ inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
         } else {
                 services[nf_info->service_id][service_count] = nf_info->instance_id;
         }
-        //Main concern: When Standby is already running; must signal the standby NF to stop processing packets
-        //if(is_primary_active_nf_id(nf_info->instance_id)) {
-        if((is_primary_active_nf_id(nf_info->instance_id)) && (onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)]) ) ) {
-                rte_atomic16_set(clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)].shm_server, 1);
+
+        //FOR REPLICA OR STANDBY NF: When Active  is already running start the STANDBY in PAUSE MODE; else if NO ACTIVE then start STANDBY IN RUNNING MODE
+        if(unlikely(is_secondary_active_nf_id(nf_info->instance_id))) {
+                if(likely(onvm_nf_is_valid(&clients[get_associated_active_nf_id(nf_info->instance_id)]) ) ) {
+                        nf_info->status = NF_PAUSED;
+                } else {
+                        nf_info->status = NF_RUNNING; //nf_info->status = NF_PAUSED;
+                }
+        }
+        //Main concern: When Standby is already running; must signal the standby NF to stop processing packets and move standby to PAUSED state. then move active to RUNNING
+        else { //if((is_primary_active_nf_id(nf_info->instance_id)) && (onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(nf_info->instance_id)]) ) ) {
+                if(unlikely(onvm_nf_is_valid(&clients[get_associated_standby_nf_id(nf_info->instance_id)]) ) ) {
+                        rte_atomic16_set(clients[get_associated_standby_nf_id(nf_info->instance_id)].shm_server, 1);
+                        clients[get_associated_standby_nf_id(nf_info->instance_id)].info->status = NF_PAUSED;
+                }
+                nf_info->status = NF_RUNNING;
         }
         /* int mapIndex = 0;
         for(mapIndex = 0; mapIndex <= service_count; mapIndex++) {
@@ -565,6 +582,7 @@ inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
 #else
         // Register this NF running within its service
         services[nf_info->service_id][service_count] = nf_info->instance_id;
+        nf_info->status = NF_RUNNING;
 #endif
 
 /** TODO: Verify if this is the correct place to call the ZooKeerper NF START? **/
@@ -574,7 +592,7 @@ inline int onvm_nf_register_run(struct onvm_nf_info *nf_info) {
         onvm_zk_nf_start(nf_info->service_id, service_count + 1, nf_info->instance_id);
 #endif
 
-        nf_info->status = NF_RUNNING;
+        //nf_info->status = NF_RUNNING;
         return nf_per_service_count[nf_info->service_id];
 }
 
@@ -640,7 +658,7 @@ onvm_nf_stop(struct onvm_nf_info *nf_info) {
         int mapIndex;
         struct rte_mempool *nf_info_mp;
 
-        if(nf_info == NULL){
+        if(unlikely(nf_info == NULL)){
                 printf(" Null Entry for NF! Bad request for Stop!!\n ");
                 return 1;
         }
@@ -649,8 +667,18 @@ onvm_nf_stop(struct onvm_nf_info *nf_info) {
         nf_id = nf_info->instance_id;
         service_id = nf_info->service_id;
 
-#if defined(ENABLE_NFV_RESL) && defined (ENABLE_PER_SERVICE_MEMPOOL)
+#if defined(ENABLE_NFV_RESL)
+        //For Primary Instance DOWN; ensure that if corresponding secondary is active move it to RUNNING state;
+        if(likely(is_primary_active_nf_id(nf_id))) {
+                uint16_t stdby_nfid = get_associated_standby_nf_id(nf_id);
+                struct client *cl = &clients[stdby_nfid];
+                if(likely((onvm_nf_is_valid(cl) && onvm_nf_is_paused(cl)))) {
+                        cl->info->status ^=NF_PAUSED_BIT;
+                }
+        }
+#if defined (ENABLE_PER_SERVICE_MEMPOOL)
         clients[nf_id].service_state_pool = NULL;
+#endif
 #endif
         /* Clean up dangling pointers to info struct */
         clients[nf_id].info = NULL;

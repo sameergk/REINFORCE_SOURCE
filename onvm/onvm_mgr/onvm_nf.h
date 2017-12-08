@@ -94,6 +94,15 @@ extern uint64_t throttle_count;
 inline int
 onvm_nf_is_valid(struct client *cl);
 
+/* Interface checking if a given nf is "valid & paused!", meaning if it's running.
+ *
+ * Input  : a pointer to the nf
+ * Output : a boolean answer
+ *
+ */
+inline int
+onvm_nf_is_paused(struct client *cl);
+
 /*
  * Interface checking if a given nf is "valid", meaning if it's running.
  *

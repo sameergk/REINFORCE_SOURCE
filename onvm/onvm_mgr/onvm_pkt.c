@@ -76,10 +76,11 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
         uint16_t i;
         struct onvm_pkt_meta *meta = NULL;
         struct onvm_flow_entry *flow_entry = NULL;
-        //int ret;
 
+#if 0 //redundant checks
         if (rx == NULL || pkts == NULL)
                 return;
+#endif
 
         for (i = 0; i < rx_count; i++) {
                 meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
@@ -87,7 +88,7 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
                 meta->chain_index = 0;
 
                 get_flow_entry(pkts[i], &flow_entry);
-                if (flow_entry && flow_entry->sc ) {
+                if (likely(flow_entry && flow_entry->sc )) {
                         meta->action = onvm_sc_next_action(flow_entry->sc, pkts[i]);
                         meta->destination = onvm_sc_next_destination(flow_entry->sc, pkts[i]);
 #ifdef ENABLE_NFV_RESL
@@ -139,7 +140,39 @@ onvm_pkt_process_tx_batch(struct thread_info *tx, struct rte_mbuf *pkts[], uint1
                 meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
                 meta->src = cl->instance_id;
                 flow_entry = NULL;
-                if (meta->action == ONVM_NF_ACTION_DROP) {
+
+
+                switch (meta->action) {
+                case ONVM_NF_ACTION_DROP:
+                        onvm_pkt_drop(pkts[i]);
+                        cl->stats.act_drop++;
+                        break;
+                case ONVM_NF_ACTION_NEXT:
+                        cl->stats.act_next++;
+                        get_flow_entry(pkts[i], &flow_entry);
+                        onvm_pkt_process_next_action(tx, pkts[i], meta, flow_entry, cl);
+                        break;
+                case ONVM_NF_ACTION_TO_NF_INSTANCE:
+                case ONVM_NF_ACTION_TONF:
+                        cl->stats.act_tonf++;
+                        (meta->chain_index)++;
+                        get_flow_entry(pkts[i], &flow_entry);
+                        onvm_pkt_enqueue_nf(tx, pkts[i], meta, flow_entry);
+                        break;
+                case ONVM_NF_ACTION_OUT:
+                        cl->stats.act_out++;
+                        (meta->chain_index)++;
+                        onvm_pkt_enqueue_port(tx, meta->destination, pkts[i]);
+                        break;
+                default:
+                        printf("onvm_pkt_process_tx_batch(): ERROR invalid action: this shouldn't happen.\n");
+                        onvm_pkt_drop(pkts[i]);
+                        break;
+                }
+
+
+               /*
+               if (meta->action == ONVM_NF_ACTION_DROP) {
                         // if the packet is drop, then <return value> is 0 and !<return value> is 1.
                         //cl->stats.act_drop += !onvm_pkt_drop(pkts[i]);
                         onvm_pkt_drop(pkts[i]);
@@ -148,7 +181,7 @@ onvm_pkt_process_tx_batch(struct thread_info *tx, struct rte_mbuf *pkts[], uint1
                         cl->stats.act_next++;
                         get_flow_entry(pkts[i], &flow_entry);
                         onvm_pkt_process_next_action(tx, pkts[i], meta, flow_entry, cl);
-                } else if (meta->action == ONVM_NF_ACTION_TONF) {
+                } else if (meta->action == ONVM_NF_ACTION_TONF || meta->action == ONVM_NF_ACTION_TO_NF_INSTANCE) {
                         cl->stats.act_tonf++;
                         (meta->chain_index)++;
                         get_flow_entry(pkts[i], &flow_entry);
@@ -161,6 +194,7 @@ onvm_pkt_process_tx_batch(struct thread_info *tx, struct rte_mbuf *pkts[], uint1
                         onvm_pkt_drop(pkts[i]);
                         return;
                 }
+                */
         }
 }
 
@@ -169,8 +203,10 @@ void
 onvm_pkt_flush_all_ports(struct thread_info *tx) {
         uint16_t i;
 
+#if 0 //redundant
         if (tx == NULL)
                 return;
+#endif
 
         for (i = 0; i < ports->num_ports; i++)
                 onvm_pkt_flush_port_queue(tx, i);
@@ -181,8 +217,10 @@ void
 onvm_pkt_flush_all_nfs(struct thread_info *tx) {
         uint16_t i;
 
+#if 0 //redundant
         if (tx == NULL)
                 return;
+#endif
 
         for (i = 0; i < MAX_CLIENTS; i++)
                 onvm_pkt_flush_nf_queue(tx, i);
@@ -208,10 +246,10 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         uint16_t i, sent;
         volatile struct tx_stats *tx_stats;
 
-        if (tx == NULL)
+        if (unlikely(tx == NULL))
                 return;
 
-        if (tx->port_tx_buf[port].count == 0)
+        if (unlikely(tx->port_tx_buf[port].count == 0))
                 return;
 
         tx_stats = &(ports->tx_stats);
@@ -235,7 +273,7 @@ void
 onvm_pkt_flush_nf_queue(struct thread_info *thread, uint16_t client) {
         struct client *cl;
 
-        if (thread == NULL)
+        if (unlikely(thread == NULL))
                 return;
 
         if (thread->nf_rx_buf[client].count == 0)
@@ -244,7 +282,7 @@ onvm_pkt_flush_nf_queue(struct thread_info *thread, uint16_t client) {
         cl = &clients[client];
 
         // Ensure destination NF is running and ready to receive packets
-        if (!onvm_nf_is_valid(cl))
+        if (unlikely(!onvm_nf_is_valid(cl)))
                 return;
 
         int enq_status = rte_ring_enqueue_bulk(cl->rx_q, (void **)thread->nf_rx_buf[client].buffer,
@@ -335,7 +373,8 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
                         onvm_pkt_drop(pkt);
                         return;
                 }
-                //printf("\n Resolved packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
+
+                printf("\n Resolved packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
                 if(likely (flow_entry && flow_entry->sc)) {
                         //update the action for this flow entry to use the instance mapping directly
                         onvm_sc_set_entry(flow_entry->sc, meta->chain_index, ONVM_NF_ACTION_TO_NF_INSTANCE, dst_instance_id, 0);
@@ -343,14 +382,16 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
                         onvm_sc_set_entry(default_chain, meta->chain_index, ONVM_NF_ACTION_TO_NF_INSTANCE, dst_instance_id, 0);
                 } */
         }
+#if 0
         if(unlikely(dst_instance_id >= MAX_CLIENTS)) {
                 //printf("\n Dropping packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
                 onvm_pkt_drop(pkt);
                 return;
         }
+#endif
         // Ensure destination NF is running and ready to receive packets
         cl = &clients[dst_instance_id];
-        if (unlikely(!onvm_nf_is_valid(cl))) {
+        if (unlikely(!onvm_nf_is_valid(cl)) || unlikely(onvm_nf_is_paused(cl))) {
 #ifdef ENABLE_NFV_RESL
                 //check if associated standby/active instance is available
                 dst_instance_id = get_associated_active_or_standby_nf_id(dst_instance_id);
@@ -359,6 +400,20 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
                         onvm_pkt_drop(pkt);
                         return;
                 }
+#if 0 //Moved this to onvm_nf_stop();
+                //Primary will always be RUNNING; only Standby NF will go through RUNNING-->PAUSED-->RUNNING Cycles. Note: This needs to be done inc control plane when the Primary NF is moved to stop state.
+                if(likely(is_secondary_active_nf_id(dst_instance_id)) && likely(onvm_nf_is_paused(cl))) {
+                        cl->info->status ^=NF_PAUSED_BIT;
+                }
+#endif
+                printf("\n Re-Resolved packet: dst_instance_id=[%d] meta->action[%d], meta->destination[%d]", dst_instance_id,meta->action, meta->destination);
+                if(likely (flow_entry && flow_entry->sc)) {
+                        //update the action for this flow entry to use the instance mapping directly
+                        onvm_sc_set_entry(flow_entry->sc, meta->chain_index, ONVM_NF_ACTION_TO_NF_INSTANCE, dst_instance_id, 0);
+                } /* else {
+                        onvm_sc_set_entry(default_chain, meta->chain_index, ONVM_NF_ACTION_TO_NF_INSTANCE, dst_instance_id, 0);
+                } */
+
                 /* TODO: This is the place also to check/initiate chain migration
                  * When? Both active and Standby NFs are down
                  * How?

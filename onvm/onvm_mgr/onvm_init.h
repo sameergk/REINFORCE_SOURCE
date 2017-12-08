@@ -90,7 +90,7 @@
 
 
 #define MBUFS_PER_CLIENT 1536 //65536 //10240 //1536                            (use U: 1536, T:1536)
-#define MBUFS_PER_PORT 10240 //(10240) //2048 //10240 //65536 //10240 //1536    (use U: 10240, T:10240)
+#define MBUFS_PER_PORT 1536 //(10240) //2048 //10240 //65536 //10240 //1536    (use U: 10240, T:10240)
 #define MBUF_CACHE_SIZE 512
 #define MBUF_OVERHEAD (sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 #define RX_MBUF_DATA_SIZE 2048
@@ -102,7 +102,7 @@
 #define RTE_MP_RX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define RTE_MP_TX_DESC_DEFAULT 1024 //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 //#define CLIENT_QUEUE_RINGSIZE  (512) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
-#define CLIENT_QUEUE_RINGSIZE  (128) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#define CLIENT_QUEUE_RINGSIZE  (4096) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
 //For TCP UDP use 70,40
 //For TCP TCP, IO use 80 20
 

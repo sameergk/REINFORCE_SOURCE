@@ -60,6 +60,14 @@
 #include "onvm_bfd.h"
 #endif
 
+#ifdef TEST_INLINE_FUNCTION_CALL
+int process_nf_function_inline(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta);
+int process_nf_function_inline(__attribute__((unused)) struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
+        return 0;
+}
+nf_pkt_handler nf_process_packet = process_nf_function_inline;
+#endif
+
 #ifdef ENABLE_ZOOKEEPER
 #include "onvm_zookeeper.h"
 #include "onvm_zk_common.h"
@@ -255,7 +263,6 @@ static int
 rx_thread_main(void *arg) {
         uint16_t i, rx_count;
         struct rte_mbuf *pkts[PACKET_READ_SIZE];
-        //struct rte_mbuf *pkts[1024];
         struct thread_info *rx = (struct thread_info*)arg;
 
         RTE_LOG(INFO,
@@ -269,20 +276,19 @@ rx_thread_main(void *arg) {
                 for (i = 0; i < ports->num_ports; i++) {
                         rx_count = rte_eth_rx_burst(ports->id[i], rx->queue_id, \
                                         pkts, PACKET_READ_SIZE);
-                        ports->rx_stats.rx[ports->id[i]] += rx_count;
 
                         /* Now process the NIC packets read */
                         if (likely(rx_count > 0)) {
+                                ports->rx_stats.rx[ports->id[i]] += rx_count;
                                 // If there is no running NF, we drop all the packets of the batch.
-                                if (!num_clients) {
-                                        (void)onv_pkt_send_to_special_nf0(rx, pkts, rx_count);
-                                } else {
+                                if (likely(num_clients)) {
                                         onvm_pkt_process_rx_batch(rx, pkts, rx_count);
+                                } else {
+                                        (void)onv_pkt_send_to_special_nf0(rx, pkts, rx_count);
                                 }
                         }
                 }
         }
-
         return 0;
 }
 
@@ -304,12 +310,12 @@ tx_thread_main(void *arg) {
         for (;;) {
                 /* Read packets from the client's tx queue and process them as needed */
                 for (i = tx->first_cl; i < tx->last_cl; i++) {
-                        tx_count = PACKET_READ_SIZE;
                         cl = &clients[i];
-                        if (!onvm_nf_is_valid(cl))
+                        if ((!onvm_nf_is_valid(cl))||(onvm_nf_is_paused(cl)))
                                 continue;
 #ifdef ENABLE_NFV_RESL
-                        if((onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(i)]) )) {
+#if 0
+                        if(unlikely(onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(i)]) )) {
                                 /* When NF(i) is Primary but Secondary is also active: Then Do not process packets in primary until secondary is stopped; Later only Primary must process */
                                 if((is_primary_active_nf_id(i))) {
                                         if(rte_atomic16_read(clients[get_associated_active_or_standby_nf_id(i)].shm_server)== 0)  {
@@ -322,6 +328,7 @@ tx_thread_main(void *arg) {
                                 }
                         }
 #endif
+#endif
                         /* try dequeuing max possible packets first, if that fails, get the
                          * most we can. Loop body should only execute once, maximum
                         while (tx_count > 0 &&
@@ -330,7 +337,7 @@ tx_thread_main(void *arg) {
                                                 PACKET_READ_SIZE);
                         }
                         */
-                        tx_count = rte_ring_dequeue_burst(cl->tx_q, (void **) pkts, tx_count);
+                        tx_count = rte_ring_dequeue_burst(cl->tx_q, (void **) pkts, PACKET_READ_SIZE);
 
                         /* Now process the Client packets read */
                         if (likely(tx_count > 0)) {
@@ -389,9 +396,8 @@ main(int argc, char *argv[]) {
         tx_lcores = rte_lcore_count() - rx_lcores - 1;
         #ifdef INTERRUPT_SEM
         wakeup_lcores = ONVM_NUM_WAKEUP_THREADS;
-        tx_lcores -= wakeup_lcores;
+        tx_lcores -= wakeup_lcores; //tx_lcores= (tx_lcores>2)?(2):(tx_lcores);
         #endif
-
 
         /* Offset cur_lcore to start assigning TX cores */
         cur_lcore += (rx_lcores-1);
@@ -429,10 +435,11 @@ main(int argc, char *argv[]) {
                 tx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
 
                 tx->first_cl = RTE_MIN(i * clients_per_tx, temp_num_clients);       //(inclusive) read from NF[0] to NF[clients_per_tx-1]
-                //tx->first_cl = RTE_MIN(i * clients_per_tx + 1, temp_num_clients);
-
                 tx->last_cl = RTE_MIN((i+1) * clients_per_tx, temp_num_clients);
-                //tx->last_cl = RTE_MIN((i+1) * clients_per_tx + 1, temp_num_clients);
+
+                //Dedicate 1 Tx for NF0 and next Tx for all NFs
+                //if(i==0) tx->first_cl = 0;tx->last_cl=1;
+                //else tx->first_cl = 1;tx->last_cl=temp_num_clients;
 
                 cur_lcore = rte_get_next_lcore(cur_lcore, 1, 1);
                 if (rte_eal_remote_launch(tx_thread_main, (void*)tx,  cur_lcore) == -EBUSY) {

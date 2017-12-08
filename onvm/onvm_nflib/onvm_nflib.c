@@ -56,6 +56,26 @@
 #define HAS_CLOCK_GETTIME_MONOTONIC
 #endif
 
+#define TEST_MEMCPY_OVERHEAD
+#ifdef TEST_MEMCPY_OVERHEAD
+#define MEMCPY_SIZE (0.125*1024)
+#define TEST_MEMCPY_MODE_PER_PACKET
+#ifndef TEST_MEMCPY_MODE_PER_PACKET
+#define TEST_MEMCPY_MODE_PER_BATCH
+#endif //TEST_MEMCPY_MODE_PER_PACKET
+void *base_memory = NULL;
+static inline void allocate_base_memory(void);
+static inline void allocate_base_memory(void) {
+        base_memory = calloc(1,2*MEMCPY_SIZE);
+}
+static inline void do_memcopy(void *from_pointer);
+static inline void do_memcopy(void *from_pointer) {
+        if(likely(base_memory && from_pointer)) {
+                memcpy(base_memory,from_pointer,MEMCPY_SIZE);
+        }
+}
+#endif //TEST_MEMCPY_OVERHEAD
+
 #define ENABLE_LOCAL_LATENCY_PROFILER
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
 #ifdef HAS_CLOCK_GETTIME_MONOTONIC
@@ -352,6 +372,9 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         get_start_time();
 #endif
 
+#ifdef TEST_MEMCPY_OVERHEAD
+        allocate_base_memory();
+#endif
         /* Put this NF's info struct onto queue for manager to process startup */
         if (rte_ring_enqueue(nf_info_ring, nf_info) < 0) {
                 rte_mempool_put(nf_info_mp, nf_info); // give back mermory
@@ -383,7 +406,6 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         }
         RTE_LOG(INFO, APP, "Using Instance ID %d\n", nf_info->instance_id);
         RTE_LOG(INFO, APP, "Using Service ID %d\n", nf_info->service_id);
-        //sleep(2);
 
         /* Now, map rx and tx rings into client space */
         rx_ring = rte_ring_lookup(get_rx_queue_name(nf_info->instance_id));
@@ -409,14 +431,9 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
 
         nf_info->pid = getpid();
 
-        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
         init_shared_cpu_info(nf_info->instance_id);
-
-        #ifdef USE_SIGNAL
-        //nf_info->pid = getpid();
-        #endif //USE_SIGNAL
-
-        #endif
+#endif
 
 #ifdef USE_CGROUPS_PER_NF_INSTANCE
         init_cgroup_info(nf_info);
@@ -448,23 +465,26 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
 }
 
 #ifdef INTERRUPT_SEM
-void onvm_nf_yeild(struct onvm_nf_info* info);
-void onvm_nf_yeild(struct onvm_nf_info* info) {
+void onvm_nf_yeild(struct onvm_nf_info* info, uint8_t reason_rxtx);
+void onvm_nf_yeild(struct onvm_nf_info* info, uint8_t reason_rxtx) {
         
         /* For now discard the special NF instance and put all NFs to wait */
-        if ((!ONVM_SPECIAL_NF) || (info->instance_id != 1)) { }
-        
-        tx_stats->wkup_count[info->instance_id] += 1;
+       // if ((!ONVM_SPECIAL_NF) || (info->instance_id != 1)) { }
+        if(reason_rxtx) {
+                tx_stats->tx_drop[info->instance_id] += 1;
+        }else {
+                tx_stats->wkup_count[info->instance_id] += 1;
+        }
+
+#ifdef USE_POLL_MODE
+        return;
+#endif
+
         rte_atomic16_set(flag_p, 1);  //rte_atomic16_cmpset(flag_p, 0, 1);
-        
 
-        #ifdef USE_SEMAPHORE
+#ifdef USE_SEMAPHORE
         sem_wait(mutex);
-        #endif
-
-        #ifdef USE_POLL_MODE
-        // no operation; continue;
-        #endif
+#endif
         
         //check and trigger explicit callabck before returning.
         if(need_ecb && nf_ecb) {
@@ -475,15 +495,10 @@ void onvm_nf_yeild(struct onvm_nf_info* info) {
 void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info);
 void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info)
 {
-        #ifdef USE_SEMAPHORE
+#ifdef USE_SEMAPHORE
         sem_post(mutex);
         //printf("Triggered to wakeup the NF thread internally");
-        #endif
-
-        #ifdef USE_POLL_MODE
-        rte_atomic16_read(clients[instance_id].shm_server);
-        #endif
-        
+#endif
         return;
 }
 
@@ -548,11 +563,11 @@ onvm_nflib_run(
         void *pkts[PKT_READ_SIZE];
         struct onvm_pkt_meta* meta;
         
-        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
         // To account NFs computation cost (sampled over SAMPLING_RATE packets)
         uint64_t start_tsc = 0; // end_tsc = 0;
-        #endif
-        
+#endif
+
         printf("\nClient process %d handling packets\n", info->instance_id);
         printf("[Press Ctrl-C to quit ...]\n");
 
@@ -562,7 +577,6 @@ onvm_nflib_run(
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         get_start_time();
 #endif
-
         nf_info->status = NF_WAITING_FOR_RUN;
         /* Put this NF's info struct onto queue for manager to process startup */
         if (rte_ring_enqueue(nf_info_ring, nf_info) < 0) {
@@ -580,31 +594,21 @@ onvm_nflib_run(
         int64_t ttl_elapsed = get_elapsed_time();
         printf("WAIT_TIME(START-->RUN): %li ns\n", ttl_elapsed);
 #endif
-        /* Note: There is no need for synchronization here; as NF Manager will update the status to Running and only then it will be registered to deliver the packets.
-        Also the NF MANGER will put the NF to the RUNNING STATE */
-        //nf_info->status = NF_RUNNING;
+
 
 #ifdef ENABLE_NFV_RESL
         //By default: let the process start in waiting state and let NF Manage wake up the thread when necessary.
-        //if(!is_primary_active_nf_id(nf_info->instance_id)) {
-                printf("\n Client [%d] is Waiting for SYNC Signal\n", nf_info->instance_id);
-                #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                        get_start_time();
-                #endif
-
-                onvm_nf_yeild(info);
-                #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                        get_stop_time();
-                        ttl_elapsed = get_elapsed_time();
-                        printf("SIGNAL_TIME(RUN-->RUNNING): %li ns\n", ttl_elapsed);
-                #endif
-
-                printf("\n Client [%d] is starting to process packets \n", nf_info->instance_id);
-        /* }
-        else {
-                //primary must begin to process packet only after standby NF stops processing packets
-                onvm_nf_yeild(info);
-        }*/
+        printf("\n Client [%d] is Waiting for SYNC Signal\n", nf_info->instance_id);
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_start_time();
+#endif
+        onvm_nf_yeild(info,0);
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        get_stop_time();
+        ttl_elapsed = get_elapsed_time();
+        printf("SIGNAL_TIME(RUN-->RUNNING): %li ns\n", ttl_elapsed);
+#endif
+        printf("\n Client [%d] is starting to process packets \n", nf_info->instance_id);
 #endif
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
@@ -624,7 +628,7 @@ onvm_nflib_run(
                 #ifdef INTERRUPT_SEM
                 if (rte_atomic16_read(flag_p) ==1) {
                         printf("\n Explicit Yield request from ONVM_MGR\n ");
-                        onvm_nf_yeild(info);
+                        onvm_nf_yeild(info,0);
                         printf("\n Explicit Yield Completed by NF\n");
                 }
                 #endif  // INTERRUPT_SEM
@@ -641,7 +645,9 @@ onvm_nflib_run(
                                 do
                                 {
                                         #ifdef INTERRUPT_SEM
-                                        onvm_nf_yeild(info);
+                                        //printf("\n Yielding till Tx Ring has space for tx_shadow buffer Packets \n");
+                                        onvm_nf_yeild(info,1);
+                                        //printf("\n Resuming till Tx Ring has space for tx_shadow buffer Packets \n");
                                         #endif
 
                                         if (tx_spkts <= rte_ring_free_count(tx_ring)) {
@@ -667,9 +673,11 @@ onvm_nflib_run(
 #endif
                 nb_pkts = (uint16_t)rte_ring_dequeue_burst(rx_ring, pkts, nb_pkts);
                 if(nb_pkts == 0) {
-                        #ifdef INTERRUPT_SEM
-                        onvm_nf_yeild(info);                     
-                        #endif
+#ifdef INTERRUPT_SEM
+                        //printf("\n Yielding till Rx Ring has Packets to process \n");
+                        onvm_nf_yeild(info,0);
+                        //printf("\n Resuming from Rx Ring has Packets to process \n");
+#endif
                         continue;
                 }
 
@@ -684,15 +692,20 @@ onvm_nflib_run(
                         meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
 
 
-                        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
                         start_ppkt_processing_cost(&start_tsc);
-                        #endif
+#endif
 
                         ret_act = (*handler)((struct rte_mbuf*)pkts[i], meta);
                         
-                        #ifdef INTERRUPT_SEM
+#if defined (ENABLE_NFV_RESL) && defined (TEST_MEMCPY_OVERHEAD) && defined(TEST_MEMCPY_MODE_PER_PACKET)
+                        do_memcopy(nf_info->nf_state_mempool);
+#endif
+
+
+#ifdef INTERRUPT_SEM
                         end_ppkt_processing_cost(start_tsc);
-                        #endif  //INTERRUPT_SEM
+#endif  //INTERRUPT_SEM
 
                         /* NF returns 0 to return packets or 1 to buffer */
                         if(likely(ret_act == 0)) {
@@ -713,21 +726,26 @@ onvm_nflib_run(
                                 rte_ring_sp_enqueue(rx_sring,pkts[i]);
 #endif
                         }
-                }
+                } //End Batch Process
 
-                #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+#if defined (ENABLE_NFV_RESL) && defined (TEST_MEMCPY_OVERHEAD) && defined(TEST_MEMCPY_MODE_PER_BATCH)
+                do_memcopy(nf_info->nf_state_mempool);
+#endif //TEST_MEMCPY_OVERHEAD
+
+#ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
                 rte_timer_manage();
-                #endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+#endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
 
                 if (unlikely(tx_batch_size > 0 && rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size) == -ENOBUFS)) {
-
-                        #if defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
+#if defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
                         int ret_status = -ENOBUFS;
                         do
                         {
-                                #ifdef INTERRUPT_SEM
-                                onvm_nf_yeild(info);
-                                #endif
+#ifdef INTERRUPT_SEM
+                                //printf("\n Yielding till Tx Ring has place to store Packets\n");
+                                onvm_nf_yeild(info,1);
+                                //printf("\n Resuming from Tx Ring wait to store Packets\n");
+#endif
 
                                 if (tx_batch_size <= rte_ring_free_count(tx_ring)) {
                                         ret_status = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size);
@@ -737,7 +755,7 @@ onvm_nflib_run(
                                         }
                                 }
                         }while(ret_status);
-                        #endif  //DROP_APPROACH_3
+#endif  //DROP_APPROACH_3
                 } else {
                         tx_stats->tx[info->instance_id] += tx_batch_size;
                 }

@@ -229,7 +229,7 @@ whether_wakeup_client(int instance_id)
 #ifdef ENABLE_NFV_RESL
         //If PRIMARY(ACTIVE) NF IS ALIVE, then DO NOT WAKE THE (SECONDARY) STANDBY NF;
         //if((!is_primary_active_nf_id(instance_id)) && (NF_RUNNING == clients[get_associated_active_or_standby_nf_id(instance_id)].info->status)) {
-        if((!is_primary_active_nf_id(instance_id)) && (onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(instance_id)]) ) ) {
+        if(unlikely((is_secondary_active_nf_id(instance_id))) && likely((onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(instance_id)])) ) ) {
                 return 0;
         }
         //IF ONLY EITHER IS ALIVE THEN WAKEUP THIS ONE
@@ -283,6 +283,7 @@ wakeup_client_internal(int instance_id) {
                 if (rte_atomic16_read(clients[instance_id].shm_server) ==1) {
                         rte_atomic16_set(clients[instance_id].shm_server, 0);
                         notify_client(instance_id);
+                        clients[instance_id].stats.wakeup_count+=1;
                 }
         }
         #ifdef ENABLE_NF_BACKPRESSURE
@@ -303,7 +304,6 @@ wakeup_client(int instance_id, struct wakeup_info *wakeup_info)  {
 
         if(1 == ret && wakeup_info) {
                 wakeup_info->num_wakeups += 1;
-                clients[instance_id].stats.wakeup_count+=1;
         }
         return;
 

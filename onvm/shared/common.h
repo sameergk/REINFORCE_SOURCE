@@ -192,7 +192,9 @@ struct onvm_service_chain;
 
 /******************************************************************************/
 // NFV RESILIENCY related extensions, control macros and defines
+#ifdef INTERRUPT_SEM
 #define ENABLE_NFV_RESL             // global nvf_Resl feature flag
+#endif //INTERRUPT_SEM
 
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
@@ -213,6 +215,7 @@ struct onvm_service_chain;
 
 #define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
 #define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
+#define ACTIVE_NF_MASK   (MAX_ACTIVE_CLIENTS-1)
 #endif  //#ifdef ENABLE_NFV_RESL
 /******************************************************************************/
 //#define ENABLE_VXLAN
@@ -416,6 +419,9 @@ struct onvm_service_chain {
 #ifdef USE_SEMAPHORE
 #define MP_CLIENT_SEM_NAME "MProc_Client_%u_SEM"
 #endif //USE_SEMAPHORE
+#ifdef USE_POLL_MODE
+#define MP_CLIENT_SEM_NAME "MProc_Client_%u_SEM"
+#endif //USE_POLL_MODE
 
 
 //1000003 1000033 1000037 1000039 1000081 1000099 1000117 1000121 1000133
@@ -435,15 +441,15 @@ struct onvm_service_chain {
 #define _NF_QUEUE_NAME "NF_INFO_QUEUE"
 #define _NF_MEMPOOL_NAME "NF_INFO_MEMPOOL"
 
-#define NF_WAITING_FOR_ID 0     // First step in startup process, doesn't have ID confirmed by manager yet
-#define NF_STARTING 1           // When a NF is in the startup process and already has an id
-#define NF_WAITING_FOR_RUN  2   // When NF asserts itself to run and ready to process packets ; requests manager to be considered for delivering packets.
-#define NF_RUNNING 3            // Running normally
-#define NF_PAUSED  4            // NF is not receiving packets, but may in the future
-#define NF_STOPPED 5            // NF has stopped and in the shutdown process
-#define NF_ID_CONFLICT 6        // NF is trying to declare an ID already in use
-#define NF_NO_IDS 7             // There are no available IDs for this NF
-
+#define NF_WAITING_FOR_ID   (0x00)              // First step in startup process, doesn't have ID confirmed by manager yet
+#define NF_STARTING         (0x01)              // When a NF is in the startup process and already has an id
+#define NF_WAITING_FOR_RUN  (0x02)              // When NF asserts itself to run and ready to process packets ; requests manager to be considered for delivering packets.
+#define NF_RUNNING          (0x03)              // Running normally
+#define NF_PAUSED_BIT       (0x04)              // Value 4 = Third Bit indicating Paused Status
+#define NF_PAUSED  (NF_PAUSED_BIT|NF_RUNNING)   // NF is not receiving packets, but may in the future
+#define NF_STOPPED          (0x08)              // NF has stopped and in the shutdown process
+#define NF_ID_CONFLICT      (0x10)              // NF is trying to declare an ID already in use
+#define NF_NO_IDS           (0X20)              // There are no available IDs for this NF
 #define NF_NO_ID -1
 
 /*
@@ -500,14 +506,14 @@ get_tx_squeue_name(unsigned id) {
 #endif  //ENABLE_SHADOW_RINGS
 static inline unsigned
 get_associated_active_or_standby_nf_id(unsigned nf_id) {
-        if(nf_id < MAX_ACTIVE_CLIENTS) {
-                return (nf_id|MAX_ACTIVE_CLIENTS);
+        if(nf_id&MAX_ACTIVE_CLIENTS) {
+                return (nf_id & ACTIVE_NF_MASK);
         }
-        return (nf_id&(MAX_ACTIVE_CLIENTS-1));
+        return (nf_id|MAX_ACTIVE_CLIENTS);
 }
 static inline unsigned
 is_primary_active_nf_id(unsigned nf_id) {
-        return ((nf_id < MAX_ACTIVE_CLIENTS));
+        return ((nf_id ^ MAX_ACTIVE_CLIENTS) & MAX_ACTIVE_CLIENTS); //return (!(nf_id & MAX_ACTIVE_CLIENTS)); //return ((nf_id < MAX_ACTIVE_CLIENTS));
 }
 static inline unsigned
 is_secondary_active_nf_id(unsigned nf_id) {
@@ -515,10 +521,11 @@ is_secondary_active_nf_id(unsigned nf_id) {
 }
 static inline unsigned
 get_associated_active_nf_id(unsigned nf_id) {
-        if(nf_id < MAX_ACTIVE_CLIENTS) {
-                return (nf_id);
-        }
-        return (nf_id&(MAX_ACTIVE_CLIENTS-1));
+        return (nf_id & ACTIVE_NF_MASK);
+}
+static inline unsigned
+get_associated_standby_nf_id(unsigned nf_id) {
+        return (nf_id | MAX_ACTIVE_CLIENTS);
 }
 #endif
 
@@ -742,5 +749,10 @@ typedef struct nf_flow_list {
         fipo_per_flow_list *tail;
 }nf_flow_list_t;
 #endif //ENABLE_NF_BACKPRESSURE
+
+#define TEST_INLINE_FUNCTION_CALL
+#ifdef TEST_INLINE_FUNCTION_CALL
+typedef int(*nf_pkt_handler)(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta);
+#endif
 
 #endif  // _COMMON_H_
