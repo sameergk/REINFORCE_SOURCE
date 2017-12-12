@@ -58,6 +58,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include "onvm_sort.h"
+#include "onvm_comm_utils.h"
 
 //check on each node by executing command  $"getconf LEVEL1_DCACHE_LINESIZE" or cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
 #define ONVM_CACHE_LINE_SIZE (64)
@@ -129,7 +130,7 @@
 
 
 /* Enable back-pressure handling to throttle NFs upstream */
-//#define ENABLE_NF_BACKPRESSURE
+#define ENABLE_NF_BACKPRESSURE
 
 #ifdef ENABLE_NF_BACKPRESSURE
 //#define ENABLE_GLOBAL_BACKPRESSURE  //Enable this if want to test with default chain and choose one of the below backpressure modes
@@ -646,47 +647,6 @@ typedef struct per_core_nf_pool {
 }per_core_nf_pool_t;
 #endif //ENABLE_NF_BACKPRESSURE
 
-#define SECOND_TO_MICRO_SECOND          (1000*1000)
-#define NANO_SECOND_TO_MICRO_SECOND(x)  (double)((x)/(1000))
-#define MICRO_SECOND_TO_SECOND(x)       (double)((x)/(SECOND_TO_MICRO_SECOND))
-#define USE_THIS_CLOCK  CLOCK_MONOTONIC //CLOCK_THREAD_CPUTIME_ID //CLOCK_PROCESS_CPUTIME_ID //CLOCK_MONOTONIC
-typedef struct stats_time_info {
-        uint8_t in_read;
-        struct timespec prev_time;
-        struct timespec cur_time;
-}nf_stats_time_info_t;
-static inline int get_current_time(struct timespec *pTime);
-static inline unsigned long get_difftime_us(struct timespec *start, struct timespec *end);
-static inline int get_current_time(struct timespec *pTime) {
-        if (clock_gettime(USE_THIS_CLOCK, pTime) == -1) {
-              perror("\n clock_gettime");
-              return 1;
-        }
-        return 0;
-}
-static inline unsigned long get_difftime_us(struct timespec *pStart, struct timespec *pEnd) {
-        unsigned long delta = ( ((pEnd->tv_sec - pStart->tv_sec) * SECOND_TO_MICRO_SECOND) +
-                     ((pEnd->tv_nsec - pStart->tv_nsec) /1000) );
-        //printf("Delta [%ld], sec:[%ld]: nanosec [%ld]", delta, (pEnd->tv_sec - pStart->tv_sec), (pEnd->tv_nsec - pStart->tv_nsec));
-        return delta;
-}
-#include <rte_cycles.h>
-typedef struct stats_cycle_info {
-        uint8_t in_read;
-        uint64_t prev_cycles;
-        uint64_t cur_cycles;
-}stats_cycle_info_t;
-static inline uint64_t get_current_cpu_cycles(void);
-static inline uint64_t get_diff_cpu_cycles_in_us(uint64_t start, uint64_t end);
-static inline uint64_t get_current_cpu_cycles(void) {
-        return rte_rdtsc_precise();
-}
-static inline uint64_t get_diff_cpu_cycles_in_us(uint64_t start, uint64_t end) {
-        if(end > start) {
-                return (uint64_t) (((end -start)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz());
-        }
-        return 0;
-}
 
 #ifdef ENABLE_NF_BACKPRESSURE
 typedef struct sc_entries {
@@ -699,7 +659,7 @@ typedef struct sc_entries {
 #define BOTTLENECK_NF_STATUS_DROP_MARKED     (0x02)
 #define BOTTLENECK_NF_STATUS_RESET           (0x00)
 typedef struct bottleneck_nf_entries {
-        struct timespec s_time;
+        onvm_time_t s_time;
         uint16_t enqueue_status;
         uint16_t nf_id;
         uint16_t enqueued_ctr;

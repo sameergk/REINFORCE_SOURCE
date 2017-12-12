@@ -52,6 +52,7 @@ SRCS-y := onvm_pkt_helper.c onvm_sc_common.c onvm_sc_mgr.c onvm_flow_table.c onv
 SRCS-y += histogram.c
 SRCS-y += onvm_sort.c
 SRCS-y += onvm_ringbuf.c
+SRCS-y += onvm_comm_utils.c
 CFLAGS += -DUSE_HISTOGRAM_AS_LIB
 
 CFLAGS += $(WERROR_FLAGS) -O3

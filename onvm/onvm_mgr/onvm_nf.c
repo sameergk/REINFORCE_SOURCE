@@ -854,7 +854,7 @@ int enqueu_nf_to_bottleneck_watch_list(uint16_t nf_id) {
         if(bottleneck_nf_list.nf[nf_id].enqueue_status) return 1;
         bottleneck_nf_list.nf[nf_id].enqueue_status = BOTTLENECK_NF_STATUS_WAIT_ENQUEUED;
         bottleneck_nf_list.nf[nf_id].nf_id = nf_id;
-        get_current_time(&bottleneck_nf_list.nf[nf_id].s_time);
+        onvm_util_get_cur_time(&bottleneck_nf_list.nf[nf_id].s_time);
         bottleneck_nf_list.nf[nf_id].enqueued_ctr+=1;
         bottleneck_nf_list.entires++;
         return 0;
@@ -868,7 +868,7 @@ int dequeue_nf_from_bottleneck_watch_list(uint16_t nf_id) {
         if(!bottleneck_nf_list.nf[nf_id].enqueue_status) return 1;
         bottleneck_nf_list.nf[nf_id].enqueue_status = BOTTLENECK_NF_STATUS_RESET;
         bottleneck_nf_list.nf[nf_id].nf_id = nf_id;
-        get_current_time(&bottleneck_nf_list.nf[nf_id].s_time);
+        onvm_util_get_cur_time(&bottleneck_nf_list.nf[nf_id].s_time);
         bottleneck_nf_list.entires--;
         return 0;
 #else
@@ -880,8 +880,8 @@ int check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list(void) {
 #if defined(ENABLE_NF_BACKPRESSURE) && defined(USE_BKPR_V2_IN_TIMER_MODE)
         int ret = 0;
         uint16_t nf_id = 0;
-        struct timespec now;
-        get_current_time(&now);
+        onvm_time_t now;
+        onvm_util_get_cur_time(&now);
         for(; nf_id < MAX_CLIENTS; nf_id++) {
 
                 if(BOTTLENECK_NF_STATUS_RESET == bottleneck_nf_list.nf[nf_id].enqueue_status) continue;
@@ -899,7 +899,7 @@ int check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list(void) {
                 else if(BOTTLENECK_NF_STATUS_WAIT_ENQUEUED & bottleneck_nf_list.nf[nf_id].enqueue_status) {
                         //ring count is still beyond the water mark threshold
                         if(rte_ring_count(clients[nf_id].rx_q) >= CLIENT_QUEUE_RING_WATER_MARK_SIZE) {
-                                if((0 == WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US)||((WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US) <= get_difftime_us(&bottleneck_nf_list.nf[nf_id].s_time, &now))) {
+                                if((0 == WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US)||((WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US) <= onvm_util_get_difftime_us(&bottleneck_nf_list.nf[nf_id].s_time, &now))) {
                                         bottleneck_nf_list.nf[nf_id].enqueue_status = BOTTLENECK_NF_STATUS_DROP_MARKED;
                                         onvm_mark_all_entries_for_bottleneck(nf_id);
                                         bottleneck_nf_list.nf[nf_id].marked_ctr+=1;
@@ -911,7 +911,7 @@ int check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list(void) {
                         }
                         //ring count has dropped
                         else  if(rte_ring_count(clients[nf_id].rx_q) < CLIENT_QUEUE_RING_LOW_WATER_MARK_SIZE) {
-                                if((0 == WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US)||((WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US) <= get_difftime_us(&bottleneck_nf_list.nf[nf_id].s_time, &now))) {
+                                if((0 == WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US)||((WAIT_TIME_BEFORE_MARKING_OVERFLOW_IN_US) <= onvm_util_get_difftime_us(&bottleneck_nf_list.nf[nf_id].s_time, &now))) {
                                         dequeue_nf_from_bottleneck_watch_list(nf_id);
                                         bottleneck_nf_list.nf[nf_id].enqueue_status = BOTTLENECK_NF_STATUS_RESET;
                                         clients[nf_id].is_bottleneck = 0;

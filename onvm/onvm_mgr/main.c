@@ -139,14 +139,14 @@ nf_load_stats_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
         static nf_stats_time_info_t nf_stat_time;
         if(nf_stat_time.in_read == 0) {
-                if( get_current_time(&nf_stat_time.prev_time) == 0) {
+                if( onvm_util_get_cur_time(&nf_stat_time.prev_time) == 0) {
                         nf_stat_time.in_read = 1;
                 }
                 return ;
         }
 
-        if(0 == get_current_time(&nf_stat_time.cur_time)) {
-                unsigned long difftime_us = get_difftime_us(&nf_stat_time.prev_time, &nf_stat_time.cur_time);
+        if(0 == onvm_util_get_cur_time(&nf_stat_time.cur_time)) {
+                unsigned long difftime_us = onvm_util_get_difftime_us(&nf_stat_time.prev_time, &nf_stat_time.cur_time);
                 if(difftime_us) {
                         onvm_nf_stats_update(difftime_us);
                 }

@@ -78,138 +78,7 @@ static inline void do_memcopy(void *from_pointer) {
 
 #define ENABLE_LOCAL_LATENCY_PROFILER
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-  struct timespec start, stop;
-  struct timespec gstart, gstop;
-#else
-  struct timeval start, stop;
-  struct timeval gstart, gstop;
-#endif
-int64_t delta = 0;
-int get_cur_time(void* ct);
-int get_start_time(void);
-int get_stop_time(void);
-int64_t get_elapsed_time(void);
-int get_gstart_time(void);
-int get_gstop_time(void);
-int64_t get_gelapsed_time(void);
-int get_cur_time(void* ct)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-    if (clock_gettime(USE_THIS_CLOCK,(struct timespec *)ct) == -1) {
-      perror("clock_gettime");
-      return 1;
-    }
-#else
-    if (gettimeofday(&ct, NULL) == -1) {
-      perror("gettimeofday");
-      return 1;
-    }
-#endif
-    return 0;
-}
-int get_gstart_time(void)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-    if (clock_gettime(USE_THIS_CLOCK, &gstart) == -1) {
-      perror("clock_gettime");
-      return 1;
-    }
-#else
-    if (gettimeofday(&gstart, NULL) == -1) {
-      perror("gettimeofday");
-      return 1;
-    }
-#endif
-    return 0;
-}
-
-int get_start_time(void)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-    if (clock_gettime(USE_THIS_CLOCK, &start) == -1) {
-      perror("clock_gettime");
-      return 1;
-    }
-#else
-    if (gettimeofday(&start, NULL) == -1) {
-      perror("gettimeofday");
-      return 1;
-    }
-#endif
-    return 0;
-}
-
-int get_stop_time(void)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-    if (clock_gettime(USE_THIS_CLOCK, &stop) == -1) {
-      perror("clock_gettime");
-      return 1;
-    }
-#else
-    if (gettimeofday(&stop, NULL) == -1) {
-      perror("gettimeofday");
-      return 1;
-    }
-#endif
-    return 0;
-}
-int get_gstop_time(void)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-    if (clock_gettime(USE_THIS_CLOCK, &gstop) == -1) {
-      perror("clock_gettime");
-      return 1;
-    }
-#else
-    if (gettimeofday(&gstop, NULL) == -1) {
-      perror("gettimeofday");
-      return 1;
-    }
-#endif
-    return 0;
-}
-
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-int64_t get_ttl_time(struct timespec start, struct timespec stop);
-int64_t get_ttl_time(struct timespec start, struct timespec stop)
-{
-#else
-int64_t get_ttl_time(struct timeval start, struct timeval stop)
-#endif
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-        delta = ((stop.tv_sec - start.tv_sec) * 1000000000 +
-             (stop.tv_nsec - start.tv_nsec));
-#else
-        delta = (stop.tv_sec - start.tv_sec) * 1000000000 +
-             (stop.tv_usec - start.tv_usec) * 1000;
-#endif
-        return delta;
-}
-
-int64_t get_elapsed_time(void)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-        delta = ((stop.tv_sec - start.tv_sec) * 1000000000 +
-             (stop.tv_nsec - start.tv_nsec));
-#else
-        delta = (stop.tv_sec - start.tv_sec) * 1000000000 +
-             (stop.tv_usec - start.tv_usec) * 1000;
-#endif
-        return delta;
-}
-int64_t get_gelapsed_time(void)
-{
-#ifdef HAS_CLOCK_GETTIME_MONOTONIC
-        delta = ((gstop.tv_sec - gstart.tv_sec) * 1000000000 +
-             (gstop.tv_nsec - gstart.tv_nsec));
-#else
-        delta = (gstop.tv_sec - gstart.tv_sec) * 1000000000 +
-             (gstop.tv_usec - gstart.tv_usec) * 1000;
-#endif
-        return delta;
-}
+onvm_interval_timer_t ts, g_ts;
 #endif //ENABLE_LOCAL_LATENCY_PROFILER
 /*********************************************************************/
 
@@ -312,7 +181,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         int retval_eal, retval_parse, retval_final;
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_gstart_time();
+        onvm_util_get_start_time(&g_ts);
 #endif
         if ((retval_eal = rte_eal_init(argc, argv)) < 0)
                 return -1;
@@ -369,7 +238,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
                 rte_exit(EXIT_FAILURE, "Cannot get nf_info ring");
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_start_time();
+        onvm_util_get_start_time(&ts);
 #endif
 
 #ifdef TEST_MEMCPY_OVERHEAD
@@ -389,8 +258,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         }
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_stop_time();
-        int64_t ttl_elapsed = get_elapsed_time();
+        int64_t ttl_elapsed = onvm_util_get_elapsed_time(&ts);
         printf("WAIT_TIME(INIT-->START): %li ns\n", ttl_elapsed);
 #endif
         /* This NF is trying to declare an ID already in use. */
@@ -502,29 +370,14 @@ void onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_info* info)
         return;
 }
 
-uint64_t compute_start_cycles(void);// __attribute__((always_inline));
-uint64_t compute_total_cycles(uint64_t start_t); //__attribute__((always_inline));
-
-uint64_t compute_start_cycles(void)
-{
-        return rte_rdtsc_precise();
-        //return rte_rdtsc();
-        //return (uint64_t) 100;
-}
-uint64_t compute_total_cycles(uint64_t start_t)
-{
-       uint64_t end_t = compute_start_cycles();
-       return (end_t - start_t);
-}
-
 static inline void start_ppkt_processing_cost(uint64_t *start_tsc) {
         if (counter % SAMPLING_RATE == 0) {
-                *start_tsc = compute_start_cycles(); //rte_rdtsc();
+                *start_tsc = onvm_util_get_current_cpu_cycles();//compute_start_cycles(); //rte_rdtsc();
         }
 }
 static inline void end_ppkt_processing_cost(uint64_t start_tsc) {
         if (counter % SAMPLING_RATE == 0) {
-                tx_stats->comp_cost[nf_info->instance_id] = compute_total_cycles(start_tsc);
+                tx_stats->comp_cost[nf_info->instance_id] = onvm_util_get_elapsed_cpu_cycles(start_tsc);
                 if (tx_stats->comp_cost[nf_info->instance_id] > RTDSC_CYCLE_COST) {
                         tx_stats->comp_cost[nf_info->instance_id] -= RTDSC_CYCLE_COST;
                 }
@@ -575,7 +428,7 @@ onvm_nflib_run(
         signal(SIGINT, onvm_nflib_handle_signal);
         
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_start_time();
+        onvm_util_get_start_time(&ts);
 #endif
         nf_info->status = NF_WAITING_FOR_RUN;
         /* Put this NF's info struct onto queue for manager to process startup */
@@ -590,8 +443,7 @@ onvm_nflib_run(
                 nanosleep(&req, &res); //sleep(1); //better poll for some time and exit if failed within that time.?
         }
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_stop_time();
-        int64_t ttl_elapsed = get_elapsed_time();
+        int64_t ttl_elapsed = onvm_util_get_elapsed_time(&ts);
         printf("WAIT_TIME(START-->RUN): %li ns\n", ttl_elapsed);
 #endif
 
@@ -600,20 +452,18 @@ onvm_nflib_run(
         //By default: let the process start in waiting state and let NF Manage wake up the thread when necessary.
         printf("\n Client [%d] is Waiting for SYNC Signal\n", nf_info->instance_id);
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_start_time();
+        onvm_util_get_start_time(&ts);
 #endif
         onvm_nf_yeild(info,0);
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_stop_time();
-        ttl_elapsed = get_elapsed_time();
+        ttl_elapsed = onvm_util_get_elapsed_time(&ts);
         printf("SIGNAL_TIME(RUN-->RUNNING): %li ns\n", ttl_elapsed);
 #endif
         printf("\n Client [%d] is starting to process packets \n", nf_info->instance_id);
 #endif
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        get_gstop_time();
-        ttl_elapsed = get_gelapsed_time();
+        ttl_elapsed = onvm_util_get_elapsed_time(&g_ts);
         printf("WAIT_TIME(INIT-->START-->RUN-->RUNNING): %li ns\n", ttl_elapsed);
 #endif
         for (; keep_running;) {
