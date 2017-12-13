@@ -182,12 +182,11 @@ struct client {
 #endif //#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1)
 
 
-//#ifdef ENABLE_NF_BACKPRESSURE
-#if defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+#if defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
                 uint16_t max_rx_q_len;
                 uint16_t max_tx_q_len;
                 uint16_t bkpr_count;
-#endif //defined (ENABLE_NF_BACKPRESSURE) && defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+#endif //defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
         } stats;
         
 #ifdef ENABLE_NF_BACKPRESSURE

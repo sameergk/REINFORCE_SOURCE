@@ -67,35 +67,46 @@
 #define MIN(a,b) ((a) < (b)? (a):(b))
 #define MAX(a,b) ((a) > (b)? (a):(b))
 
-#define ARBITER_PERIOD_IN_US            (100)       // 250 micro seconds or 100 micro seconds
+#define ARBITER_PERIOD_IN_US (100)  // 250 or 100 micro seconds
+//#define USE_SINGLE_NIC_PORT       // NEEDED FOR VXLAN?
+#define ONVM_MAX_CHAIN_LENGTH 12    // the maximum chain length
+#define MAX_CLIENTS 32              // total number of NFs allowed
+#define MAX_SERVICES 32             // total number of unique services allowed
+#define MAX_CLIENTS_PER_SERVICE 8   // max number of NFs per service.
 
-//#define USE_SINGLE_NIC_PORT        // NEEDED FOR VXLAN?
-
-#define ONVM_MAX_CHAIN_LENGTH 12   // the maximum chain length
-#define MAX_CLIENTS 32            // total number of NFs allowed
-#define MAX_SERVICES 32           // total number of unique services allowed
-#define MAX_CLIENTS_PER_SERVICE 8 // max number of NFs per service.
-
-#define ONVM_ENABLE_SPEACILA_NF //Enable Special NF0 service in onvm_mgr
-#define ONVM_SPECIAL_NF_SERVICE_ID      (0)
-#define ONVM_SPECIAL_NF_INSTANCE_ID     (0)
+#define ONVM_ENABLE_SPEACILA_NF     //Enable Special NF0 service in onvm_mgr
+#define ONVM_SPECIAL_NF_SERVICE_ID  (0)
+#define ONVM_SPECIAL_NF_INSTANCE_ID (0)
 
 #define ONVM_NF_ACTION_DROP 0   // drop packet
 #define ONVM_NF_ACTION_NEXT 1   // to whatever the next action is configured by the SDN controller in the flow table
 #define ONVM_NF_ACTION_TONF 2   // send to the NF specified in the argument field (assume it is on the same host)
-#define ONVM_NF_ACTION_OUT 3    // send the packet out the NIC port set in the argument field
+#define ONVM_NF_ACTION_OUT  3   // send the packet out the NIC port set in the argument field
 #define ONVM_NF_ACTION_TO_NF_INSTANCE   4   //send to NF Instance ID (specified in the meta->destination. Note unlike ONVM_NF_ACTION_TONF which means to NF SERVICE ID, this is direct destination instance ID.
 
 /* Note: Make the PACKET_READ_SIZE defined in onvm_mgr.h same as PKT_READ_SIZE defined in onvm_nflib_internal.h, better get rid of latter */
-// enable: PRE_PROCESS_DROP_ON_RX, DROP_APPROACH_3,DROP_APPROACH_3_WITH_SYNC
-#define PRE_PROCESS_DROP_ON_RX  // Feature flag for addressing NF Local Back-pressure:: To lookup NF Tx queue occupancy and drop packets pro-actively before pushing to NFs Rx Ring.
-#define DROP_APPROACH_3         // Handle inside NF_LIB:: Make the NF to block until it cannot push the packets to the Tx Ring, Subsequent packets will be dropped in onvm_mgr context by Rx/Tx Threads < 3 options: Poll till Tx is free, Yield or Block on Semaphore>
-#define DROP_APPROACH_3_WITH_SYNC       //sub-option for approach 3: Results are good, preferred approach.
+/* // enable: NF_LOCAL_BACKPRESSURE (PRE_PROCESS_DROP_ON_RX, DROP_APPROACH_3,DROP_APPROACH_3_WITH_SYNC)
+   This Feature flag addresses NF Local Back-pressure:: Avoid wasted work (drop of packets) within NF.
+   By looking up NFs Tx queue occupancy and inhibit NF from processing excessive packets that cannot be pushed to Tx Ring.
+   Handle inside NF_LIB:: Make the NF to block until it cannot push the packets to the Tx Ring, Subsequent packets will be dropped in onvm_mgr context by Rx/Tx Threads < 3 options: Poll till Tx is free, Yield or Block on Semaphore>
+   With NF YIELD/SYNC: Results are pretty good. Hence the preferred approach.
+*/
+#define NF_LOCAL_BACKPRESSURE
+/* Feature Flag to enable Interrupt driven NFs(wake up/sleep governed by IPC). */
+#define INTERRUPT_SEM
+/* Enable Extra Debug Logs on all components */
+//#define __DEBUG_LOGS__
 
-#define INTERRUPT_SEM           // To enable NF thread interrupt mode wake.  Better to move it as option in Makefile
+/* Sub features for INTERRUPT_SEMANTICS for NFs */
+#ifdef INTERRUPT_SEM
+#define USE_SEMAPHORE  // Use Semaphore for IPC
+/* Enable back-pressure handling to throttle NFs upstream */
+#define ENABLE_NF_BACKPRESSURE
+/* Enable NFV Resiliency Feature Flag */
+#define ENABLE_NFV_RESL
+#endif
 
-#define USE_SEMAPHORE           // Use Semaphore for IPC
-#if (defined(INTERRUPT_SEM) && !defined(USE_SEMAPHORE))
+#if (!defined(USE_SEMAPHORE))
 #define USE_POLL_MODE
 #endif
 
@@ -103,72 +114,106 @@
 #include <zmq.h>
 #endif
 
-/* Enable Extra Debug Logs on all components */
-//#define __DEBUG_LOGS__
-
-/* Enable this flag to assign a distinct CGROUP for each NF instance */
-// enable: All 3 (USE_CGROUPS_PER_NF_INSTANCE, ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT,USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE)
-//#define USE_CGROUPS_PER_NF_INSTANCE                 // To create CGroup per NF instance
-//#define ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT     // To dynamically evaluate and periodically adjust weight on NFs cpu share
-//#define USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE       // Enable Load*comp_cost (Helpful for TCP but not so for UDP (pktgen Moongen)
-
-/* For Bottleneck on Rx Ring; whether or not to Drop packets from Rx/Tx buf during flush_operation
- * Note: This is one of the likely cause of Out-of_order packets in the OpenNetVM (with Bridge) case: */
-//#define DO_NOT_DROP_PKTS_ON_FLUSH_FOR_BOTTLENECK_NF   //Disable drop of existing packets -- may have caveats on when next flush would operate on that Tx/Rx buffer..
-                                                        //Repercussions in onvm_pkt.c: onvm_pkt_enqueue_nf() to handle overflow and stop putting packet in full buffer and drop new ones instead.
-                                                        //Observation: Good for TCP use cases, but with PktGen,Moongen dents line rate approx 0.3Mpps slow down
-
-/* Enable watermark level NFs Tx and Rx Rings */
-// enable: ENABLE_RING_WATERMARK
-//#define ENABLE_RING_WATERMARK // details on count in the onvm_init.h
-
-/* Enable ECN CE FLAG : Feature Flag to enable marking ECN_CE flag on the flows that pass through the NFs with Rx Ring buffers exceeding the watermark level.
- * Dependency: Must have ENABLE_RING_WATERMARK feature defined. and HIGH and LOW Thresholds to be set. otherwise, marking may not happen at all.. Ideally, marking should be done after dequeue from Tx, to mark if Rx is overbudget..
- * On similar lines, even the back-pressure marking must be done for all flows after dequeue from the Tx Ring.. */
-// enable: ENABLE_ECN_CE
-//#define ENABLE_ECN_CE
-
-
-/* Enable back-pressure handling to throttle NFs upstream */
-#define ENABLE_NF_BACKPRESSURE
-
+/******************************************************************************/
+/* NF BACKPRESSURE REALTED EXTENSION FEATURES AND OPTIONS */
 #ifdef ENABLE_NF_BACKPRESSURE
-//#define ENABLE_GLOBAL_BACKPRESSURE  //Enable this if want to test with default chain and choose one of the below backpressure modes
+//forward declaration either store reference of onvm_flow_entry or onvm_service_chain (latter may be sufficient)
+struct onvm_flow_entry;
+struct onvm_service_chain;
 
-#define NF_BACKPRESSURE_APPROACH_1    //Throttle enqueue of packets to the upstream NFs (handle in onvm_pkts_enqueue)
-//#define NF_BACKPRESSURE_APPROACH_2  //Throttle upstream NFs from getting scheduled (handle in wakeup mgr)
-//#define NF_BACKPRESSURE_APPROACH_3  //Throttle enqueue of packets to the upstream NFs (handle in NF_LIB with HOL blocking or pre-buffering of packets internally for bottlenecked chains)
+//Enable Global backpressure to test with default chain and additionally choose one of the below backpressure modes (Preferred Usage: Disabled)
+//#define ENABLE_GLOBAL_BACKPRESSURE
 
+//#1 Throttle enqueue of packets to the upstream NFs (handle in onvm_pkts_enqueue) (Preferred Usage: Enabled)
+#define NF_BACKPRESSURE_APPROACH_1
+//#2 Throttle upstream NFs from getting scheduled (handle in wakeup mgr) (Preferred Usage: Disabled)
+//#define NF_BACKPRESSURE_APPROACH_2
+//#3 Throttle enqueue of packets to the upstream NFs (handle in NF_LIB with HOL blocking or pre-buffering of packets internally for bottlenecked chains) (Preferred Usage: Disabled)
+//#define NF_BACKPRESSURE_APPROACH_3
 // Extensions and sub-options for Back_Pressure handling
-#define DROP_PKTS_ONLY_AT_BEGGINING           // Extension to approach 1 to make packet drops only at the beginning on the chain (i.e only at the time to enqueue to first NF). (Note: can Enable)
 
-//#define USE_BKPR_V2_IN_TIMER_MODE       //Use this flag if the Timer Thread can perform the Backpressure setting
-#if !defined(USE_BKPR_V2_IN_TIMER_MODE) && defined(NF_BACKPRESSURE_APPROACH_1)
-#define ENABLE_SAVE_BACKLOG_FT_PER_NF           // save backlog Flow Entries per NF (Note: Enable)
-#define BACKPRESSURE_USE_RING_BUFFER_MODE       // Use Ring buffer to store and delete backlog Flow Entries per NF  (Note: Enable, sub define  under ENABLE_SAVE_BACKLOG_FT_PER_NF)
+//Use this flag if the Timer Thread can perform the the Backpressure marking  (Preferred Usage: Disabled)
+//#define USE_BKPR_V2_IN_TIMER_MODE
+
+#ifdef NF_BACKPRESSURE_APPROACH_1
+// Extension to approach 1 to make packet drops only at the beginning on the chain (i.e only at the time to enqueue to first NF) (Preferred Usage: Enabled)
+#define DROP_PKTS_ONLY_AT_BEGGINING
+
+#if !defined(USE_BKPR_V2_IN_TIMER_MODE)
+// save backlog Flow Entries per NF (Preferred Usage: Enabled)
+#define ENABLE_SAVE_BACKLOG_FT_PER_NF
+// Sub feature for ENABLE_SAVE_BACKLOG_FT_PER_NF: Use Ring buffer to store and delete backlog Flow Entries per NF (Preferred Usage: Enabled)
+#define BACKPRESSURE_USE_RING_BUFFER_MODE
 #endif //USE_BKPR_V2_IN_TIMER_MODE
 
-//#define RECHECK_BACKPRESSURE_MARK_ON_TX_DEQUEUE //Enable to re-check for back-pressure marking, at the time of packet dequeue from the NFs Tx Ring.
-//#define BACKPRESSURE_EXTRA_DEBUG_LOGS           // Enable extra profile logs for back-pressure: Move all prints and additional variables under this flag (as optimization)
+#endif //NF_BACKPRESSURE_APPROACH_1
 
-//Need Early bind to NF for the chain and determine the bottlneck status: Avoid passing first few packets of a flow till the chain, only to drop them later: Helps for TCP and issue with storing multiple flows at earlier NF
+//Sub Feature to enable to re-check for back-pressure marking, at the time of packet dequeue from the NFs Tx Ring.(Preferred Usage: Disabled)
+//#define RECHECK_BACKPRESSURE_MARK_ON_TX_DEQUEUE
+
+/* Need Early bind to NF for the chain and determine the bottlneck status:
+  Avoid passing first few packets of a flow till the chain, only to drop them later:
+  Observation: Helps for TCP and issue with storing multiple flows at earlier NF (Preferred Usage: Disabled/Discontinued) */
 //#define ENABLE_EARLY_NF_BIND
 
 //other test-variants and disregarded options: not to be used!!
-//#define HOP_BY_HOP_BACKPRESSURE     //Option to enable [ON] = HOP by HOP propagation of back-pressure vs [OFF] = direct First NF to N-1 Discard(Drop)/block.
-//#define ENABLE_NF_BKLOG_BUFFERING   //Extension to Approach 3 wherein each NF can pre-buffer internally the  packets for bottlenecked service chains. (Not Implemented!!)
-//#define DUMMY_FT_LOAD_ONLY //Load Only onvm_ft and Bypass ENABLE_NF_BACKPRESSURE/NF_BACKPRESSURE_APPROACH_3
+//Option to enable [ON] = HOP by HOP propagation of back-pressure vs [OFF] = direct First NF to N-1 Discard(Drop)/block.
+//#define HOP_BY_HOP_BACKPRESSURE
 
-#endif //ENABLE_NF_BACKPRESSURE
+//Extension to Approach 3 wherein each NF can pre-buffer internally the  packets for bottlenecked service chains. (Not Implemented!!)
+//#define ENABLE_NF_BKLOG_BUFFERING
 
+//Load Only onvm_ft and Bypass ENABLE_NF_BACKPRESSURE/NF_BACKPRESSURE_APPROACH_3 (Test Feature only)
+//#define DUMMY_FT_LOAD_ONLY
+
+// Enable extra profile logs for back-pressure: Move all prints and additional variables under this flag (as optimization)
+//#define BACKPRESSURE_EXTRA_DEBUG_LOGS
 
 /* Enable the Arbiter Logic to control the NFs scheduling and period on each core */
 //#define ENABLE_ARBITER_MODE
-//#define USE_ARBITER_NF_EXEC_PERIOD      //NFLib check for wake;/sleep state and Wakeup thread to put the the NFs to sleep after timer expiry (This feature is not working as expected..)
-//enable: ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD, ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
-#define ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
-#define ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
+//NFLib check for wake;/sleep state and Wakeup thread to put the the NFs to sleep after timer expiry (This feature is not working as expected..)
+//#define USE_ARBITER_NF_EXEC_PERIOD
 
+#endif //ENABLE_NF_BACKPRESSURE
+/* END NF BACKPRESSURE REALTED EXTENSION FEATURES AND OPTIONS */
+
+/******************************************************************************/
+//CGROUP Feature Extensions
+/* Enable this flag to assign a distinct CGROUP for each NF instance */
+// Preferred usage: Enable All 3 (USE_CGROUPS_PER_NF_INSTANCE, ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT,USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE)
+// To create CGroup per NF instance
+//#define USE_CGROUPS_PER_NF_INSTANCE
+// To dynamically evaluate and periodically adjust weight on NFs cpu share
+//#define ENABLE_DYNAMIC_CGROUP_WEIGHT_ADJUSTMENT
+// Enable Load*comp_cost (Helpful for TCP but not so for UDP (pktgen/Moongen)
+//#define USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE
+/******************************************************************************/
+
+/* For Bottleneck on Rx Ring; whether or not to Drop packets from Rx/Tx buf during flush_operation
+ * Note: This is one of the likely cause of Out-of_order packets in the OpenNetVM (with Bridge) case:
+ * //Disable drop of existing packets -- may have caveats on when next flush would operate on that Tx/Rx buffer..
+ * //Repercussions in onvm_pkt.c: onvm_pkt_enqueue_nf() to handle overflow and stop putting packet in full buffer and drop new ones instead.
+ * //Observation: Good for TCP use cases, but with PktGen,Moongen dents line rate approx 0.3Mpps slow down
+ *  (Preferred Usage: Disabled )
+ *  */
+//#define DO_NOT_DROP_PKTS_ON_FLUSH_FOR_BOTTLENECK_NF
+
+/* Enable watermark level NFs Tx and Rx Rings  // details on count in the onvm_init.h (Preferred Usage: Enabled) */
+//#define ENABLE_RING_WATERMARK
+
+/* Enable ECN CE FLAG : Feature Flag to enable marking ECN_CE flag on the flows that pass through the NFs with Rx Ring buffers exceeding the watermark level.
+ * Dependency: Must have ENABLE_RING_WATERMARK feature defined. and HIGH and LOW Thresholds to be set. otherwise, marking may not happen at all.. Ideally, marking should be done after dequeue from Tx, to mark if Rx is overbudget..
+ * On similar lines, even the back-pressure marking must be done for all flows after dequeue from the Tx Ring..
+ * (Preferred Usage: Disabled) */
+#ifdef ENABLE_RING_WATERMARK
+//#define ENABLE_ECN_CE
+#endif //ENABLE_RING_WATERMARK
+
+/******************************************************************************/
+// Feature flags to enable TIMER MODE Operations for Main and Wake up thread
+//enable: ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD, ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
+#define ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD       // (Preferred Usage: Enabled)
+#define ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD       // (Preferred Usage: Enabled/Disabled is fine)
 
 /* ENABLE TIMER BASED WEIGHT COMPUTATION IN NF_LIB */
 //enable: ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
@@ -183,20 +228,10 @@
 #ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
 #include "histogram.h"                          //Histogra Library
 #endif //STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
-
-#ifdef ENABLE_NF_BACKPRESSURE
-//forward declaration either store reference of onvm_flow_entry or onvm_service_chain (latter may be sufficient)
-struct onvm_flow_entry;
-struct onvm_service_chain;
-#endif  //ENABLE_NF_BACKPRESSURE
-
+/******************************************************************************/
 
 /******************************************************************************/
 // NFV RESILIENCY related extensions, control macros and defines
-#ifdef INTERRUPT_SEM
-#define ENABLE_NFV_RESL             // global nvf_Resl feature flag
-#endif //INTERRUPT_SEM
-
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
@@ -218,7 +253,12 @@ struct onvm_service_chain;
 #define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
 #define ACTIVE_NF_MASK   (MAX_ACTIVE_CLIENTS-1)
 #endif  //#ifdef ENABLE_NFV_RESL
+// END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
 /******************************************************************************/
+
+
+/******************************************************************************/
+// VXLAN Feature Addition
 //#define ENABLE_VXLAN
 //#define ENABLE_ZOOKEEPER
 
@@ -226,6 +266,7 @@ struct onvm_service_chain;
 #define DISTRIBUTED_NIC_PORT 1 // NIC port connects to the remote server
 #endif //ENABLE_VXLAN
 /******************************************************************************/
+
 #define SET_BIT(x,bitNum) ((x)|=(1<<(bitNum-1)))
 static inline void set_bit(long *x, unsigned bitNum) {
     *x |= (1L << (bitNum-1));

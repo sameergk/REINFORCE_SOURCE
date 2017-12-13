@@ -55,6 +55,8 @@
 #include <sys/stat.h>
 #include <inttypes.h>
 #include <time.h>
+
+#include <rte_memory.h>
 /*****************************Internal headers********************************/
 #if defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) &&                           \
     defined(_POSIX_MONOTONIC_CLOCK)
@@ -68,11 +70,12 @@ typedef struct onvm_time_s {
 #else
   struct timeval t;
 #endif
-}onvm_time_t;
+} __rte_cache_aligned onvm_time_t;
+
 typedef struct onvm_interval_timer_s {
         onvm_time_t ts;
         onvm_time_t tp;
-}onvm_interval_timer_t;
+} __rte_cache_aligned onvm_interval_timer_t;
 
 inline int onvm_util_get_cur_time(onvm_time_t* ct);
 inline int onvm_util_get_start_time(onvm_interval_timer_t* ct);
@@ -89,14 +92,14 @@ typedef struct stats_time_info {
         uint8_t in_read;
         onvm_time_t prev_time;
         onvm_time_t cur_time;
-}nf_stats_time_info_t;
+} __rte_cache_aligned nf_stats_time_info_t;
 
 #include <rte_cycles.h>
 typedef struct stats_cycle_info {
         uint8_t in_read;
         uint64_t prev_cycles;
         uint64_t cur_cycles;
-}stats_cycle_info_t;
+} __rte_cache_aligned stats_cycle_info_t;
 inline uint64_t onvm_util_get_current_cpu_cycles(void);
 inline uint64_t onvm_util_get_diff_cpu_cycles(uint64_t start, uint64_t end);
 inline uint64_t onvm_util_get_diff_cpu_cycles_in_us(uint64_t start, uint64_t end);

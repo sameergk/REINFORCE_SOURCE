@@ -467,25 +467,6 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
         #endif //NF_BACKPRESSURE_APPROACH_1
         #endif //ENABLE_NF_BACKPRESSURE
 
-
-        /* For Drop: Earlier the better, but this part is not only expensive,
-         * but can lead to drop of intermittent packets and not batch of packets, and can still result in Tx drops.
-         */
-        //#define PRE_PROCESS_DROP_ON_RX_0
-        #ifdef PRE_PROCESS_DROP_ON_RX_0
-        #define MAX_RING_QUEUE_SIZE (CLIENT_QUEUE_RINGSIZE - PACKET_READ_SIZE)
-        /* check here for the Tx Ring size to drop apriori to pushing to NF */
-        //if(rte_ring_count(cl->tx_q) >= (CLIENT_QUEUE_RINGSIZE-rte_ring_count(cl->rx_q) - thread->nf_rx_buf[dst_instance_id].count) ) {
-        if(rte_ring_count(cl->tx_q) >= (CLIENT_QUEUE_RINGSIZE-rte_ring_count(cl->rx_q)) ) {
-        //if(rte_ring_count(cl->tx_q) >= MAX_RING_QUEUE_SIZE) {
-        //if (rte_ring_full(cl->tx_q)) {
-                onvm_pkt_drop(pkt);
-                cl->stats.rx_drop+=1;
-                //cl->stats.rx_drop += !onvm_pkt_drop(pkt); //onvm_pkt_drop(pkt); -- This call doesnt always ensure that freed packet is set to null; hence not a good way; revert others as well.
-                return;
-        }
-        #endif //PRE_PROCESS_DROP_ON_RX_0
-
 #ifdef DO_NOT_DROP_PKTS_ON_FLUSH_FOR_BOTTLENECK_NF
         if (unlikely(thread->nf_rx_buf[dst_instance_id].count == PACKET_READ_SIZE)) {
                 onvm_pkt_flush_nf_queue(thread, dst_instance_id);
@@ -681,7 +662,7 @@ onvm_detect_and_set_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struc
         struct onvm_flow_entry *flow_entry = NULL;
         //unsigned rx_q_count = rte_ring_count(cl->rx_q);
 
-#if defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+#if defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
         unsigned rx_q_count = rte_ring_count(cl->rx_q);
         cl->stats.max_rx_q_len =  (rx_q_count>cl->stats.max_rx_q_len)?(rx_q_count):(cl->stats.max_rx_q_len);
         unsigned tx_q_count = rte_ring_count(cl->tx_q);
@@ -736,7 +717,7 @@ onvm_detect_and_set_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struc
                         }
                 }
         }
-#if defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+#if defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
         cl->stats.bkpr_count++;
 #endif
 

@@ -903,7 +903,7 @@ int check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list(void) {
                                         bottleneck_nf_list.nf[nf_id].enqueue_status = BOTTLENECK_NF_STATUS_DROP_MARKED;
                                         onvm_mark_all_entries_for_bottleneck(nf_id);
                                         bottleneck_nf_list.nf[nf_id].marked_ctr+=1;
-                                        #if defined (NF_BACKPRESSURE_APPROACH_1) && defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
+                                        #if defined (BACKPRESSURE_EXTRA_DEBUG_LOGS)
                                         clients[nf_id].stats.bkpr_count++;
                                         #endif
                                 }

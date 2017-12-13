@@ -490,7 +490,7 @@ onvm_nflib_run(
                         uint16_t tx_spkts = rte_ring_dequeue_burst(tx_sring, pkts, nb_pkts);
                         fprintf(stderr, "\n Move processed packets from Shadow Tx Ring to Tx Ring [%d] packets from shadow ring( Re-queue)!\n", tx_spkts);
                         if(unlikely(rte_ring_sp_enqueue_bulk(tx_ring, pkts, tx_spkts) == -ENOBUFS)) {
-                                #if defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
+                                #if defined(NF_LOCAL_BACKPRESSURE)
                                 ret_act = -ENOBUFS;
                                 do
                                 {
@@ -507,7 +507,7 @@ onvm_nflib_run(
                                                 }
                                         }
                                 }while(ret_act);
-                                #endif //defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
+                                #endif //defined(NF_LOCAL_BACKPRESSURE)
                         } else {
                                 tx_stats->tx[info->instance_id] += tx_spkts;
                         }
@@ -587,7 +587,7 @@ onvm_nflib_run(
 #endif  //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
 
                 if (unlikely(tx_batch_size > 0 && rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size) == -ENOBUFS)) {
-#if defined(PRE_PROCESS_DROP_ON_RX) && defined (DROP_APPROACH_3) && defined(DROP_APPROACH_3_WITH_SYNC)
+#if defined(NF_LOCAL_BACKPRESSURE)
                         int ret_status = -ENOBUFS;
                         do
                         {
@@ -605,7 +605,7 @@ onvm_nflib_run(
                                         }
                                 }
                         }while(ret_status);
-#endif  //DROP_APPROACH_3
+#endif  //NF_LOCAL_BACKPRESSURE
                 } else {
                         tx_stats->tx[info->instance_id] += tx_batch_size;
                 }
