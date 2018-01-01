@@ -104,6 +104,7 @@ inline int onvm_util_get_stop_time(onvm_interval_timer_t* ct) {
 }
 
 inline int64_t onvm_util_get_elapsed_time(onvm_interval_timer_t* ct) {
+        onvm_util_get_stop_time(ct);
 #ifdef HAS_CLOCK_GETTIME_MONOTONIC
         int64_t delta = ((ct->tp.t.tv_sec - ct->ts.t.tv_sec) * 1000000000
                         + (ct->tp.t.tv_nsec - ct->ts.t.tv_nsec));
@@ -164,3 +165,83 @@ inline uint64_t onvm_util_get_elapsed_cpu_cycles_in_us(uint64_t start) {
         return onvm_util_get_diff_cpu_cycles_in_us(start, onvm_util_get_current_cpu_cycles());
 }
 
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL)
+uint64_t gPkts=0;
+#endif
+
+inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16_t nb_pkts) {
+        unsigned i;
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL)
+        uint64_t now = gPkts++;
+#elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
+        uint64_t now = onvm_util_get_current_cpu_cycles();
+#else //(USE_TS_TYPE == TS_TYPE_SYS_CLOCK)
+        onvm_time_t now;
+        onvm_util_get_cur_time(&now);
+#endif
+
+            for (i = 0; i < nb_pkts; i++) {
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL) || (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
+                pkts[i]->ol_flags = now;
+#else
+                pkts[i]->ol_flags = now.t.tv_nsec;
+                pkts[i]->tx_offload = now.t.tv_sec;
+#endif
+            }
+        return 0;
+}
+static struct {
+    uint64_t total_cycles;
+    uint64_t total_pkts;
+} latency_numbers;
+inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint16_t nb_pkts) {
+
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL)
+        uint64_t now = gPkts;
+#elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
+        uint64_t now = onvm_util_get_current_cpu_cycles();
+#else
+        onvm_time_t stop, start;
+        onvm_util_get_cur_time(&stop);
+        //single U64 precision (tv_nsec) is not good; often results in wrong values
+        //uint64_t now = onvm_util_get_current_cpu_cycles();
+        //uint64_t now = stop.t.tv_nsec;
+#endif
+        uint64_t cycles = 0;
+        unsigned i;
+
+        for (i = 0; i < nb_pkts; i++) {
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL)
+                cycles += now - pkts[i]->ol_flags;
+#elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
+                cycles += now - pkts[i]->ol_flags;
+#else
+
+                start.t.tv_sec = pkts[i]->tx_offload;
+                start.t.tv_nsec = pkts[i]->ol_flags;
+
+                cycles += ((stop.t.tv_sec - start.t.tv_sec) * 1000000000
+                        + (stop.t.tv_nsec - start.t.tv_nsec));
+#endif
+                pkts[i]->tx_offload=pkts[i]->ol_flags=0;
+        }
+
+        latency_numbers.total_cycles += cycles;
+        latency_numbers.total_pkts += nb_pkts;
+        uint64_t latency = latency_numbers.total_cycles / latency_numbers.total_pkts;
+
+        if (latency_numbers.total_pkts > (25 * 1000 * 1000ULL)) {
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL)
+                printf("Latency = %"PRIu64" Logical clock  (%"PRIu64"usec)\n",
+                      latency,(((latency)*SECOND_TO_MICRO_SECOND)/TS_RX_PACKET_RATE));
+#elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
+                printf("Latency = %"PRIu64" CPU cycles  (%"PRIu64"usec)\n",
+                      latency,(((latency)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz()));
+#else
+                printf("Latency = %"PRIu64" ns (%"PRIu64" usec\t %"PRIu64" ticks)\n",
+                      latency,((latency/1000)), (latency*rte_get_tsc_hz())/1000000000);
+#endif
+                latency_numbers.total_cycles = latency_numbers.total_pkts = 0;
+        }
+        return 0;
+}

@@ -60,6 +60,18 @@
 #include "onvm_bfd.h"
 #endif
 
+/****************************Internal Declarations****************************/
+
+#define MAX_SHUTDOWN_ITERS 10
+
+// True as long as the main thread loop should keep running
+static uint8_t main_keep_running = 1;
+
+// We'll want to shut down the TX/RX threads second so that we don't
+// race the stats display to be able to print, so keep this varable separate
+static uint8_t worker_keep_running = 1;
+
+/****************************Internal Declarations****************************/
 #ifdef TEST_INLINE_FUNCTION_CALL
 int process_nf_function_inline(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta);
 int process_nf_function_inline(__attribute__((unused)) struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
@@ -202,6 +214,8 @@ initialize_master_timers(void) {
                 rte_lcore_id(), //timer_core
                 &nf_load_stats_timer_cb, NULL
                 );
+        //bypassing the call for now..
+        //rte_timer_init(&nf_load_eval_timer);
 
         if( 0 == ONVM_NUM_WAKEUP_THREADS) {
                 ticks = ((uint64_t)ARBITER_PERIOD_IN_US *(rte_get_timer_hz()/1000000));
@@ -235,24 +249,65 @@ master_thread_main(void) {
         /* Longer initial pause so above printf is seen */
         sleep(sleeptime * 3);
 
-#ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
-        if(initialize_master_timers() == 0) {
-                struct timespec req = {0,1000}, res = {0,0};
-                while (nanosleep(&req, &res) == 0) { //while (usleep(USLEEP_INTERVAL_IN_US) == 0) { // while(1) {
-                        rte_timer_manage();
-#ifdef ONVM_ENABLE_SPEACILA_NF
-                        (void)process_special_nf0_rx_packets();
-#endif
-                }
-        } //else
-#else
+        for(;main_keep_running;) {
 
-        /* Loop forever: sleep always returns 0 or <= param */
-        while (sleep(sleeptime) <= sleeptime) {
-                onvm_nf_check_status();
-                onvm_stats_display_all(sleeptime);
-        }
+#ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
+                if(initialize_master_timers() == 0) {
+                        struct timespec req = {0,1000}, res = {0,0};
+                        do {
+                                rte_timer_manage();
+#ifdef ONVM_ENABLE_SPEACILA_NF
+                                (void)process_special_nf0_rx_packets();
+#endif
+                                nanosleep(&req, &res);
+                        } while(main_keep_running);
+                        //while (nanosleep(&req, &res) == 0) { //while (usleep(USLEEP_INTERVAL_IN_US) == 0) { // while(1) {}
+                } else
 #endif //ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
+                /* Loop forever: sleep always returns 0 or <= param */
+                do {
+                        onvm_nf_check_status();
+                        onvm_stats_display_all(sleeptime);
+#ifdef ONVM_ENABLE_SPEACILA_NF
+                                (void)process_special_nf0_rx_packets();
+#endif
+                }while(main_keep_running);
+                //while (sleep(sleeptime) <= sleeptime) {}
+        }
+
+        /* Close out file references and things */
+        onvm_stats_cleanup();
+        RTE_LOG(INFO, APP, "Core %d: Initiating shutdown sequence\n", rte_lcore_id());
+
+        /* Stop all RX and TX threads */
+        worker_keep_running = 0;
+
+        /* Tell all NFs to stop */
+        int i = 0;
+        for (i = 1; i < MAX_CLIENTS; i++) {
+                if (clients[i].info == NULL) {
+                        continue;
+                }
+                RTE_LOG(INFO, APP, "Core %d: Notifying NF %"PRIu16" to shut down\n", rte_lcore_id(), i);
+                onvm_nf_send_msg(i, MSG_STOP, MSG_MODE_ASYNCHRONOUS, NULL);
+        }
+        /* Wait to process all exits */
+        for (i=0; i < MAX_SHUTDOWN_ITERS && num_clients > 0; i++) {
+                onvm_nf_check_status();
+                RTE_LOG(INFO, APP, "Core %d: Waiting for %"PRIu16" NFs to exit\n", rte_lcore_id(), num_clients);
+                sleep(1);
+        }
+        if (num_clients > 0) {
+                RTE_LOG(INFO, APP, "Core %d: Up to %"PRIu16" NFs may still be running and must be killed manually\n", rte_lcore_id(), num_clients);
+        }
+
+#ifdef USE_SEMAPHORE
+        for (i = 1; i < MAX_CLIENTS; i++) {
+                sem_close(clients[i].mutex);
+                sem_unlink(clients[i].sem_name);
+        }
+#endif
+        RTE_LOG(INFO, APP, "Core %d: Master thread done\n", rte_lcore_id());
 }
 
 /*
@@ -271,7 +326,7 @@ rx_thread_main(void *arg) {
                 rte_lcore_id(),
                 rx->queue_id);
 
-        for (;;) {
+        for (;worker_keep_running;) {
                 /* Read ports */
                 for (i = 0; i < ports->num_ports; i++) {
                         rx_count = rte_eth_rx_burst(ports->id[i], rx->queue_id, \
@@ -280,6 +335,11 @@ rx_thread_main(void *arg) {
                         /* Now process the NIC packets read */
                         if (likely(rx_count > 0)) {
                                 ports->rx_stats.rx[ports->id[i]] += rx_count;
+#ifdef ENABLE_PACKET_TIMESTAMPING
+                                onvm_util_mark_timestamp_on_RX_packets(pkts, rx_count);
+#endif
+
+                                if(unlikely(i != pkts[0]->port)) { printf("\n got packet with Incorrect i=%d Port mapping! Pkt=%d, ",i, pkts[0]->port);}
                                 // If there is no running NF, we drop all the packets of the batch.
                                 if (likely(num_clients)) {
                                         onvm_pkt_process_rx_batch(rx, pkts, rx_count);
@@ -297,7 +357,7 @@ static int
 tx_thread_main(void *arg) {
         struct client *cl;
         unsigned i, tx_count;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE];
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_TX];
         struct thread_info* tx = (struct thread_info*)arg;
 
         RTE_LOG(INFO,
@@ -307,28 +367,18 @@ tx_thread_main(void *arg) {
                tx->first_cl,
                tx->last_cl-1);
 
-        for (;;) {
+        for (;worker_keep_running;) {
                 /* Read packets from the client's tx queue and process them as needed */
                 for (i = tx->first_cl; i < tx->last_cl; i++) {
                         cl = &clients[i];
-                        if ((!onvm_nf_is_valid(cl))||(onvm_nf_is_paused(cl)))
-                                continue;
-#ifdef ENABLE_NFV_RESL
-#if 0
-                        if(unlikely(onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(i)]) )) {
-                                /* When NF(i) is Primary but Secondary is also active: Then Do not process packets in primary until secondary is stopped; Later only Primary must process */
-                                if((is_primary_active_nf_id(i))) {
-                                        if(rte_atomic16_read(clients[get_associated_active_or_standby_nf_id(i)].shm_server)== 0)  {
-                                                continue;
-                                        }
-                                }
-                                /* When NF(i) is Secondary but Primary is also active: Then Do not process packets from Secondary; only Primary must process */
-                                else { //if((!is_primary_active_nf_id(i))) {
-                                        continue;
-                                }
-                        }
-#endif
-#endif
+
+                        //if (unlikely(!onvm_nf_is_valid(cl))||(onvm_nf_is_paused(cl))) continue;
+                        //if(unlikely(NULL == cl->info)) continue;
+                        //else if(unlikely(onvm_nf_is_paused(cl))) continue;
+
+                        /* Do not pull the packets from the NF if it is not active */
+                        if(unlikely(!onvm_nf_is_processing(cl))) continue;
+
                         /* try dequeuing max possible packets first, if that fails, get the
                          * most we can. Loop body should only execute once, maximum
                         while (tx_count > 0 &&
@@ -337,18 +387,26 @@ tx_thread_main(void *arg) {
                                                 PACKET_READ_SIZE);
                         }
                         */
-                        tx_count = rte_ring_dequeue_burst(cl->tx_q, (void **) pkts, PACKET_READ_SIZE);
+                        tx_count = rte_ring_dequeue_burst(cl->tx_q, (void **) pkts, PACKET_READ_SIZE_TX); //rte_ring_dequeue_bulk(cl->tx_q, (void **) pkts, PACKET_READ_SIZE_TX);
 
                         /* Now process the Client packets read */
                         if (likely(tx_count > 0)) {
 
-                                #ifdef ENABLE_NF_BACKPRESSURE
-                                #ifdef USE_BKPR_V2_IN_TIMER_MODE
-                                onvm_check_and_reset_back_pressure_v2(pkts, tx_count, cl);
-                                #else
+#ifdef ENABLE_NF_BACKPRESSURE
+#ifdef ENABLE_NF_BASED_BKPR_MARKING
+                                onvm_check_and_reset_back_pressure_v2(cl);
+                                //Note: TODO: With _v2, ECN_CE currently doesnt work; Need to move this marking also in wake_mgr_context.
+#else
                                 onvm_check_and_reset_back_pressure(pkts, tx_count, cl);
-                                #endif //USE_BKPR_V2_IN_TIMER_MODE
-                                #endif // ENABLE_NF_BACKPRESSURE
+#endif
+                                //Note: TODO: Must change ECN_CE to packet independent marking scheme or change the approach.
+#ifdef ENABLE_ECN_CE
+                                if(cl->info->ht2_q.ewma_avg >= CLIENT_QUEUE_RING_ECN_MARK_SIZE) { //if(cl->info->ht2_q.ewma_avg >= CLIENT_QUEUE_RING_WATER_MARK_SIZE) {
+                                        onvm_detect_and_set_ecn_ce(pkts, tx_count, cl);
+                                }
+#endif //ENABLE_ECN_CE
+
+#endif
 
                                 onvm_pkt_process_tx_batch(tx, pkts, tx_count, cl);
                                 //RTE_LOG(INFO,APP,"Core %d: processing %d TX packets for NF: %d \n", rte_lcore_id(),tx_count, i);
@@ -375,10 +433,11 @@ main(int argc, char *argv[]) {
         unsigned i;
 
         /* initialise the system */
-        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
         unsigned wakeup_lcores;        
+#endif
+
         register_signal_handler();
-        #endif        
 
         /* Reserve ID 0 for internal manager things */
         next_instance_id = 1;
@@ -390,14 +449,18 @@ main(int argc, char *argv[]) {
         onvm_stats_clear_all_clients();
 
         /* Reserve n cores for: 1 main thread, ONVM_NUM_RX_THREADS for Rx, ONVM_NUM_WAKEUP_THREADS for wakeup and remaining for Tx */
+        if(rte_lcore_count() < (2+ONVM_NUM_RX_THREADS+ONVM_NUM_WAKEUP_THREADS)) {
+                rte_exit(EXIT_FAILURE, "Need Minimum of [%d] cores! \n",(2+ONVM_NUM_RX_THREADS+ONVM_NUM_WAKEUP_THREADS));
+        }
         cur_lcore = rte_lcore_id();
         rx_lcores = ONVM_NUM_RX_THREADS;
 
         tx_lcores = rte_lcore_count() - rx_lcores - 1;
-        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
         wakeup_lcores = ONVM_NUM_WAKEUP_THREADS;
         tx_lcores -= wakeup_lcores; //tx_lcores= (tx_lcores>2)?(2):(tx_lcores);
-        #endif
+        //tx_lcores=1;
+#endif
 
         /* Offset cur_lcore to start assigning TX cores */
         cur_lcore += (rx_lcores-1);
@@ -405,9 +468,9 @@ main(int argc, char *argv[]) {
         RTE_LOG(INFO, APP, "%d cores available in total\n", rte_lcore_count());
         RTE_LOG(INFO, APP, "%d cores available for handling manager RX queues\n", rx_lcores);
         RTE_LOG(INFO, APP, "%d cores available for handling TX queues\n", tx_lcores);
-        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
         RTE_LOG(INFO, APP, "%d cores available for handling wakeup\n", wakeup_lcores);        
-        #endif 
+#endif
         RTE_LOG(INFO, APP, "%d cores available for handling stats(main)\n", 1);
 
         /* Evenly assign NFs to TX threads */
@@ -472,7 +535,7 @@ main(int argc, char *argv[]) {
                 thread_core_map.rx_th_core[i]=cur_lcore;
         }
         
-        #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
         if(wakeup_lcores) {
                 int clients_per_wakethread = ceil(temp_num_clients / wakeup_lcores);
                 wakeup_infos = (struct wakeup_info *)calloc(wakeup_lcores, sizeof(struct wakeup_info));
@@ -494,7 +557,7 @@ main(int argc, char *argv[]) {
 
                 }
         }
-        #endif
+#endif
 
 #ifdef ENABLE_BFD
         onvm_bfd_init(nf_mgr_id);
@@ -535,6 +598,37 @@ main(int argc, char *argv[]) {
 }
 
 /*******************************Helper functions********************************/
+static void signal_handler(int sig,  __attribute__((unused)) siginfo_t *info,  __attribute__((unused)) void *secret) {
+        //2 means terminal interrupt, 3 means terminal quit, 9 means kill and 15 means termination
+        printf("Got Signal [%d]\n", sig);
+        if(info) {
+                printf("[signo: %d,errno: %d,code: %d]\n", info->si_signo, info->si_errno, info->si_code);
+        }
+        if(sig == SIGWINCH) return;
 
+        if(SIGINT == sig || SIGTERM == sig)
+                main_keep_running = 0;
+
+        else if(sig == SIGFPE) return;
+        else signal(sig,SIG_DFL);
+        //exit(101);
+}
+
+void
+register_signal_handler(void) {
+        unsigned i;
+        struct sigaction act;
+        memset(&act, 0, sizeof(act));
+        sigemptyset(&act.sa_mask);
+        act.sa_flags = SA_SIGINFO;
+        act.sa_handler = (void *)signal_handler;
+
+        for (i = 1; i < 31; i++) {
+                if(i == SIGWINCH)continue;
+                if(i == SIGSEGV)continue;
+                //if(i==SIGFPE)continue;
+                sigaction(i, &act, 0);
+        }
+}
 
 

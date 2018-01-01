@@ -4,9 +4,10 @@
 # BSD LICENSE
 #
 # Copyright(c)
-#          2015-2016 George Washington University
-#          2015-2016 University of California Riverside
+#          2015-2017 George Washington University
+#          2015-2017 University of California Riverside
 #          2010-2014 Intel Corporation.
+#          2016-2017 Hewlett Packard Enterprise Development LP
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -19,9 +20,9 @@
 # notice, this list of conditions and the following disclaimer in
 # the documentation and/or other materials provided with the
 # distribution.
-# Neither the name of Intel Corporation nor the names of its
-# contributors may be used to endorse or promote products derived
-# from this software without specific prior written permission.
+# The name of the author may not be used to endorse or promote
+# products derived from this software without specific prior
+# written permission.
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 # "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
@@ -35,31 +36,21 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
 ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-
-LDFLAGS += -L/usr/local/lib
-LDLIBS+= -lzmq
-#LDFLAGS += ./libzmq.a
-
 # Default target, can be overriden by command line or environment
-RTE_TARGET ?= x86_64-native-linuxapp-gcc
-
 include $(RTE_SDK)/mk/rte.vars.mk
 
-DIRS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += lib
-DIRS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += shared
-DIRS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += onvm_mgr
-DIRS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += onvm_nflib
+RTE_TARGET ?= x86_64-native-linuxapp-gcc
 
+# binary name
+LIB    = libonvmhelper.a
 
+# all source are stored in SRCS-y
+SRCS-y := cJSON.c
 
-#LD_LIBRARY_PATH += /usr/local/lib
-#LDFLAGS += -lzmq
-#LDLIBS += -L/usr/local/lib -lzmq.so
-#LD_FLAGS += -L/usr/local/lib -lzmq.so
-#LD_LIBS += -L/usr/local/lib -lzmq.so
-include $(RTE_SDK)/mk/rte.extsubdir.mk
+CFLAGS += $(WERROR_FLAGS) -O3 $(USER_FLAGS)
+
+include $(RTE_SDK)/mk/rte.extlib.mk

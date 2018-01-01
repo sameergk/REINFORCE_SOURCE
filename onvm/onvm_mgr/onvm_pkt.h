@@ -122,7 +122,7 @@ onvm_pkt_drop_batch(struct rte_mbuf **pkts, uint16_t size);
  *          a pointer to the client possessing the RX queue.
  *
  */
-void
+inline void
 onvm_detect_and_set_ecn_ce(struct rte_mbuf *pkts[], uint16_t count, struct client *cl);
 
 /* Interface to check and set back-pressure status after enqueue of packets to RX queue.
@@ -133,8 +133,8 @@ onvm_detect_and_set_ecn_ce(struct rte_mbuf *pkts[], uint16_t count, struct clien
  *          a pointer to the client possessing the RX queue.
  *
  */
-void
-onvm_detect_and_set_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struct client *cl);
+inline void
+onvm_set_back_pressure(struct rte_mbuf *pkts[], uint16_t count, __attribute__((unused)) struct client *cl);
 
 /* Interface to check and reset back-pressure status after dequeue of packets from a TX queue.
  *
@@ -144,11 +144,12 @@ onvm_detect_and_set_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struc
  *          a pointer to the client possessing the TX queue.
  *
  */
-void
+inline void
 onvm_check_and_reset_back_pressure(struct rte_mbuf *pkts[], uint16_t count, struct client *cl);
 
-void onvm_detect_and_set_back_pressure_v2(struct client *cl);
-void onvm_check_and_reset_back_pressure_v2(__attribute__((unused)) struct rte_mbuf *pkts[], __attribute__((unused)) uint16_t count, struct client *cl);
+inline void onvm_set_back_pressure_v2(struct client *cl);
+inline void onvm_check_and_reset_back_pressure_v2(struct client *cl);
+
 /*****************************Internal functions******************************/
 
 
@@ -206,7 +207,7 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
  */
 inline void
 onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt,  __attribute__((unused)) struct onvm_pkt_meta *meta,
-                __attribute__((unused)) struct onvm_flow_entry *flow_entry, struct client *cl);
+                __attribute__((unused)) struct onvm_flow_entry *flow_entry, __attribute__((unused)) struct client *cl);
 
 /******************************Helper functions*******************************/
 

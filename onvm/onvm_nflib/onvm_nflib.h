@@ -80,6 +80,7 @@ int
 onvm_nflib_init(int argc, char *argv[], const char *nf_tag);
 
 
+typedef int(*pkt_handler)(struct rte_mbuf* pkt, struct onvm_pkt_meta* action);
 /**
  * Run the OpenNetVM container Library.
  * This will register the callback used for each new packet. It will then
@@ -124,18 +125,6 @@ typedef int (*nf_explicit_callback_function)(void);
 extern nf_explicit_callback_function nf_ecb;
 void register_explicit_callback_function(nf_explicit_callback_function ecb);
 void notify_for_ecb(void);
-
-#define MSG_NOOP            (0)
-#define MSG_STOP            (1)
-#define MSG_NF_STARTING     (2)
-#define MSG_NF_STOPPING     (3)
-#define MSG_NF_UNBLOCK_SELF (4)
-#define MSG_NF_TRIGGER_ECB  (5)
-#define MSG_NF_REGISTER_ECB (6)
-struct onvm_nf_msg {
-        uint8_t msg_type; /* Constant saying what type of message is */
-        void *msg_data; /* These should be rte_malloc'd so they're stored in hugepages */
-};
 
 int onvm_nflib_handle_msg(struct onvm_nf_msg *msg);
  

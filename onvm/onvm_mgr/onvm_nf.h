@@ -53,7 +53,6 @@
 #define _ONVM_NF_H_
 
 extern uint16_t next_instance_id;
-extern struct wakeup_info *wakeup_infos;
 
 #define MAX_CORES_ON_NODE (64)
 //Data structure to sort out all active NFs on each core
@@ -72,14 +71,15 @@ extern nf_schedule_info_t nf_sched_param;
 //extern nfs_per_core_t nf_list_per_core[MAX_CORES_ON_NODE];
 
 
-#ifdef ENABLE_NF_BACKPRESSURE
 // Global mode variables (default service chain without flow_Table entry: can support only 1 flow (i.e all flows have same NFs)
+#ifdef ENABLE_GLOBAL_BACKPRESSURE
 extern uint8_t  global_bkpr_mode;
 extern uint16_t downstream_nf_overflow;
 extern uint16_t highest_downstream_nf_service_id;
 extern uint16_t lowest_upstream_to_throttle;
 extern uint64_t throttle_count;
-#endif //ENABLE_NF_BACKPRESSURE
+#endif
+
 
 /********************************Interfaces***********************************/
 
@@ -102,6 +102,15 @@ onvm_nf_is_valid(struct client *cl);
  */
 inline int
 onvm_nf_is_paused(struct client *cl);
+
+/* Interface checking if a given nf is "valid & Running (processing packets)!".
+ *
+ * Input  : a pointer to the nf
+ * Output : a boolean answer
+ *
+ */
+inline int
+onvm_nf_is_processing(struct client *cl);
 
 /*
  * Interface checking if a given nf is "valid", meaning if it's running.
@@ -160,6 +169,12 @@ void compute_and_order_nf_wake_priority(void);
 int enqueu_nf_to_bottleneck_watch_list(uint16_t nf_id);
 int dequeue_nf_from_bottleneck_watch_list(uint16_t nf_id);
 int check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list(void);
+int onvm_mark_all_entries_for_bottleneck(uint16_t nf_id);
+int onvm_clear_all_entries_for_bottleneck(uint16_t nf_id);
+
+extern inline void check_and_wakeup_nf(uint16_t instance_id);
+
+extern inline void check_and_block_nf(uint16_t instance_id);
 /****************************Internal functions*******************************/
 
 
@@ -186,4 +201,20 @@ onvm_nf_stop(struct onvm_nf_info *nf_info);
 
 inline int
 onvm_nf_register_run(struct onvm_nf_info *nf_info);
+
+/*
+ * Interface to send a message to a certain NF.
+ *
+ * Input  : The destination NF instance ID, a constant denoting the message type
+ *          (see onvm_nflib/onvm_msg_common.h), and a pointer to a data argument.
+ *          The data argument should be allocated in the hugepage region (so it can
+ *          be shared), i.e. using rte_malloc
+ * Output : 0 if the message was successfully sent, -1 otherwise
+ */
+inline int
+onvm_nf_send_msg(uint16_t dest, uint8_t msg_type, __attribute__((unused)) uint8_t msg_mode, void *msg_data);
+
+inline int
+onvm_nf_send_msg_sync(uint16_t dest, uint8_t msg_type, void *msg_data);
+
 #endif  // _ONVM_NF_H_

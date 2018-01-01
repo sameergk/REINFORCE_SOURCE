@@ -44,6 +44,13 @@
 #include <rte_mbuf.h>
 #include "common.h"
 
+
+typedef struct active_sc_entries {
+        uint32_t sc_count;
+        struct onvm_service_chain *sc[SDN_FT_ENTRIES];
+} __rte_cache_aligned active_sc_entries_t;
+extern active_sc_entries_t active_sc_list;
+
 static inline uint8_t
 onvm_next_action(struct onvm_service_chain* chain, uint16_t cur_nf) {
 	if (unlikely(cur_nf >= chain->chain_length)) {
@@ -88,4 +95,6 @@ onvm_sc_get_next_action_and_destionation(struct onvm_service_chain* chain,
 struct onvm_service_chain* onvm_sc_get(void);
 /*create service chain*/
 struct onvm_service_chain* onvm_sc_create(void);
+/* Get List of active service chains */
+const active_sc_entries_t* onvm_sc_get_all_active_chains(void);
 #endif  // _SC_MGR_H_

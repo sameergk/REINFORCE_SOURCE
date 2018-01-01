@@ -350,7 +350,7 @@ onvm_zk_update_nf_stats(uint16_t service_id, uint16_t instance_id, cJSON *stats_
         local_instance = can_scale_locally(service_id);
         if (local_instance != 0) {
                 /* Send scale message to local instance */
-                ret = onvm_nf_send_msg(local_instance, MSG_SCALE, NULL);
+                ret = onvm_nf_send_msg(local_instance, MSG_SCALE, MSG_MODE_ASYNCHRONOUS, NULL);
                 if (ret != 0) RTE_LOG(INFO, APP, "Unable to tell NF %u to scale: %d\n", local_instance, ret);
                 else update_service_last_modified(service_id);
                 goto done;

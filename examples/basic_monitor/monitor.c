@@ -127,6 +127,7 @@ parse_app_args(int argc, char *argv[], const char *progname) {
  */
 static void
 do_stats_display(struct rte_mbuf* pkt) {
+//	return ;
         const char clr[] = { 27, '[', '2', 'J', '\0' };
         const char topLeft[] = { 27, '[', '1', ';', '1', 'H', '\0' };
         static int pkt_process = 0;
@@ -157,6 +158,7 @@ do_stats_display(struct rte_mbuf* pkt) {
 }
 #ifdef ENABLE_NFV_RESL
 static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
+//return 0;
         if(nf_info->nf_state_mempool) {
                 if(mon_state_tbl  == NULL) {
                         dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;

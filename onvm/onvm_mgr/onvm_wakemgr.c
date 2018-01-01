@@ -53,6 +53,7 @@
 
 
 #ifdef INTERRUPT_SEM
+
 #include <signal.h>
 #include <rte_timer.h>
 //#define USE_NF_WAKE_THRESHOLD
@@ -157,7 +158,7 @@ static void per_core_timer_cb(__attribute__((unused)) struct rte_timer *tim, voi
                 printf("Timer Expired Callback core [%d]  client [%d] at index [%d] for period [%zu]\n ",pCoreTimer->core_id, pCoreTimer->nf_id, pCoreTimer->index, pCoreTimer->exec_period);
 #endif
                 //stop the current client (force sleep the current client)
-                rte_atomic16_set(clients[pCoreTimer->nf_id].shm_server, 1);
+                check_and_block_nf(pCoreTimer->nf_id);
                 pCoreTimer->timer_status=0;
                 //wakeup next client
                 arbiter_wakeup_client(pCoreTimer->core_id, ++(pCoreTimer->index));
@@ -222,11 +223,13 @@ static void  arbiter_wakeup_client(uint16_t core_id, uint16_t index) {
 static inline int
 whether_wakeup_client(int instance_id)
 {
-
-        if (clients[instance_id].rx_q == NULL) {
+        /* if NF is not valid or Valid but Paused then do not wake up the NF */
+        if (unlikely(!onvm_nf_is_valid(&clients[instance_id]))||(onvm_nf_is_paused(&clients[instance_id]))) {
                 return 0;
         }
+
 #ifdef ENABLE_NFV_RESL
+        //TODO: Remove this  check!
         //If PRIMARY(ACTIVE) NF IS ALIVE, then DO NOT WAKE THE (SECONDARY) STANDBY NF;
         //if((!is_primary_active_nf_id(instance_id)) && (NF_RUNNING == clients[get_associated_active_or_standby_nf_id(instance_id)].info->status)) {
         if(unlikely((is_secondary_active_nf_id(instance_id))) && likely((onvm_nf_is_valid(&clients[get_associated_active_or_standby_nf_id(instance_id)])) ) ) {
@@ -234,22 +237,27 @@ whether_wakeup_client(int instance_id)
         }
         //IF ONLY EITHER IS ALIVE THEN WAKEUP THIS ONE
 #endif
-        #ifdef ENABLE_NF_BACKPRESSURE
-        #ifdef NF_BACKPRESSURE_APPROACH_2
+
+#ifdef NF_BACKPRESSURE_APPROACH_2
+#ifdef ENABLE_GLOBAL_BACKPRESSURE
         /* Block the upstream (earlier) NFs from getting scheduled, if there is NF at downstream that is bottlenecked! */
-        if (downstream_nf_overflow) {
+        if (global_bkpr_mode && downstream_nf_overflow) {
                 if (clients[instance_id].info != NULL && is_upstream_NF(highest_downstream_nf_service_id,clients[instance_id].info->service_id)) {
                         throttle_count++;
                         return -1;
                 }
         }
+        else
+#endif
         //service chain case
-        else if (clients[instance_id].throttle_this_upstream_nf) {
+        if (clients[instance_id].throttle_this_upstream_nf) {
+#if 0
                 clients[instance_id].throttle_count++;
+#endif
                 return -1;
         }
-        #endif //NF_BACKPRESSURE_APPROACH_2
-        #endif //ENABLE_NF_BACKPRESSURE
+#endif //NF_BACKPRESSURE_APPROACH_2
+
 
 #ifdef USE_NF_WAKE_THRESHOLD
         uint16_t cur_entries;
@@ -264,36 +272,24 @@ whether_wakeup_client(int instance_id)
 }
 
 static inline void
-notify_client(int instance_id)
+notify_client(__attribute__((unused)) int instance_id)
 {
-        #ifdef USE_SEMAPHORE
+#ifdef USE_SEMAPHORE
         sem_post(clients[instance_id].mutex);
-        #endif
-
-        #ifdef USE_POLL_MODE
-        rte_atomic16_read(clients[instance_id].shm_server);
-        #endif
+#endif
 }
-
 
 static inline int
 wakeup_client_internal(int instance_id) {
         int ret = whether_wakeup_client(instance_id);
         if ( 1 == ret) {
-                if (rte_atomic16_read(clients[instance_id].shm_server) ==1) {
-                        rte_atomic16_set(clients[instance_id].shm_server, 0);
-                        notify_client(instance_id);
-                        clients[instance_id].stats.wakeup_count+=1;
-                }
+                check_and_wakeup_nf((uint16_t)instance_id);
         }
-        #ifdef ENABLE_NF_BACKPRESSURE
-        #ifdef NF_BACKPRESSURE_APPROACH_2
+#ifdef NF_BACKPRESSURE_APPROACH_2
         else if (-1 == ret) {
-                /* Make sure to set the flag here and check for flag in nf_lib and block */
-                rte_atomic16_set(clients[instance_id].shm_server, 1);
+                check_and_block_nf((uint16_t)instance_id);
         }
-        #endif //NF_BACKPRESSURE_APPROACH_2
-        #endif //ENABLE_NF_BACKPRESSURE
+#endif //NF_BACKPRESSURE_APPROACH_2
         return ret;
 }
 
@@ -306,27 +302,6 @@ wakeup_client(int instance_id, struct wakeup_info *wakeup_info)  {
                 wakeup_info->num_wakeups += 1;
         }
         return;
-
-#if 0
-        int wkup_sts = whether_wakeup_client(instance_id);
-        if ( wkup_sts == 1) {
-                if (rte_atomic16_read(clients[instance_id].shm_server) ==1) {
-                        wakeup_info->num_wakeups += 1;
-                        //if(wakeup_info->num_wakeups) {}//populate_and_sort_rdata();}
-                        clients[instance_id].stats.wakeup_count+=1;
-                        rte_atomic16_set(clients[instance_id].shm_server, 0);
-                        notify_client(instance_id);
-                }
-        }
-        #ifdef ENABLE_NF_BACKPRESSURE
-        #ifdef NF_BACKPRESSURE_APPROACH_2
-        else if (-1 == wkup_sts) {
-                /* Make sure to set the flag here and check for flag in nf_lib and block */
-                rte_atomic16_set(clients[instance_id].shm_server, 1);
-        }
-        #endif //NF_BACKPRESSURE_APPROACH_2
-        #endif //ENABLE_NF_BACKPRESSURE
-#endif
 }
 
 static inline void handle_wakeup_old(struct wakeup_info *wakeup_info) {
@@ -338,7 +313,7 @@ static inline void handle_wakeup_old(struct wakeup_info *wakeup_info) {
 }
 static inline void handle_wakeup_ordered(__attribute__((unused))struct wakeup_info *wakeup_info) {
 
-        #if defined (USE_CGROUPS_PER_NF_INSTANCE)
+        #if defined (ENABLE_ORDERED_NF_WAKEUP)
         /* Now wake up the NFs as per sorted priority:
          * Next step Handle slack period before wake-up and schedule NFs for wake up; otherwise
          * we are at the mercy of OS Scheduler to schedule the NFs in each core */
@@ -363,7 +338,7 @@ static inline void handle_wakeup_ordered(__attribute__((unused))struct wakeup_in
         }
         #else
         handle_wakeup_old(wakeup_info);
-        #endif  //USE_CGROUPS_PER_NF_INSTANCE
+        #endif  //ENABLE_ORDERED_NF_WAKEUP
 }
 
 inline void handle_wakeup(__attribute__((unused))struct wakeup_info *wakeup_info) {
@@ -384,111 +359,27 @@ wakemgr_main(void *arg) {
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
                 rte_timer_manage();
-#endif //#ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
-                handle_wakeup((struct wakeup_info *)arg); //handle_wakeup_old((struct wakeup_info *)arg);
-                //usleep(USLEEP_INTERVAL);  ////usleep(WAKE_INTERVAL_IN_US);
+#endif
+                handle_wakeup((struct wakeup_info *)arg);
+                //usleep(USLEEP_INTERVAL);
 
         }
 
         return 0;
 }
 
-static void signal_handler(int sig, siginfo_t *info, void *secret) {
-        int i;
-        (void)info;
-        (void)secret;
-
-        //2 means terminal interrupt, 3 means terminal quit, 9 means kill and 15 means termination
-        printf("Got Signal [%d]\n", sig);
-        if(info) {
-                printf("[signo: %d,errno: %d,code: %d]\n", info->si_signo, info->si_errno, info->si_code);
-        }
-        if(sig == SIGWINCH) return;
-
-        signal(sig,SIG_DFL);
-        if(sig == SIGFPE) return;
-
-        if (sig <= 15) {
-                for (i = 1; i < MAX_CLIENTS; i++) {
-
-                        #ifdef USE_SEMAPHORE
-                        sem_close(clients[i].mutex);
-                        sem_unlink(clients[i].sem_name);
-                        #endif
-
-                }
-                #ifdef MONITOR
-//                rte_free(port_stats);
-//                rte_free(port_prev_stats);
-                #endif
-        }
-
-        exit(10);
-}
-
-void
-register_signal_handler(void) {
-        unsigned i;
-        struct sigaction act;
-        memset(&act, 0, sizeof(act));
-        sigemptyset(&act.sa_mask);
-        act.sa_flags = SA_SIGINFO;
-        act.sa_handler = (void *)signal_handler;
-
-        for (i = 1; i < 31; i++) {
-                if(i == SIGWINCH)continue;
-                if(i == SIGSEGV)continue;
-                //if(i==SIGFPE)continue;
-                sigaction(i, &act, 0);
-        }
-}
-
-#endif //INTERRUPT_SEM
-
-
-#ifdef SORT_EFFICEINCY_TET
-static int rdata[MAX_CLIENTS];
-void quickSort( int a[], int l, int r);
-int partition( int a[], int l, int r);
-void quickSort( int a[], int l, int r)
-{
-   int j;
-
-   if( l < r )
-   {
-    // divide and conquer
-        j = partition( a, l, r);
-       quickSort( a, l, j-1);
-       quickSort( a, j+1, r);
-   }
-
-}
-
-int partition( int a[], int l, int r) {
-   int pivot, i, j, t;
-   pivot = a[l];
-   i = l; j = r+1;
-
-   while( 1)
-   {
-    do ++i; while( a[i] <= pivot && i <= r );
-    do --j; while( a[j] > pivot );
-    if( i >= j ) break;
-    t = a[i]; a[i] = a[j]; a[j] = t;
-   }
-   t = a[l]; a[l] = a[j]; a[j] = t;
-   return j;
-}
-void populate_and_sort_rdata(void);
-void populate_and_sort_rdata(void) {
-        unsigned i = 0;
-        for (i=0; i< MAX_CLIENTS; i++) {
-                uint16_t demand = rte_ring_count(clients[i].rx_q);
-                uint16_t offload = rte_ring_count(clients[i].tx_q);
-                uint16_t ccost   = clients[i].info->comp_cost;
-                uint32_t prio = demand*ccost - offload;
-                rdata[i] = prio;
-        }
-        quickSort(rdata, 0, MAX_CLIENTS-1);
-}
+inline void check_and_wakeup_nf(uint16_t instance_id) {
+        if (rte_atomic16_read(clients[instance_id].shm_server) ==1) {
+                rte_atomic16_set(clients[instance_id].shm_server, 0);
+                notify_client(instance_id);
+#ifdef ENABLE_NF_WAKE_NOTIFICATION_COUNTER
+                clients[instance_id].stats.wakeup_count+=1;
 #endif
+        }
+}
+
+inline void check_and_block_nf(uint16_t instance_id) {
+        /* Make sure to set the flag here and check for flag in nf_lib and block */
+        rte_atomic16_set(clients[instance_id].shm_server, 1);
+}
+#endif //INTERRUPT_SEM

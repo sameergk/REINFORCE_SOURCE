@@ -63,13 +63,10 @@ INC += onvm_zookeeper.h onvm_zk_watch.h onvm_zk_common.h onvm_vxlan.h zoo_queue.
 
 CFLAGS += $(WERROR_FLAGS) -O3 $(USER_FLAGS)
 CFLAGS += -I$(SRCDIR)/../
+CFLAGS += -I$(SRCDIR)/../lib/
 
+LDFLAGS += $(SRCDIR)/../lib/lib/$(RTE_TARGET)/libonvmhelper.a
 LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_shared.a
-#LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_sc_common.o
-#LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_sc_mgr.o
-#LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_flow_table.o
-#LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_pkt_helper.o
-#LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_flow_dir.o
 
 LDFLAGS += -L/usr/local/lib
 LDLIBS+= -lzmq

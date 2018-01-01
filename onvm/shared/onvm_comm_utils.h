@@ -57,12 +57,13 @@
 #include <time.h>
 
 #include <rte_memory.h>
+#include <rte_mbuf.h>
 /*****************************Internal headers********************************/
 #if defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) &&                           \
     defined(_POSIX_MONOTONIC_CLOCK)
 #define HAS_CLOCK_GETTIME_MONOTONIC
 #endif
-#define USE_THIS_CLOCK  CLOCK_MONOTONIC //CLOCK_THREAD_CPUTIME_ID //CLOCK_PROCESS_CPUTIME_ID //CLOCK_MONOTONIC
+#define USE_THIS_CLOCK  CLOCK_MONOTONIC_RAW //CLOCK_REALTIME //CLOCK_MONOTONIC //CLOCK_MONOTONIC_COARSE  //CLOCK_MONOTONIC_RAW  //CLOCK_BOOTTIME //CLOCK_THREAD_CPUTIME_ID //CLOCK_PROCESS_CPUTIME_ID
 
 typedef struct onvm_time_s {
 #ifdef HAS_CLOCK_GETTIME_MONOTONIC
@@ -106,4 +107,18 @@ inline uint64_t onvm_util_get_diff_cpu_cycles_in_us(uint64_t start, uint64_t end
 inline uint64_t onvm_util_get_elapsed_cpu_cycles(uint64_t start);
 inline uint64_t onvm_util_get_elapsed_cpu_cycles_in_us(uint64_t start);
 
+
+/* Time Stamping type is based of Logical clock */
+#define TS_TYPE_LOGICAL     (0)
+/* Time Stamping type is based of System clock */
+#define TS_TYPE_SYS_CLOCK   (1)
+/* Time Stamping type is based of core( CPU) cycles clock */
+#define TS_TYPE_CPU_CYCLES  (2)
+
+#define TS_RX_PACKET_RATE   (14880000)      //Max packet rate of 14.88M
+//#define USE_TS_TYPE (TS_TYPE_LOGICAL)
+#define USE_TS_TYPE (TS_TYPE_SYS_CLOCK)
+//#define USE_TS_TYPE (TS_TYPE_CPU_CYCLES)
+inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16_t nb_pkts);
+inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint16_t nb_pkts);
 #endif  // _ONVM_COMM_UTILS_H_"

@@ -53,16 +53,20 @@
 #ifndef _ONVM_WAKEMGR_H_
 #define _ONVM_WAKEMGR_H_
 
-
+#include <stdint.h>
 /*********************************Interfaces**********************************/
+void register_signal_handler(void);
 #ifdef INTERRUPT_SEM
 extern struct wakeup_info *wakeup_infos;
-
-void register_signal_handler(void);
 
 int wakemgr_main(void *arg);
 
 inline void handle_wakeup(struct wakeup_info *wakeup_info);
 
+inline void check_and_wakeup_nf(uint16_t instance_id);
+
+inline void check_and_block_nf(uint16_t instance_id);
+
 #endif //INTERRUPT_SEM
+
 #endif //_ONVM_WAKEMGR_H_

@@ -7,7 +7,7 @@
  *   Copyright(c)
  *            2015-2017 George Washington University
  *            2015-2017 University of California Riverside
- *            2010-2014 Intel Corporation. All rights reserved.
+ *            2010-2014 Intel Corporation
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -36,29 +36,43 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
+ * onvm_msg_common.h - Shared structures relating to message passing
+                       between the manager and NFs
  ********************************************************************/
 
+#ifndef _MSG_COMMON_H_
+#define _MSG_COMMON_H_
 
-/******************************************************************************
+#include <stdint.h>
 
-                                 onvm_args.h
+#define MSG_FROM_MGR (0x0)
+#define MSG_NOOP            (0|MSG_FROM_MGR)
+#define MSG_STOP            (1|MSG_FROM_MGR)
+#define MSG_PAUSE           (2|MSG_FROM_MGR)
+#define MSG_RESUME          (4|MSG_FROM_MGR)
+#define MSG_RUN             (MSG_RESUME)
+#define MAX_MSG_FROM_MGR    (0x0F)
 
-    Header file with functions for parsing DPDK and ONVM command-line arguments
+#define MSG_FROM_NF (0xF0)
+#define MSG_NF_STARTING     (1|MSG_FROM_NF)
+#define MSG_NF_STOPPING     (2|MSG_FROM_NF)
+#define MSG_NF_READY        (3|MSG_FROM_NF)
+#define MSG_NF_UNBLOCK_SELF (4|MSG_FROM_NF)
+#define MSG_NF_REGISTER_ECB (5|MSG_FROM_NF)
+#define MSG_NF_TRIGGER_ECB  (6|MSG_FROM_NF)
+#define MSG_NF_SYNC_RESP    (7|MSG_FROM_NF)
 
+#define MSG_MODE_ASYNCHRONOUS   (0)
+#define MSG_MODE_SYNCHRONOUS    (1)
 
-******************************************************************************/
+struct onvm_nf_msg {
+        uint8_t msg_type; /* Constant saying what type of message is */
+//#ifdef ENABLE_SYNC_MGR_TO_NF_MSG  //Note: This means duplicate flag here also; keep it on, but use only when necessary.
+        uint8_t is_sync;  /* Indicates whether the message requires sync notification to MGR or not (default=FALSE) */
+//#endif
+        void *msg_data; /* These should be rte_malloc'd so they're stored in hugepages */
+};
 
-
-#ifndef _ONVM_ARGS_H_
-#define _ONVM_ARGS_H_
-
-#include "getopt.h"
-
-#include "shared/onvm_includes.h"
-#include "onvm_mgr/onvm_init.h"
-
-#define DEFAULT_SERVICE_ID 1
-
-int parse_app_args(uint8_t max_ports, int argc, char *argv[]);
-
-#endif  // _ONVM_ARGS_H_
+/* Enable NF--> NF_MGR notification using onvm_nf_msg rather than legacy onvm_nf_info structure: ( Disable the macro to switch to Legacy) */
+#define ENABLE_MSG_CONSTRUCT_NF_INFO_NOTIFICATION
+#endif

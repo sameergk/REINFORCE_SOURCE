@@ -79,37 +79,84 @@
 #include "onvm_flow_dir.h"
 
 /**********************************Macros*************************************/
-
-
 // Number of packets to attempt to read from queue
-#define PKT_READ_SIZE  (ONVM_PACKETS_BATCH_SIZE)    //((uint16_t)1)
+#define NF_PKT_BATCH_SIZE  (ONVM_PACKETS_BATCH_SIZE)    //((uint16_t)1)
 
+// profiled overhead of rte_rdtsc() approx. 18~27cycles per call
+#define RTDSC_CYCLE_COST    (20*2)
+
+/******************************************************************************/
+//                  NFLIB specific Feature flags
+/******************************************************************************/
+/* ENABLE TIMER BASED WEIGHT COMPUTATION IN NF_LIB */
+
+/* Feature to enable computation of NF computation cost periodically using the timer */
+//enable: ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+#define ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+/* Feature to enable static ID assignment/request to the NF */
+#define ENABLE_STATIC_ID                //Enable NF to request its own id
+
+/* Feature to enable profiling the latency of key NFLIB operations */
+#define ENABLE_LOCAL_LATENCY_PROFILER   // Profile latency for NF stages
+
+/* Test feature to profile the memcopy overhead in NFLIB */
+//#define TEST_MEMCPY_OVERHEAD          // Profile memcpy overhead on NF performance
+
+
+#if defined(ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION)
+#include <rte_timer.h>
+// Periodicity for Stats extraction in NFLIB for NFs computation cost
+#define NF_STATS_PERIOD_IN_MS 1       //(use 1 or 10 or 100ms)
+#endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+
+#ifdef TEST_MEMCPY_OVERHEAD
+#define MEMCPY_SIZE (0.125*1024)
+#define TEST_MEMCPY_MODE_PER_PACKET
+#ifndef TEST_MEMCPY_MODE_PER_PACKET
+#define TEST_MEMCPY_MODE_PER_BATCH
+#endif //TEST_MEMCPY_MODE_PER_PACKET
+#endif //TEST_MEMCPY_OVERHEAD
 
 /******************************Global Variables*******************************/
-
+// Shared data for host port information
+struct port_info *ports;
 
 // ring used to place new nf_info struct
-static struct rte_ring *nf_info_ring;
+static struct rte_ring *mgr_msg_ring;
 
+// ring used for mgr -> NF messages
+static struct rte_ring *nf_msg_ring;
 
 // rings used to pass packets between NFlib and NFmgr
 static struct rte_ring *tx_ring, *rx_ring;
 
-#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+#if defined(ENABLE_SHADOW_RINGS)
 static struct rte_ring *tx_sring, *rx_sring;
 #endif
 
-// shared data from server. We update statistics here
-static volatile struct client_tx_stats *tx_stats;
+//ring used for syncrhonous response msg to MGR
+#ifdef ENABLE_SYNC_MGR_TO_NF_MSG
+static struct rte_ring *mgr_rsp_ring;
+#endif
 
+// Shared data from Manager. We update statistics here
+struct client *nfs = NULL;      //obtain at the time of init.
+struct client *this_nf = NULL;  //update this once the Instance ID is obtained.
+
+// Shared data from manager, has information used for nf_side tx
+uint16_t **services;
+uint16_t *nf_per_service_count;
 
 // Shared data for client info
 extern struct onvm_nf_info *nf_info;
 
-
 // Shared pool for all clients info
 static struct rte_mempool *nf_info_mp;
 
+// Shared pool for mgr <--> NF messages
+static struct rte_mempool *nf_msg_pool;
 
 // User-given NF Client ID (defaults to manager assigned)
 static uint16_t initial_instance_id = NF_NO_ID;
@@ -130,7 +177,6 @@ static struct onvm_service_chain *default_chain;
 #ifdef INTERRUPT_SEM
 // to track packets per NF <used for sampling computation cost>
 uint64_t counter = 1;
-
 // flag (shared mem variable) to track state of NF and trigger wakeups
 // flag_p=1 => NF sleeping (waiting on semaphore)
 // flag_p=0 => NF is running and processing (not waiting on semaphore)
@@ -141,8 +187,21 @@ static rte_atomic16_t *flag_p;
 // Mutex for sem_wait
 static sem_t *mutex;
 #endif //USE_SIGNAL
-
 #endif  //INTERRUPT_SEM
+
+#if defined(ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION)
+struct rte_timer stats_timer;
+#endif //ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+onvm_interval_timer_t ts, g_ts;
+#endif //ENABLE_LOCAL_LATENCY_PROFILER
+
+#ifdef TEST_MEMCPY_OVERHEAD
+void *base_memory = NULL;
+static inline void allocate_base_memory(void);
+static inline void do_memcopy(void *from_pointer);
+#endif //TEST_MEMCPY_OVERHEAD
 
 /******************************Internal functions*****************************/
 
@@ -189,6 +248,17 @@ onvm_nflib_parse_args(int argc, char *argv[]);
 static void
 onvm_nflib_handle_signal(int sig);
 
+static inline void
+onvm_nflib_cleanup(void);
+
+static inline void
+onvm_nflib_startup(void);
+
+static inline int
+onvm_nflib_notify_ready(void);
+
+static inline void
+onvm_nflib_dequeue_messages(void);
 
 #ifdef INTERRUPT_SEM
 /*
@@ -196,8 +266,25 @@ onvm_nflib_handle_signal(int sig);
  *
  * Input  : Number of NF instances
  */ 
-static void 
+static inline void
 init_shared_cpu_info(uint16_t instance_id);
+
+#define YEILD_DUE_TO_EXPLICIT_REQ   (0)
+#define YIELD_DUE_TO_EMPTY_RX_RING  (0)
+#define YIELD_DUE_TO_FULL_TX_RING   (1)
+void onvm_nf_yeild(__attribute__((unused))struct onvm_nf_info* info, uint8_t reason_rxtx);
+
 #endif  //INTERRUPT_SEM
+
+#ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+static inline void
+init_nflib_timers(void);
+#endif //#ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
+
+#ifdef ENABLE_NFV_RESL
+static inline void
+        onvm_nflib_wait_till_notification(void);
+#endif //ENABLE_NFV_RESL
+
 
 #endif  // _ONVM_NFLIB_INTERNAL_H_

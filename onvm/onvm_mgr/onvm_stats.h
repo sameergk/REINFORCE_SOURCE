@@ -5,8 +5,8 @@
  *   BSD LICENSE
  *
  *   Copyright(c)
- *            2015-2016 George Washington University
- *            2015-2016 University of California Riverside
+ *            2015-2017 George Washington University
+ *            2015-2017 University of California Riverside
  *            2010-2014 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
@@ -20,9 +20,9 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
+ *     * The name of the author may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
  *
  *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
@@ -52,6 +52,44 @@
 #define _ONVM_STATS_H_
 #include <rte_ether.h>
 
+
+#include "cJSON.h"
+
+#define ONVM_STR_STATS_STDOUT "stdout"
+#define ONVM_STR_STATS_STDERR "stderr"
+#define ONVM_STR_STATS_WEB "web"
+
+#define ONVM_STATS_FOPEN_ARGS "w+"
+#define ONVM_STATS_PATH_BASE "../onvm_web/"
+#define ONVM_JSON_STATS_FILE ONVM_STATS_PATH_BASE "onvm_json_stats.json"
+#define ONVM_STATS_FILE ONVM_STATS_PATH_BASE "onvm_stats.txt"
+
+#define ONVM_JSON_PORT_STATS_KEY "onvm_port_stats"
+#define ONVM_JSON_NF_STATS_KEY "onvm_nf_stats"
+#define ONVM_JSON_TIMESTAMP_KEY "last_updated"
+
+#define ONVM_SNPRINTF(str_, sz_, fmt_, ...)                                     \
+        do {                                                                    \
+                (str_) = (char *)malloc(sizeof(char) * (sz_));                  \
+                if (!(str_))                                                    \
+                        rte_exit(-1, "ERROR! [%s,%d]: unable to malloc str.\n", \
+                                 __FUNCTION__, __LINE__);                       \
+                snprintf((str_), (sz_), (fmt_), __VA_ARGS__);                   \
+        } while (0)
+
+typedef enum {
+        ONVM_STATS_NONE = 0,
+        ONVM_STATS_STDOUT,
+        ONVM_STATS_STDERR,
+        ONVM_STATS_WEB
+} ONVM_STATS_OUTPUT;
+
+cJSON* onvm_json_root;
+cJSON* onvm_json_port_stats_arr;
+cJSON* onvm_json_nf_stats_arr;
+cJSON* onvm_json_port_stats[RTE_MAX_ETHPORTS];
+cJSON* onvm_json_nf_stats[MAX_NFS];
+
 /*********************************Interfaces**********************************/
 typedef struct onvm_stats_snapshot {
         uint64_t rx_delta;          // rx packets in sampled interval
@@ -65,6 +103,26 @@ typedef struct onvm_stats_snapshot {
         uint32_t rx_drop_rate;      // (rx_drops_delta)/interval)
         uint32_t tx_drop_rate;      // (tx_drops_delta)/interval)
 }onvm_stats_snapshot_t;
+
+/*********************************Interfaces**********************************/
+
+
+/*
+ * Interface called by the manager to tell the stats module where to print
+ * You should only call this once
+ *
+ * Input: a STATS_OUTPUT enum value representing output destination.  If
+ * STATS_NONE is specified, then stats will not be printed to the console or web
+ * browser.  If STATS_STDOUT or STATS_STDOUT is specified, then stats will be
+ * output the respective stream.
+ */
+void onvm_stats_set_output(ONVM_STATS_OUTPUT output);
+
+/*
+ * Interface to close out file descriptions and clean up memory
+ * To be called when the stats loop is done
+ */
+void onvm_stats_cleanup(void);
 
 /* Interace to retieve nf stats
  * difftime: if 0 : only read but do not update params and rate else update
@@ -96,6 +154,7 @@ void onvm_stats_display_all(unsigned difftime);
  *
  */
 void onvm_stats_clear_all_clients(void);
+#define onvm_stats_clear_all_nfs onvm_stats_clear_all_clients
 
 
 /*
@@ -105,6 +164,7 @@ void onvm_stats_clear_all_clients(void);
  *
  */
 void onvm_stats_clear_client(uint16_t id);
+#define onvm_stats_clear_nf(x) onvm_stats_clear_client(x)
 
 
 /******************************Main functions*********************************/
@@ -124,7 +184,7 @@ void onvm_stats_display_ports(unsigned difftime);
  *
  * Input : time passed since last display (to compute packet rate)
  */
-void onvm_stats_display_clients(unsigned difftime);
+void onvm_stats_display_clients(__attribute__((unused)) unsigned difftime);
 
 /*
  * Function displaying statistics for all active service chains (flow_entry*)
@@ -157,5 +217,7 @@ const char * onvm_stats_print_MAC(uint8_t port);
  */
 
 void onvm_print_ethaddr(const char *name, struct ether_addr *eth_addr);
+
+extern ONVM_STATS_OUTPUT stats_destination;
 
 #endif  // _ONVM_STATS_H_

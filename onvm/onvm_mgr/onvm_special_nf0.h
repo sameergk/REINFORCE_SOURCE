@@ -52,9 +52,6 @@
 #ifndef _ONVM_SPECIAL_NF0_H_
 #define _ONVM_SPECIAL_NF0_H_
 
-extern uint16_t next_instance_id;
-extern struct wakeup_info *wakeup_infos;
-
 /********************************Globals and varaible declarations ***********************************/
 
 /********************************Interfaces***********************************/
@@ -67,7 +64,6 @@ extern struct wakeup_info *wakeup_infos;
  *
  */
 /****************************Internal functions*******************************/
-
 
 /*
  * Function starting special NF.

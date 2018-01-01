@@ -5,8 +5,8 @@
  *   BSD LICENSE
  *
  *   Copyright(c)
- *            2015-2016 George Washington University
- *            2015-2016 University of California Riverside
+ *            2015-2017 George Washington University
+ *            2015-2017 University of California Riverside
  *            2010-2014 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
@@ -20,9 +20,9 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
+ *     * The name of the author may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
  *
  *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
@@ -50,9 +50,14 @@
 
 
 #include "onvm_mgr/onvm_args.h"
+#include "onvm_mgr/onvm_stats.h"
 
 
 /******************************Global variables*******************************/
+
+
+/* global var for number of currently active NFs - extern in header init.h */
+uint16_t num_nfs;
 
 
 /* global var for number of clients - extern in header init.h */
@@ -66,6 +71,12 @@ uint16_t default_service = DEFAULT_SERVICE_ID;
 
 /* global var: did user directly specify num clients? */
 uint8_t is_static_clients;
+
+/* global var to where to print stats - extern in init.h */
+ONVM_STATS_OUTPUT stats_destination = ONVM_STATS_NONE;
+
+/* global var for how long stats should wait before updating - extern in init.h */
+uint16_t global_stats_sleep_time = 1;
 
 /* global var for program name */
 static const char *progname;
@@ -97,6 +108,12 @@ parse_num_clients(const char *clients);
 
 #endif
 
+static int
+parse_stats_output(const char *stats_output);
+
+static int
+parse_stats_sleep_time(const char *sleeptime);
+
 
 /*********************************Interfaces**********************************/
 
@@ -105,16 +122,22 @@ int
 parse_app_args(uint8_t max_ports, int argc, char *argv[]) {
         int option_index, opt;
         char **argvopt = argv;
-        static struct option lgopts[] = { /* no long options */
-                {NULL, 0, 0, 0 }
+
+        static struct option lgopts[] = {
+                {"port-mask",           required_argument,      NULL,   'p'},
+                {"num-services",        required_argument,      NULL,   'r'},
+                {"default-service",     required_argument,      NULL,   'd'},
+                {"stats-out",           no_argument,            NULL,   's'},
+                {"stats-sleep-time",    no_argument,            NULL,   'z'}
         };
+
         progname = argv[0];
         is_static_clients = DYNAMIC_CLIENTS;
 
 #ifdef USE_STATIC_IDS
-        while ((opt = getopt_long(argc, argvopt, "n:r:p:d:", lgopts, &option_index)) != EOF) {
+        while ((opt = getopt_long(argc, argvopt, "n:r:p:d:s:z:", lgopts, &option_index)) != EOF) {
 #else
-        while ((opt = getopt_long(argc, argvopt, "r:p:d:", lgopts, &option_index)) != EOF) {
+        while ((opt = getopt_long(argc, argvopt, "r:p:d:s:z:", lgopts, &option_index)) != EOF) {
 #endif
                 switch (opt) {
                         case 'p':
@@ -143,6 +166,20 @@ parse_app_args(uint8_t max_ports, int argc, char *argv[]) {
                                         return -1;
                                 }
                                 break;
+                        case 's':
+                                if (parse_stats_output(optarg) != 0) {
+                                        usage();
+                                        return -1;
+                                }
+
+                                onvm_stats_set_output(stats_destination);
+                                break;
+                        case 'z':
+                                if(parse_stats_sleep_time(optarg) != 0){
+                                        usage();
+                                        return -1;
+                                }
+                                break;
                         default:
                                 printf("ERROR: Unknown option '%c'\n", opt);
                                 usage();
@@ -166,16 +203,15 @@ parse_app_args(uint8_t max_ports, int argc, char *argv[]) {
 static void
 usage(void) {
         printf(
-            "%s [EAL options] -- -p PORTMASK "
-#ifdef USE_STATIC_IDS
-            "[-n NUM_CLIENTS] "
-#endif
-            "[-s NUM_SOCKETS] [-r NUM_SERVICES]\n"
-            " -p PORTMASK: hexadecimal bitmask of ports to use\n"
+            "%s [EAL options] -- -p PORTMASK [-r NUM_SERVICES] [-d DEFAULT_SERVICE] [-s STATS_OUTPUT]\n"
+            "\t-p PORTMASK: hexadecimal bitmask of ports to use\n"
+            "\t-r NUM_SERVICES: number of unique serivces allowed. defaults to 16 (optional)\n"
+            "\t-d DEFAULT_SERVICE: the service to initially receive packets. defaults to 1 (optional)\n"
+            "\t-s STATS_OUTPUT: where to output manager stats (stdout/stderr/web). defaults to NONE (optional)\n"
+            "\t-z STATS_SLEEP_TIME: how long the stats thread should wait before updating the stats (in seconds)\n"
 #ifdef USE_STATIC_IDS
             " -n NUM_CLIENTS: number of client processes to use (optional)\n"
 #endif
-            " -r NUM_SERVICES: number of unique serivces allowed (optional)\n" // -s already used for num sockets
             , progname);
 }
 
@@ -242,6 +278,34 @@ parse_num_services(const char *services) {
         return 0;
 }
 
+static int
+parse_stats_sleep_time(const char *sleeptime){
+        char* end = NULL;
+        unsigned long temp;
+
+        temp = strtoul(sleeptime, &end, 10);
+        if(end == NULL || *end != '\0' || temp == 0)
+                return -1;
+
+        global_stats_sleep_time = (uint16_t)temp;
+        return 0;
+}
+
+static int
+parse_stats_output(const char *stats_output) {
+        if (!strcmp(stats_output, ONVM_STR_STATS_STDOUT)) {
+                stats_destination = ONVM_STATS_STDOUT;
+                return 0;
+        } else if (!strcmp(stats_output, ONVM_STR_STATS_STDERR)) {
+                stats_destination = ONVM_STATS_STDERR;
+                return 0;
+        } else if (!strcmp(stats_output, ONVM_STR_STATS_WEB)) {
+                stats_destination = ONVM_STATS_WEB;
+                return 0;
+        } else {
+                return -1;
+        }
+}
 
 #ifdef USE_STATIC_IDS
 static int
