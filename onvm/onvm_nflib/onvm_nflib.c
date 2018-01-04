@@ -291,6 +291,11 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         int64_t ttl_elapsed = onvm_util_get_elapsed_time(&g_ts);
         printf("WAIT_TIME(INIT-->START-->Init_end): %li ns\n", ttl_elapsed);
 #endif
+        // Get the FlowTable Entries Exported to the NF.
+        //#if defined(ENABLE_NFV_RESL)
+        onvm_flow_dir_nf_init();
+        //#endif //#if defined(ENABLE_NFV_RESL)
+
         RTE_LOG(INFO, APP, "Finished Process Init.\n");
         return retval_final;
 }
@@ -347,14 +352,14 @@ static inline void onvm_nflib_implicit_wakeup(void) {
 #endif //#ifdef INTERRUPT_SEM
 
 static inline void start_ppkt_processing_cost(uint64_t *start_tsc) {
-        if (counter % SAMPLING_RATE == 0) {
+        if (unlikely(counter % SAMPLING_RATE == 0)) {
                 *start_tsc = onvm_util_get_current_cpu_cycles();//compute_start_cycles(); //rte_rdtsc();
         }
 }
 static inline void end_ppkt_processing_cost(uint64_t start_tsc) {
-        if (counter % SAMPLING_RATE == 0) {
+        if (unlikely(counter % SAMPLING_RATE == 0)) {
                 this_nf->stats.comp_cost = onvm_util_get_elapsed_cpu_cycles(start_tsc);
-                if (this_nf->stats.comp_cost > RTDSC_CYCLE_COST) {
+                if (likely(this_nf->stats.comp_cost > RTDSC_CYCLE_COST)) {
                         this_nf->stats.comp_cost -= RTDSC_CYCLE_COST;
                 }
 #ifdef STORE_HISTOGRAM_OF_NF_COMPUTATION_COST
@@ -449,6 +454,29 @@ static inline void onvm_nflib_handle_tx_shadow_ring(void) {
 }
 #endif // defined(ENABLE_SHADOW_RINGS)
 
+#ifdef ENABLE_REPLICA_STATE_UPDATE
+static inline void synchronize_replica_nf_state_memory(void) {
+        if(likely(nf_info->nf_state_mempool && pReplicaStateMempool))
+                if(likely(dirty_state_map->dirty_index)) {
+                        uint64_t dirty_index = dirty_state_map->dirty_index;
+                        uint64_t copy_index = 0;
+                        uint64_t copy_setbit = 0;
+                        uint16_t copy_offset = 0;
+                        for(;dirty_index;) {
+                                copy_setbit = (1L<<(copy_index));
+                                if(dirty_index&copy_setbit) {
+                                        copy_offset = copy_index*DIRTY_MAP_PER_CHUNK_SIZE;
+                                        rte_memcpy(( ((uint8_t*)pReplicaStateMempool)+copy_offset),(((uint8_t*)nf_info->nf_state_mempool)+copy_offset),DIRTY_MAP_PER_CHUNK_SIZE);
+                                        dirty_index^=copy_setbit;
+                                }
+                                copy_index++;
+                        }
+                        dirty_state_map->dirty_index =0;
+                }
+        return;
+}
+#endif
+
 static inline int onvm_nflib_fetch_packets( void **pkts, unsigned max_packets);
 static inline int onvm_nflib_fetch_packets( void **pkts, unsigned max_packets) {
 #if defined(ENABLE_SHADOW_RINGS)
@@ -482,12 +510,60 @@ static inline int onvm_nflib_fetch_packets( void **pkts, unsigned max_packets) {
         }
         return max_packets;
 }
-static inline void onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts, pkt_handler handler);
-static inline void onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts, pkt_handler handler) {
+static inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size);
+static inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size) {
+        int ret = 0;
+
+        /* Perform Post batch processing actions */
+#ifdef REPLICA_UPDATE_MODE_PER_BATCH
+        synchronize_replica_nf_state_memory();
+#endif
+#if defined(TEST_MEMCPY_MODE_PER_BATCH)
+        do_memcopy(nf_info->nf_state_mempool);
+#endif //TEST_MEMCPY_OVERHEAD
+
+        if(likely(tx_batch_size)) {
+                if(likely(0 == rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size))) {
+                        this_nf->stats.tx += tx_batch_size;
+                } else {
+#if defined(NF_LOCAL_BACKPRESSURE)
+                        do {
+#ifdef INTERRUPT_SEM
+                                //printf("\n Yielding till Tx Ring has place to store Packets\n");
+                                onvm_nf_yeild(nf_info, YIELD_DUE_TO_FULL_TX_RING);
+                                //printf("\n Resuming from Tx Ring wait to store Packets\n");
+#endif
+                                if (tx_batch_size > rte_ring_free_count(tx_ring)) {
+                                        continue;
+                                }
+                                if((ret = rte_ring_enqueue_bulk(tx_ring,pktsTX,tx_batch_size)) == 0)break;
+                        } while (ret && ((this_nf->info->status==NF_RUNNING) && keep_running));
+                        this_nf->stats.tx += tx_batch_size;
+#endif  //NF_LOCAL_BACKPRESSURE
+                }
+        }
+
+#if defined(ENABLE_SHADOW_RINGS)
+        /* Finally clear all packets from the Tx Shadow Ring and also Rx shadow Ring ::only if packets from shadow ring have been flushed to Tx Ring: Reason, NF might get paused or stopped */
+        if(likely(ret == 0)) {
+                rte_ring_sc_dequeue_burst(tx_sring,pktsTX,rte_ring_count(tx_sring));
+                if(unlikely(rte_ring_count(rx_sring))) {
+                        //These are the held packets in the NF in this round:
+                        rte_ring_sc_dequeue_burst(rx_sring,pktsTX,rte_ring_count(rx_sring));
+                        //fprintf(stderr, "BATCH END: %d packets still in Rx shadow ring!\n", rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring)));
+                }
+        }
+#endif
+
+        return ret;
+}
+static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts);
+static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts) {
         int ret_act;
         uint16_t i=0;
-        uint32_t tx_batch_size = 0;
+        uint16_t tx_batch_size = 0;
         void *pktsTX[NF_PKT_BATCH_SIZE];
+
 
 #ifdef INTERRUPT_SEM
         // To account NFs computation cost (sampled over SAMPLING_RATE packets)
@@ -498,11 +574,15 @@ static inline void onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkt
 #ifdef INTERRUPT_SEM
                 start_ppkt_processing_cost(&start_tsc);
 #endif
-                ret_act = (*handler)((struct rte_mbuf*) pkts[i], onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]));
+                ret_act = (*pkt_handler_func)((struct rte_mbuf*) pkts[i], onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]));
 
+#ifdef REPLICA_UPDATE_MODE_PER_PACKET
+                synchronize_replica_nf_state_memory();
+#endif
 #if defined(TEST_MEMCPY_MODE_PER_PACKET)
                 do_memcopy(nf_info->nf_state_mempool);
 #endif
+
 
 #ifdef INTERRUPT_SEM
                 end_ppkt_processing_cost(start_tsc);
@@ -532,39 +612,10 @@ static inline void onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkt
         } //End Batch Process;
 
         /* Perform Post batch processing actions */
-#if defined(TEST_MEMCPY_MODE_PER_BATCH)
-        do_memcopy(nf_info->nf_state_mempool);
-#endif //TEST_MEMCPY_OVERHEAD
-
         if(likely(tx_batch_size)) {
-                if(likely(0 == rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size))) {
-                        this_nf->stats.tx += tx_batch_size;
-                } else {
-#if defined(NF_LOCAL_BACKPRESSURE)
-                        do {
-#ifdef INTERRUPT_SEM
-                                //printf("\n Yielding till Tx Ring has place to store Packets\n");
-                                onvm_nf_yeild(nf_info, YIELD_DUE_TO_FULL_TX_RING);
-                                //printf("\n Resuming from Tx Ring wait to store Packets\n");
-#endif
-                                if (tx_batch_size > rte_ring_free_count(tx_ring)) {
-                                        continue;
-                                }
-                        } while (rte_ring_enqueue_bulk(tx_ring,pktsTX, tx_batch_size) && keep_running);
-                        this_nf->stats.tx += tx_batch_size;
-#endif  //NF_LOCAL_BACKPRESSURE
-                }
+                return onvm_nflib_post_process_packets_batch(pktsTX, tx_batch_size);
         }
-
-#if defined(ENABLE_SHADOW_RINGS)
-        /* Finally clear all packets from the Tx Shadow Ring and also Rx shadow Ring */
-        rte_ring_sc_dequeue_burst(tx_sring,pkts,rte_ring_count(tx_sring));
-        if(unlikely(rte_ring_count(rx_sring))) {
-                //These are the held packets in the NF in this round:
-                rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring));
-                //fprintf(stderr, "BATCH END: %d packets still in Rx shadow ring!\n", rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring)));
-        }
-#endif
+        return tx_batch_size;
 }
 
 int
@@ -574,7 +625,8 @@ onvm_nflib_run(
         ) {
         void *pkts[NF_PKT_BATCH_SIZE]; //better to use (NF_PKT_BATCH_SIZE*2)
         uint16_t nb_pkts;
-        
+
+        pkt_handler_func = handler;
         printf("\nClient process %d handling packets\n", info->instance_id);
         printf("[Press Ctrl-C to quit ...]\n");
 
@@ -597,7 +649,7 @@ onvm_nflib_run(
                 nb_pkts = onvm_nflib_fetch_packets(pkts, NF_PKT_BATCH_SIZE);
                 if(likely(nb_pkts)) {
                         /* Give each packet to the user processing function */
-                        onvm_nflib_process_packets_batch(pkts, nb_pkts, handler);
+                        nb_pkts = onvm_nflib_process_packets_batch(pkts, nb_pkts);
                 }
 
 #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
@@ -975,6 +1027,10 @@ onvm_nflib_startup(void) {
         nf_msg_ring = rte_ring_lookup(get_msg_queue_name(nf_info->instance_id));
         if (nf_msg_ring == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get nf msg ring");
+
+#ifdef ENABLE_REPLICA_STATE_UPDATE
+        pReplicaStateMempool = nfs[get_associated_active_or_standby_nf_id(nf_info->instance_id)].nf_state_mempool;
+#endif
 }
 
 #ifdef INTERRUPT_SEM
@@ -1024,11 +1080,6 @@ init_shared_cpu_info(uint16_t instance_id) {
         flag_p = (rte_atomic16_t *)shm;
 
         set_cpu_sched_policy_and_mode();
-
-        // Get the FlowTable Entries Exported to the NF.
-        #if defined(ENABLE_NFV_RESL)
-        onvm_flow_dir_nf_init();
-        #endif //#if defined(ENABLE_NFV_RESL)
 }
 #endif //INTERRUPT_SEM
 

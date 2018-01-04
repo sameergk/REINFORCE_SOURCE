@@ -77,7 +77,7 @@
 #include "onvm_includes.h"
 #include "onvm_sc_common.h"
 #include "onvm_flow_dir.h"
-
+#include "onvm_nflib.h"
 /**********************************Macros*************************************/
 // Number of packets to attempt to read from queue
 #define NF_PKT_BATCH_SIZE  (ONVM_PACKETS_BATCH_SIZE)    //((uint16_t)1)
@@ -203,6 +203,7 @@ static inline void allocate_base_memory(void);
 static inline void do_memcopy(void *from_pointer);
 #endif //TEST_MEMCPY_OVERHEAD
 
+pkt_handler pkt_handler_func = NULL;
 /******************************Internal functions*****************************/
 
 
@@ -284,7 +285,12 @@ init_nflib_timers(void);
 #ifdef ENABLE_NFV_RESL
 static inline void
         onvm_nflib_wait_till_notification(void);
+
+#ifdef ENABLE_REPLICA_STATE_UPDATE
+void *pReplicaStateMempool = NULL;
+#endif
 #endif //ENABLE_NFV_RESL
+dirty_mon_state_map_tbl_t *dirty_state_map = NULL;  //reson to keep it ouside is that NFs can still make  use of it regardless of resiliency
 
 
 #endif  // _ONVM_NFLIB_INTERNAL_H_

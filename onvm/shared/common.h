@@ -291,6 +291,14 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
+#define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
+
+#ifdef ENABLE_REPLICA_STATE_UPDATE
+#define REPLICA_UPDATE_MODE_PER_PACKET
+#ifndef REPLICA_UPDATE_MODE_PER_PACKET
+#define REPLICA_UPDATE_MODE_PER_BATCH
+#endif
+#endif
 
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)

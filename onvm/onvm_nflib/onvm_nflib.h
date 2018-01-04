@@ -57,7 +57,6 @@
 //#endif
 #include "common.h"
 /************************************API**************************************/
-extern unsigned long max_nf_computation_cost;
 /**
  * Initialize the OpenNetVM container Library.
  * This will setup the DPDK EAL as a secondary process, and notify the host
@@ -171,5 +170,15 @@ int nflib_aio_init(onvm_nflib_aio_init_info_t *info, aio_notify_handler_cb cb_ha
  *        Return Status: 0 Success; -ve value Failures; +ve value>0 (later extension ??);
  */
 int nflib_pkt_aio(struct rte_mbuf* pkt, nflib_aio_status_t *status, uint32_t rw_options);   //per pkt rw_options: 0=read,1=write; 2=extend later..
+
+/** Structure to represent the Dirty state map for the in-memory NF state **/
+typedef struct dirty_mon_state_map_tbl {
+        uint64_t dirty_index;
+        // Bit index to every 1K LSB=0-1K, MSB=63-64K
+}dirty_mon_state_map_tbl_t;
+#ifdef ENABLE_NFV_RESL
+#define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/(sizeof(uint64_t)*CHAR_BIT))
+#endif
+extern dirty_mon_state_map_tbl_t *dirty_state_map;
 
 #endif  // _ONVM_NFLIB_H_

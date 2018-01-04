@@ -86,18 +86,13 @@ typedef struct vlan_tag_info_table {
 }vlan_tag_info_table_t;
 vlan_tag_info_table_t *vtag_tbl = NULL;
 
-typedef struct dirty_mon_state_map_tbl {
-        uint64_t dirty_index;
-        // Bit index to every 1K LSB=0-1K, MSB=63-64K
-}dirty_mon_state_map_tbl_t;
-dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
 
 #ifdef ENABLE_NFV_RESL
-#define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/sizeof(uint64_t))
+//#define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/(sizeof(uint64_t)*CHAR_BIT))
 #define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
 #else
 #define VLAN_NF_STATE_SIZE (64*1024)
-#define DIRTY_MAP_PER_CHUNK_SIZE (VLAN_NF_STATE_SIZE/sizeof(uint64_t))
+#define DIRTY_MAP_PER_CHUNK_SIZE (VLAN_NF_STATE_SIZE/(sizeof(uint64_t)*CHAR_BIT))
 #define MAX_STATE_ELEMENTS  ((VLAN_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(vlan_tag_info_table_t))
 void *vlan_state_mp = NULL;
 #endif
@@ -218,11 +213,14 @@ static inline uint64_t map_tag_index_to_dirty_chunk_bit_index(uint16_t vlan_tbl_
         uint64_t dirty_map_bitmask = 0;
         dirty_map_bitmask |= (1<< (start_offset/DIRTY_MAP_PER_CHUNK_SIZE));
         dirty_map_bitmask |= (1<< (end_offset/DIRTY_MAP_PER_CHUNK_SIZE));
+        //printf("\n For %d, 0x%lx\n",(int)vlan_tbl_index, dirty_map_bitmask);
         return dirty_map_bitmask;
 }
 static inline int update_dirty_state_index(uint16_t vtag_index) {
         if(dirty_state_map) {
                 dirty_state_map->dirty_index |= map_tag_index_to_dirty_chunk_bit_index(vtag_index);
+                //if(dirty_state_map->dirty_index == 0)
+                        dirty_state_map->dirty_index |= (1L<<(rand() % 60));
         }
         return vtag_index;
 }
@@ -241,7 +239,7 @@ static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
 
 static void
 do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
-        return;
+
         /* This function will check if it is a valid ETH Packet and if it is not a vlan_tagged, inserts a vlan tag */
         struct ether_hdr *eth = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
         if (!eth) {
@@ -266,6 +264,7 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
 #endif
 #endif
                 {
+                        //printf("\n\n Inserting Vlan Tag\n");
                         struct onvm_flow_entry *flow_entry = NULL;
                         onvm_flow_dir_get_pkt(pkt, &flow_entry);
                         if(flow_entry) {
@@ -274,6 +273,7 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
                 }
                 /* Extract the vlan tag: Reuse if entry is set; or get new one */
                 uint16_t vlan_tag = ((vtag_tbl[vlan_ft_index].vlan_tag)?(vtag_tbl[vlan_ft_index].vlan_tag):get_new_vlan_tag_value());
+                //printf("\n\n Inserting Vlan Tag=%d for vlan_ft_index=%d\n",vlan_tag, vlan_ft_index);
 
 
                 struct vlan_hdr *vlan = (struct vlan_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr));
@@ -310,6 +310,7 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 do_stats_display(pkt);
                 counter = 0;
         }
+        //printf("\n Inside Packet Handler\n");
 
         do_check_and_insert_vlan_tag(pkt,meta);
         //if(0 == counter) do_stats_display(pkt);
@@ -319,6 +320,8 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
         meta->action = ONVM_NF_ACTION_OUT;
         meta->destination = pkt->port;
+
+        //printf("\n Leaving Packet Handler\n");
         return 0;
 }
 

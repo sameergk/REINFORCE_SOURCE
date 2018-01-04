@@ -73,10 +73,14 @@ typedef struct monitor_state_info_table {
         uint32_t pkt_counter;
 }monitor_state_info_table_t;
 monitor_state_info_table_t *mon_state_tbl = NULL;
+
+#if 0
 typedef struct dirty_mon_state_map_tbl {
         uint64_t dirty_index;   //Bit index to every 1K LSB=0-1K, MSB=63-64K
 }dirty_mon_state_map_tbl_t;
 dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
+#endif
+
 #ifdef ENABLE_NFV_RESL
 #define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(monitor_state_info_table_t))
 #endif
