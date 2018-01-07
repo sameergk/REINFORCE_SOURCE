@@ -159,13 +159,12 @@ extern struct onvm_ft *sdn_ft;
 #ifdef ENABLE_NFV_RESL
 #ifdef ENABLE_NF_MGR_IDENTIFIER
 extern uint32_t nf_mgr_id;
-#endif // ENABLE_NF_MGR_IDENTIFIER
+#endif
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 extern void **services_state_pool;
-#endif  //ENABLE_PER_SERVICE_MEMPOOL
-
-#endif // ENABLE_NFV_RESL
+#endif
+#endif
 
 #ifdef ENABLE_VXLAN
 #ifndef ENABLE_ZOOKEEPER

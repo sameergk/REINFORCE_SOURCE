@@ -220,7 +220,7 @@ static inline int update_dirty_state_index(uint16_t vtag_index) {
         if(dirty_state_map) {
                 dirty_state_map->dirty_index |= map_tag_index_to_dirty_chunk_bit_index(vtag_index);
                 //if(dirty_state_map->dirty_index == 0)
-                        dirty_state_map->dirty_index |= (1L<<(rand() % 60));
+                        //dirty_state_map->dirty_index |= (1L<<(rand() % 60));
         }
         return vtag_index;
 }

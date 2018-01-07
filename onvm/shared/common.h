@@ -43,8 +43,11 @@
 
 #include <rte_mbuf.h>
 #include <rte_ether.h>
-#include <stdint.h>
+#ifdef RTE_LIBRTE_PDUMP
+#include <rte_pdump.h>
+#endif
 
+#include <stdint.h>
 #include "onvm_sort.h"
 #include "onvm_comm_utils.h"
 #include "onvm_msg_common.h"
@@ -105,6 +108,9 @@
 
 /** Enable Zookeeper Data store */
 //#define ENABLE_ZOOKEEPER
+
+/** Enable Packet Dumper **/
+//#define RTE_LIBRTE_PDUMP
 
 /** Sub features for ENABLE_PACKET_TIMESTAMPING  */
 #ifdef ENABLE_PACKET_TIMESTAMPING
@@ -294,7 +300,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 
 #ifdef ENABLE_REPLICA_STATE_UPDATE
-#define REPLICA_UPDATE_MODE_PER_PACKET
+//#define REPLICA_UPDATE_MODE_PER_PACKET
 #ifndef REPLICA_UPDATE_MODE_PER_PACKET
 #define REPLICA_UPDATE_MODE_PER_BATCH
 #endif
@@ -310,7 +316,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 #define _SERVICE_STATE_MEMPOOL_NAME "SVC_STATE_MEMPOOL"
-#define _SERVICE_STATE_SIZE      (64*1024)
+#define _SERVICE_STATE_SIZE      (16*1024)  //reduced from 64K to 16K for now.
 #define _SERVICE_STATE_CACHE     (8)
 #endif
 
@@ -507,7 +513,7 @@ struct client {
         // shared state exclusively between the active and standby NFs
         void *nf_state_mempool;
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
-        // shared state between all the NFs of the same service type
+        // shared state between all the NFs of the same service type; Note: Mostly not required here in client[] structure
         void *service_state_pool;
 #endif
 
@@ -570,9 +576,9 @@ struct onvm_nf_info {
         pid_t pid;
 
 #ifdef ENABLE_NFV_RESL
-        void *nf_state_mempool;     // shared state exclusively between the active and standby NFs
+        void *nf_state_mempool;     // shared state exclusively between the active and standby NFs (Per Flow State)
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
-        void *service_state_pool;   // shared state between all the NFs of the same service type
+        void *service_state_pool;   // shared state between all the NFs of the same service type (Global Coherent Sate)
 #endif
 #endif //#ifdef ENABLE_NFV_RESL
 

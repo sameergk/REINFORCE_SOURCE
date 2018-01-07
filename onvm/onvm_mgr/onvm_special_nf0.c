@@ -58,7 +58,7 @@
 #include <rte_mbuf.h>
 #include <rte_ip.h>
 #include <rte_ether.h>
-
+#include <rte_arp.h>
 #ifdef ENABLE_VXLAN
 #include "onvm_vxlan.h"
 #ifdef ENABLE_ZOOKEEPER
@@ -78,12 +78,9 @@ static struct client *nf0_cl = NULL;
 /*************************Local functions Declaration**************************/
 
 /*******************************Helper functions********************************/
-
-
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
 static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count);
-
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
         uint16_t i, sent_0,sent_1;
         volatile struct tx_stats *tx_stats;
@@ -191,6 +188,145 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         return ret;
 }
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+
+/*********************** ARP RESPONSE HELPER FUNCTIONS ************************/
+/* Creates an mbuf ARP reply pkt- fields are set according to info passed in.
+ * For RFC about ARP, see https://tools.ietf.org/html/rfc826
+ * RETURNS 0 if success, -1 otherwise */
+
+struct state_info {
+        struct rte_mempool *pktmbuf_pool;
+        uint16_t nf_destination;
+        uint32_t *source_ips;
+        int print_flag;
+};
+
+/* Struct that contains information about MGR IFACE IPs */
+struct state_info *state_info;
+
+typedef struct onvm_arp_resp_args {
+        const char* ipmap_file;      /* -s <service chain listings> */
+        const char* ipmap_csv;       /* -b <IPv45Tuple Base Ip Address> */
+        uint32_t max_ports;          /* -m <Maximum number of IP Addresses> */
+}onvm_arp_resp_args_t;
+static onvm_arp_resp_args_t arp_resp_info = {
+        .ipmap_file = "ipmap.txt",
+        .ipmap_csv = "10.0.0.31,11.0.0.31",
+        .max_ports = 10,
+};
+static void
+parse_port_ip_map(void) {
+        const char delim[2] = ",";
+        char *buffer;
+        char *input = strdup(arp_resp_info.ipmap_csv);
+        char* token = strtok_r((char*)input, delim, &buffer);
+        int current_ip = 0, result =0;
+        while (token != NULL) {
+                result = onvm_pkt_parse_ip(token, &state_info->source_ips[current_ip]);
+                if (result < 0) {
+                        return;
+                }
+                ++current_ip;
+                token = strtok_r(NULL, delim, &buffer);
+                if(current_ip >= ports->num_ports) break;
+        }
+        return;
+}
+static int
+send_arp_reply(int port, struct ether_addr *tha, uint32_t tip) {
+        struct rte_mbuf *out_pkt = NULL;
+        struct onvm_pkt_meta *pmeta = NULL;
+        struct ether_hdr *eth_hdr = NULL;
+        struct arp_hdr *out_arp_hdr = NULL;
+
+        size_t pkt_size = 0;
+
+        if (tha == NULL) {
+                return -1;
+        }
+
+        out_pkt = rte_pktmbuf_alloc(state_info->pktmbuf_pool);
+        if (out_pkt == NULL) {
+                rte_free(out_pkt);
+                return -1;
+        }
+
+        pkt_size = sizeof(struct ether_hdr) + sizeof(struct arp_hdr);
+        out_pkt->data_len = pkt_size;
+        out_pkt->pkt_len = pkt_size;
+
+        //SET ETHER HEADER INFO
+        eth_hdr = onvm_pkt_ether_hdr(out_pkt);
+        ether_addr_copy(&ports->mac[port], &eth_hdr->s_addr);
+        eth_hdr->ether_type = rte_cpu_to_be_16(ETHER_TYPE_ARP);
+        ether_addr_copy(tha, &eth_hdr->d_addr);
+
+        //SET ARP HDR INFO
+        out_arp_hdr = rte_pktmbuf_mtod_offset(out_pkt, struct arp_hdr *, sizeof(struct ether_hdr));
+
+        out_arp_hdr->arp_hrd = rte_cpu_to_be_16(ARP_HRD_ETHER);
+        out_arp_hdr->arp_pro = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
+        out_arp_hdr->arp_hln = 6;
+        out_arp_hdr->arp_pln = sizeof(uint32_t);
+        out_arp_hdr->arp_op = rte_cpu_to_be_16(ARP_OP_REPLY);
+
+        ether_addr_copy(&ports->mac[port], &out_arp_hdr->arp_data.arp_sha);
+        out_arp_hdr->arp_data.arp_sip = state_info->source_ips[ports->id[port]];
+
+        out_arp_hdr->arp_data.arp_tip = tip;
+        ether_addr_copy(tha, &out_arp_hdr->arp_data.arp_tha);
+
+        //SEND PACKET OUT/SET METAINFO
+        pmeta = onvm_get_pkt_meta(out_pkt);
+        pmeta->destination = port;
+        pmeta->action = ONVM_NF_ACTION_OUT;
+
+        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&out_pkt, 1);
+        if (enq_status) {
+                onvm_pkt_drop_batch(&out_pkt,1);
+                nf0_cl->stats.rx_drop += 1;
+        }
+        return 0; //onvm_nflib_return_pkt(out_pkt);
+}
+static int try_check_and_send_arp_response(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta);
+static int try_check_and_send_arp_response(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
+        struct ether_hdr *eth_hdr = onvm_pkt_ether_hdr(pkt);
+        struct arp_hdr *in_arp_hdr = NULL;
+        int result = -1;
+
+        //First checks to see if pkt is of type ARP, then whether the target IP of packet matches machine IP
+        if (rte_cpu_to_be_16(eth_hdr->ether_type) == ETHER_TYPE_ARP) {
+                in_arp_hdr = rte_pktmbuf_mtod_offset(pkt, struct arp_hdr *, sizeof(struct ether_hdr));
+                if (in_arp_hdr->arp_data.arp_tip == state_info->source_ips[ports->id[pkt->port]]) {
+                        result = send_arp_reply(pkt->port, &eth_hdr->s_addr, in_arp_hdr->arp_data.arp_sip);
+                        if (state_info->print_flag) {
+                                printf("ARP Reply From Port %d (ID %d): %d\n", pkt->port, ports->id[pkt->port], result);
+                        }
+                        meta->action = ONVM_NF_ACTION_DROP;
+                        return 0;
+                }
+        }
+        return result;
+}
+static int onvm_special_nf_arp_responder_init(void) {
+        state_info = rte_calloc("state_info", 1, sizeof(struct state_info), 0);
+        if (state_info == NULL) {
+                rte_exit(EXIT_FAILURE, "Unable to initialize NFMGR state info");
+        }
+
+        state_info->pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
+        if (state_info->pktmbuf_pool == NULL) {
+                rte_exit(EXIT_FAILURE, "Cannot find mbuf pool!\n");
+        }
+        state_info->source_ips = rte_calloc("Array of decimal IPs", ports->num_ports, sizeof(uint32_t), 0);
+        if (state_info->source_ips == NULL) {
+                rte_exit(EXIT_FAILURE, "Unable to initialize source IP array\n");
+        }
+        parse_port_ip_map();
+        return 0;
+}
+/*********************** ARP RESPONSE HELPER FUNCTIONS ************************/
+
 /*******************************File Interface functions********************************/
 int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
 
@@ -304,16 +440,32 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
                                 //rte_ring_enqueue(nf0_cl->tx_q, (void *)pkts[i]);
                         #else
                                 meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
-                                onvm_ft_handle_packet(pkts[i], meta);
+                                if(0 == onvm_ft_handle_packet(pkts[i], meta)) {
+                                        if (rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&pkts[i], 1)) {
+                                                onvm_pkt_drop_batch(&pkts[i],1);
+                                                nf0_cl->stats.rx_drop += 1;
+                                        }
+                                } else {
+                                        onvm_pkt_drop(pkts[i]);
+                                }
                         #endif
                                 break;
                         case ETHER_TYPE_ARP:
+                                if(try_check_and_send_arp_response(pkts[i],onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]))) {
+                                        /* For now Only service is INTERNAL_BRIDGE */
+                                        #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                                                onv_pkt_send_on_alt_port(NULL,&pkts[i],1);
+                                        #else
+                                                onvm_pkt_drop_batch(pkts[i], 1);
+                                        #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                                }
+                                break;
                         case ETHER_TYPE_RARP:
                                 /* For now Only service is INTERNAL_BRIDGE */
                                 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
-                                        onv_pkt_send_on_alt_port(NULL,pkts,nb_pkts);
+                                        onv_pkt_send_on_alt_port(NULL,&pkts[i],1);
                                 #else
-                                        onvm_pkt_drop_batch(pkts, nb_pkts);
+                                        onvm_pkt_drop_batch(&pkts[i], 1);
                                 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
                                 break;
                         }
@@ -358,6 +510,7 @@ int start_special_nf0(void) {
 
                 /* Add all services of Special NF: IDeally Register services from callback */
                 init_onvm_ft_install();
+                onvm_special_nf_arp_responder_init();
         }
 
         return onvm_nf_is_valid(nf0_cl);

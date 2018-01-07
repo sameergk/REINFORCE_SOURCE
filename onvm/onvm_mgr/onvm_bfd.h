@@ -58,7 +58,7 @@
 #ifdef ENABLE_NFV_RESL
 // Global identifier
 //extern uint32_t nf_mgr_id;
-#endif //ENABLE_NFV_RESL
+#endif
 
 
 /***************************** Data Structures ********************************/

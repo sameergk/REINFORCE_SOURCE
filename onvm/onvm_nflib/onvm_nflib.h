@@ -78,6 +78,11 @@
 int
 onvm_nflib_init(int argc, char *argv[], const char *nf_tag);
 
+/**
+ * Callback Function to the NFs that can be optionally registered.
+ * NFLIB will call processing each batch of packets.
+ */
+typedef int(*callback_handler_fp)(void);
 
 typedef int(*pkt_handler)(struct rte_mbuf* pkt, struct onvm_pkt_meta* action);
 /**
@@ -94,6 +99,9 @@ typedef int(*pkt_handler)(struct rte_mbuf* pkt, struct onvm_pkt_meta* action);
  */
 int
 onvm_nflib_run(struct onvm_nf_info* info, int(*handler)(struct rte_mbuf* pkt, struct onvm_pkt_meta* action));
+
+int
+onvm_nflib_run_callback(struct onvm_nf_info* info, pkt_handler handler,callback_handler_fp callback);
 
 
 /**

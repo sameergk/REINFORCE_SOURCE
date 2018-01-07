@@ -116,8 +116,8 @@ inline uint64_t onvm_util_get_elapsed_cpu_cycles_in_us(uint64_t start);
 #define TS_TYPE_CPU_CYCLES  (2)
 
 #define TS_RX_PACKET_RATE   (14880000)      //Max packet rate of 14.88M
-//#define USE_TS_TYPE (TS_TYPE_LOGICAL)
-#define USE_TS_TYPE (TS_TYPE_SYS_CLOCK)
+#define USE_TS_TYPE (TS_TYPE_LOGICAL)
+//#define USE_TS_TYPE (TS_TYPE_SYS_CLOCK)
 //#define USE_TS_TYPE (TS_TYPE_CPU_CYCLES)
 inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16_t nb_pkts);
 inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint16_t nb_pkts);

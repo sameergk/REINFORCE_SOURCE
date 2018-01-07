@@ -279,6 +279,9 @@ master_thread_main(void) {
         onvm_stats_cleanup();
         RTE_LOG(INFO, APP, "Core %d: Initiating shutdown sequence\n", rte_lcore_id());
 
+#ifdef RTE_LIBRTE_PDUMP
+        rte_pdump_uninit();
+#endif
         /* Stop all RX and TX threads */
         worker_keep_running = 0;
 

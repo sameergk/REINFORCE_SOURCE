@@ -204,6 +204,8 @@ static inline void do_memcopy(void *from_pointer);
 #endif //TEST_MEMCPY_OVERHEAD
 
 pkt_handler pkt_handler_func = NULL;
+callback_handler_fp cb_func = NULL;
+#define ONVM_NO_CALLBACK NULL
 /******************************Internal functions*****************************/
 
 

@@ -74,7 +74,7 @@ static inline int
 wakeup_client_internal(int instance_id);
 
 #define WAKE_INTERVAL_IN_US     (ARBITER_PERIOD_IN_US)      //100 micro seconds
-#define USLEEP_INTERVAL         (50)                        //50 micro seconds
+#define USLEEP_INTERVAL         (10)                        //50 micro seconds
 //Note: sleep of 50us and wake_interval of 100us reduces CPU utilization from 100 to 0.3
 //Ideal: Get rid of wake thread and merge the functionality with the main_thread.
 
@@ -354,15 +354,14 @@ wakemgr_main(void *arg) {
 #endif
 
         while (true) {
-                //do it more periodically: poll mode (better than 100microsec delay)
+                //do it more periodically: poll mode (better than 100microsec delay) -- remove usleep(USLEEP_INTERVAL)
                 check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list();
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_WAKE_THREAD
                 rte_timer_manage();
 #endif
                 handle_wakeup((struct wakeup_info *)arg);
-                //usleep(USLEEP_INTERVAL);
-
+                usleep(USLEEP_INTERVAL);
         }
 
         return 0;
