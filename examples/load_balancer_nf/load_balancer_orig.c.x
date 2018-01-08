@@ -69,58 +69,10 @@
 #include "onvm_nflib.h"
 #include "onvm_pkt_helper.h"
 #include "onvm_flow_table.h"
-#include "onvm_flow_dir.h"
 
 #define NF_TAG "load_balancer"
-#define TABLE_SIZE  SDN_FT_ENTRIES  //65536
+#define TABLE_SIZE 65536
 
-
-/* Struct for backend servers */
-typedef struct backend_server {
-        uint8_t d_addr_bytes[ETHER_ADDR_LEN];
-        uint32_t d_ip;
-}backend_server_t;
-
-/* Struct for flow info */
-typedef struct flow_info {
-        uint8_t dest;
-        uint8_t s_addr_bytes[ETHER_ADDR_LEN];
-        uint64_t last_pkt_cycles;
-        int is_active;
-}flow_info_t;
-
-#ifdef ENABLE_NFV_RESL
-#define MAX_BACKEND_SERVERS (10)
-#define MAX_FILE_NAME_LEN (256)
-#define MAX_IFACE_NAME_LEN  (256)
-flow_info_t ft[TABLE_SIZE];
-/* Struct for load balancer information */
-struct loadbalance {
-        //flow_info_t ft[TABLE_SIZE];
-        flow_info_t *ft;
-
-        /* backend server information */
-        uint8_t server_count;
-        struct backend_server server[MAX_BACKEND_SERVERS];
-
-        /* for cleaning up connections */
-        uint16_t num_stored;
-        uint64_t elapsed_cycles;
-        uint64_t last_cycles;
-        uint32_t expire_time;
-
-        /* port and ip values */
-        uint32_t ip_lb_server;
-        uint32_t ip_lb_client;
-        uint8_t server_port;
-        uint8_t client_port;
-
-        /* config file, interface names */
-        char cfg_filename[MAX_FILE_NAME_LEN];
-        char client_iface_name[MAX_IFACE_NAME_LEN];
-        char server_iface_name[MAX_IFACE_NAME_LEN];
-};
-#else
 /* Struct for load balancer information */
 struct loadbalance {
         struct onvm_ft *ft;
@@ -146,15 +98,27 @@ struct loadbalance {
         char * client_iface_name;
         char * server_iface_name;
 };
-#endif
 
+/* Struct for backend servers */
+struct backend_server {
+        uint8_t d_addr_bytes[ETHER_ADDR_LEN];
+        uint32_t d_ip;
+};
+
+/* Struct for flow info */
+struct flow_info {
+        uint8_t dest;
+        uint8_t s_addr_bytes[ETHER_ADDR_LEN];
+        uint64_t last_pkt_cycles;
+        int is_active;
+};
 
 /* Struct that contains information about this NF */
 struct onvm_nf_info *nf_info;
 
 struct loadbalance *lb;
 /* number of package between each print */
-static uint32_t print_delay = 10000000;
+static uint32_t print_delay = 1000000;
 
 /* onvm struct for port info lookup */
 extern struct port_info *ports;
@@ -173,35 +137,21 @@ usage(const char *progname) {
 static int
 parse_app_args(int argc, char *argv[], const char *progname) {
         int c;
-
-#ifndef ENABLE_NFV_RESL
+        
         lb->cfg_filename = NULL;
         lb->client_iface_name = NULL;
         lb->server_iface_name = NULL;
-#endif
 
         while ((c = getopt(argc, argv, "c:s:f:p:")) != -1) {
                 switch (c) {
                 case 'c':
-#ifndef ENABLE_NFV_RESL
                         lb->client_iface_name = strdup(optarg);
-#else
-                        strncpy(lb->client_iface_name,optarg,sizeof(lb->client_iface_name));
-#endif
                         break;
                 case 's':
-#ifndef ENABLE_NFV_RESL
                         lb->server_iface_name = strdup(optarg);
-#else
-                        strncpy(lb->server_iface_name,optarg,sizeof(lb->server_iface_name));
-#endif
                         break;
                 case 'f':
-#ifndef ENABLE_NFV_RESL
                         lb->cfg_filename = strdup(optarg);
-#else
-                        strncpy(lb->cfg_filename,optarg,sizeof(lb->cfg_filename));
-#endif
                         break;
                 case 'p':
                         print_delay = strtoul(optarg, NULL, 10);
@@ -261,14 +211,11 @@ parse_backend_config(void) {
         }
         lb->server_count = temp;
 
-#ifndef ENABLE_NFV_RESL
         lb->server = (struct backend_server *)rte_malloc("backend server info", sizeof(struct backend_server) * lb->server_count, 0);
         if (lb->server == NULL) {
                 rte_exit(EXIT_FAILURE, "Malloc failed, can't allocate server information\n");
         }
-#else
-        lb->server_count = ((temp>MAX_BACKEND_SERVERS)?(MAX_BACKEND_SERVERS):(temp));
-#endif
+
         for (i = 0; i < lb->server_count; i++) {
                 ret = fscanf(cfg, "%s %s", ip, mac);
                 if (ret != 2) {
@@ -406,24 +353,7 @@ get_iface_inf(void) {
                         server_addr_bytes[2], server_addr_bytes[3],
                         server_addr_bytes[4], server_addr_bytes[5]);
 }
-#ifndef ENABLE_NFV_RESL
-#define DIRTY_MAP_PER_CHUNK_SIZE ((sizeof(dirty_mon_state_map_tbl_t) + sizeof(struct loadbalance) + TABLE_SIZE*(sizeof(flow_info_t)))/(sizeof(uint64_t)*CHAR_BIT))
-#endif
-static inline uint64_t map_tag_index_to_dirty_chunk_bit_index(uint16_t ft_index) {
-        uint32_t start_offset = sizeof(dirty_mon_state_map_tbl_t) + sizeof(struct loadbalance) + ft_index*sizeof(flow_info_t);
-        uint32_t end_offset = start_offset + sizeof(flow_info_t);
-        uint64_t dirty_map_bitmask = 0;
-        dirty_map_bitmask |= (1<< (start_offset/DIRTY_MAP_PER_CHUNK_SIZE));
-        dirty_map_bitmask |= (1<< (end_offset/DIRTY_MAP_PER_CHUNK_SIZE));
-        //printf("\n For %d, 0x%lx\n",(int)vlan_tbl_index, dirty_map_bitmask);
-        return dirty_map_bitmask;
-}
-static inline int update_dirty_state_index(uint16_t ft_index) {
-        if(dirty_state_map) {
-                dirty_state_map->dirty_index |= map_tag_index_to_dirty_chunk_bit_index(ft_index);
-        }
-        return ft_index;
-}
+
 /*
  * Updates flow info to be "active" or "expired"
  */
@@ -451,12 +381,11 @@ clear_entries(void) {
         }
 
         printf("Clearing expired entries\n");
-
         struct flow_info *data = NULL;
+        struct onvm_ft_ipv4_5tuple *key = NULL;
         uint32_t next = 0;
         int ret = 0;
-#ifndef ENABLE_NFV_RESL
-        struct onvm_ft_ipv4_5tuple *key = NULL;
+
         while (onvm_ft_iterate(lb->ft, (const void **)&key, (void **)&data, &next) > -1) {
                 if (update_status(lb->elapsed_cycles, data) < 0) {
                         return -1;
@@ -471,31 +400,10 @@ clear_entries(void) {
                         }
                 }
         }
-#else //TODO:complete this call
-        for(next=0; next < TABLE_SIZE; next++) {
-                if (update_status(lb->elapsed_cycles, data) < 0) {
-                        return -1;
-                }
-                if (!data->is_active) {
-                        //ret = onvm_ft_remove_key(lb->ft, key);
-                        lb->num_stored--;
-                        if (ret < 0) {
-                                printf("Key should have been removed, but was not\n");
-                                lb->num_stored++;
-                        }
-                }
-        }
-#endif
+
         return 0;
 }
-static void set_lb_flow_info(struct flow_info *data);
-static void set_lb_flow_info(struct flow_info *data) {
-        lb->num_stored++;
-        data->dest = lb->num_stored % lb->server_count;
-        data->last_pkt_cycles = lb->elapsed_cycles;
-        data->is_active = 0;
-        return ;
-}
+
 /*
  * Adds an entry to the flow table. It first checks if the table is full, and
  * if so, it calls clear_entries() to free up space.
@@ -515,16 +423,16 @@ table_add_entry(struct onvm_ft_ipv4_5tuple* key, struct flow_info **flow) {
                 }
         }
 
-#ifndef ENABLE_NFV_RESL
         int tbl_index = onvm_ft_add_key(lb->ft, key, (char **)&data);
         if (tbl_index < 0) {
                 return -1;
         }
-#else
-        //TODO:complete
-        data = *flow;
-#endif
-        set_lb_flow_info(data);
+
+        lb->num_stored++;
+        data->dest = lb->num_stored % lb->server_count;
+        data->last_pkt_cycles = lb->elapsed_cycles;
+        data->is_active = 0;
+        
         *flow = data;
 
         return 0;
@@ -536,7 +444,7 @@ table_add_entry(struct onvm_ft_ipv4_5tuple* key, struct flow_info **flow) {
  * and if it doesn't, it calls table_add_entry() to add it to the table.
  */
 static int
-table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow, __attribute__((unused)) struct onvm_pkt_meta* meta) {
+table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow) {
         struct flow_info *data = NULL;
         struct onvm_ft_ipv4_5tuple key;
 
@@ -545,9 +453,9 @@ table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow, __attribute__(
         }
  
         int ret = onvm_ft_fill_key_symmetric(&key, pkt);
-        if (ret < 0)  return -1;
+        if (ret < 0)
+                return -1;
 
-#ifndef ENABLE_NFV_RESL
         int tbl_index = onvm_ft_lookup_key(lb->ft, &key, (char **)&data);
         if (tbl_index == -ENOENT) {
                 return table_add_entry(&key, flow);
@@ -557,56 +465,14 @@ table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow, __attribute__(
         } else {
                 data->last_pkt_cycles = lb->elapsed_cycles;
                 *flow = data;
-                update_dirty_state_index(tbl_index);
                 return 0;
         }
-#else
-        //TODO:complete
-        int tbl_index = -ENOENT;
-        /** NOTE: Only catch is that: the caller relies on "is_active == 0 " to determine if this is client side or server side call.
-         * Assumption is that client initiates first; is_active=0; and server response the same entry will jave is_Active=1; but
-         * with two different entries for client and server; the only way to resolve is to check if the ft_key_flip has an entry with is_active=1 or map the flip key to same index.
-         * TODO: either of the above two approaches.
-         * */
-#ifdef ENABLE_FT_INDEX_IN_META
-        if(meta->ft_index) {
-                tbl_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
-        } else
-#endif
-        {
-                //printf("\n\n Inserting Vlan Tag\n");
-                struct onvm_flow_entry *flow_entry = NULL;
-                onvm_flow_dir_get_pkt(pkt, &flow_entry);
-                if(flow_entry) {
-                        tbl_index = flow_entry->entry_index;
-                }
-        }
-
-        if (tbl_index == -ENOENT) {
-                return -1; //table_add_entry(&key, flow);
-        }
-        else if (tbl_index < 0) {
-                printf("Some other error occurred with the packet hashing\n");
-                return -1;
-        }
-        else {
-                data = &lb->ft[tbl_index];
-                *flow = data;
-                if(data->is_active == 0) {
-                        table_add_entry(&key, &data);
-                } else {
-                        data->last_pkt_cycles = lb->elapsed_cycles;
-                }
-                update_dirty_state_index(tbl_index);
-        }
-#endif
-        return 0;
 }
 
-static
-int lb_callback_handler(void);
-static
-int lb_callback_handler(void) {
+//static 
+int callback_handler(void);
+//static 
+int callback_handler(void) {
         lb->elapsed_cycles = rte_get_tsc_cycles();
 
         if ((lb->elapsed_cycles - lb->last_cycles) / rte_get_timer_hz() > lb->expire_time) {
@@ -646,7 +512,7 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         }
 
         /* Get the packet flow entry */
-        ret = table_lookup_entry(pkt, &flow_info, meta);
+        ret = table_lookup_entry(pkt, &flow_info);
         if (ret == -1) {
                 meta->action = ONVM_NF_ACTION_DROP;
                 meta->destination = 0;
@@ -661,7 +527,6 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 }
         }
 
-        /* If the packet is from Server: the replace the Source MAC, IP from servers to Load Balancers and forward to client port */
         if (pkt->port == lb->server_port) {
                 rte_eth_macaddr_get(lb->client_port, &ehdr->s_addr);
                 for (i = 0; i < ETHER_ADDR_LEN; i++) {
@@ -670,7 +535,6 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
                 ip->src_addr = lb->ip_lb_client;
                 meta->destination = lb->client_port;
-        /* For packet from client: replace the destination MAC and IP from Load balancers to Server and forward to Server port */
         } else {
                 for (i = 0; i < ETHER_ADDR_LEN; i++) {
                         ehdr->d_addr.addr_bytes[i] = lb->server[flow_info->dest].d_addr_bytes[i];
@@ -703,15 +567,7 @@ int main(int argc, char *argv[]) {
         argc -= arg_offset;
         argv += arg_offset;
 
-#ifdef ENABLE_NFV_RESL
-        if(nf_info->nf_state_mempool) {
-                dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
-                lb = (struct loadbalance*)(dirty_state_map+1);  //lb = (struct loadbalance*)nf_info->nf_state_mempool;
-                lb->ft = (flow_info_t*)(lb +1);
-        }
-#else
         lb = rte_calloc("state", 1, sizeof(struct loadbalance), 0);
-#endif
         if (lb == NULL) {
                 onvm_nflib_stop();
                 rte_exit(EXIT_FAILURE, "Unable to initialize NF lb struct");
@@ -720,9 +576,7 @@ int main(int argc, char *argv[]) {
         if (parse_app_args(argc, argv, progname) < 0)
                 rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
 
-#ifndef ENABLE_NFV_RESL
         lb->ft = onvm_ft_create(TABLE_SIZE, sizeof(struct flow_info));
-#endif
         if (lb->ft == NULL) {
                 onvm_nflib_stop();
                 rte_exit(EXIT_FAILURE, "Unable to create flow table");
@@ -734,8 +588,8 @@ int main(int argc, char *argv[]) {
         lb->expire_time = 32;
         lb->elapsed_cycles = rte_get_tsc_cycles();
 
-        //onvm_nflib_run(nf_info, &packet_handler);
-        onvm_nflib_run_callback(nf_info, &packet_handler, &lb_callback_handler);
+        onvm_nflib_run(nf_info, &packet_handler);
+        //onvm_nflib_run_callback(nf_info, &packet_handler, &callback_handler);
         printf("If we reach here, program is ending\n");
 
         return 0;

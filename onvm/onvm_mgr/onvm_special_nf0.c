@@ -211,7 +211,7 @@ typedef struct onvm_arp_resp_args {
 }onvm_arp_resp_args_t;
 static onvm_arp_resp_args_t arp_resp_info = {
         .ipmap_file = "ipmap.txt",
-        .ipmap_csv = "10.0.0.31,11.0.0.31",
+        .ipmap_csv = "10.0.0.3,10.10.0.3",
         .max_ports = 10,
 };
 static void
@@ -226,14 +226,75 @@ parse_port_ip_map(void) {
                 if (result < 0) {
                         return;
                 }
+                printf("\n token=%s, state->source_ip[currentID=%d]=%d",token, current_ip,state_info->source_ips[current_ip]);
                 ++current_ip;
+
                 token = strtok_r(NULL, delim, &buffer);
                 if(current_ip >= ports->num_ports) break;
         }
         return;
 }
 static int
-send_arp_reply(int port, struct ether_addr *tha, uint32_t tip) {
+send_arp_reply_v2(int req_port, int arp_port, struct ether_addr *tha, uint32_t tip) {
+        struct rte_mbuf *out_pkt = NULL;
+        struct onvm_pkt_meta *pmeta = NULL;
+        struct ether_hdr *eth_hdr = NULL;
+        struct arp_hdr *out_arp_hdr = NULL;
+
+        size_t pkt_size = 0;
+
+        if (tha == NULL) {
+                return -1;
+        }
+
+        out_pkt = rte_pktmbuf_alloc(state_info->pktmbuf_pool);
+        if (out_pkt == NULL) {
+                rte_free(out_pkt);
+                return -1;
+        }
+
+        pkt_size = sizeof(struct ether_hdr) + sizeof(struct arp_hdr);
+        out_pkt->data_len = pkt_size;
+        out_pkt->pkt_len = pkt_size;
+
+        //SET ETHER HEADER INFO
+        eth_hdr = onvm_pkt_ether_hdr(out_pkt);
+        ether_addr_copy(&ports->mac[req_port], &eth_hdr->s_addr);
+        eth_hdr->ether_type = rte_cpu_to_be_16(ETHER_TYPE_ARP);
+        ether_addr_copy(tha, &eth_hdr->d_addr);
+
+        //SET ARP HDR INFO
+        out_arp_hdr = rte_pktmbuf_mtod_offset(out_pkt, struct arp_hdr *, sizeof(struct ether_hdr));
+
+        out_arp_hdr->arp_hrd = rte_cpu_to_be_16(ARP_HRD_ETHER);
+        out_arp_hdr->arp_pro = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
+        out_arp_hdr->arp_hln = 6;
+        out_arp_hdr->arp_pln = sizeof(uint32_t);
+        out_arp_hdr->arp_op = rte_cpu_to_be_16(ARP_OP_REPLY);
+
+        ether_addr_copy(&ports->mac[arp_port], &out_arp_hdr->arp_data.arp_sha);
+        out_arp_hdr->arp_data.arp_sip = state_info->source_ips[ports->id[arp_port]];
+
+        out_arp_hdr->arp_data.arp_tip = tip;
+        ether_addr_copy(tha, &out_arp_hdr->arp_data.arp_tha);
+
+        //SEND PACKET OUT/SET METAINFO
+        pmeta = onvm_get_pkt_meta(out_pkt);
+        pmeta->destination = req_port;
+        pmeta->action = ONVM_NF_ACTION_OUT;
+
+        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&out_pkt, 1);
+        if (enq_status) {
+                onvm_pkt_drop_batch(&out_pkt,1);
+                nf0_cl->stats.rx_drop += 1;
+        }
+        printf("\n ARP Reply packet sent on port [%d] for port [%d]!\n", req_port, arp_port);
+        return 0; //onvm_nflib_return_pkt(out_pkt);
+}
+//static
+int send_arp_reply(int port, struct ether_addr *tha, uint32_t tip);
+//static
+int send_arp_reply(int port, struct ether_addr *tha, uint32_t tip) {
         struct rte_mbuf *out_pkt = NULL;
         struct onvm_pkt_meta *pmeta = NULL;
         struct ether_hdr *eth_hdr = NULL;
@@ -286,6 +347,7 @@ send_arp_reply(int port, struct ether_addr *tha, uint32_t tip) {
                 onvm_pkt_drop_batch(&out_pkt,1);
                 nf0_cl->stats.rx_drop += 1;
         }
+        printf("\n ARP Reply packet sent on port [%d]!\n", port);
         return 0; //onvm_nflib_return_pkt(out_pkt);
 }
 static int try_check_and_send_arp_response(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta);
@@ -293,17 +355,24 @@ static int try_check_and_send_arp_response(struct rte_mbuf* pkt, struct onvm_pkt
         struct ether_hdr *eth_hdr = onvm_pkt_ether_hdr(pkt);
         struct arp_hdr *in_arp_hdr = NULL;
         int result = -1;
+        if(NULL == eth_hdr) return -1;
 
         //First checks to see if pkt is of type ARP, then whether the target IP of packet matches machine IP
         if (rte_cpu_to_be_16(eth_hdr->ether_type) == ETHER_TYPE_ARP) {
                 in_arp_hdr = rte_pktmbuf_mtod_offset(pkt, struct arp_hdr *, sizeof(struct ether_hdr));
-                if (in_arp_hdr->arp_data.arp_tip == state_info->source_ips[ports->id[pkt->port]]) {
-                        result = send_arp_reply(pkt->port, &eth_hdr->s_addr, in_arp_hdr->arp_data.arp_sip);
-                        if (state_info->print_flag) {
-                                printf("ARP Reply From Port %d (ID %d): %d\n", pkt->port, ports->id[pkt->port], result);
+                if(NULL == in_arp_hdr) return -1;
+                int i = 0;
+                for(;i<ports->num_ports;i++) {
+                        //printf("\n checking for ARP Reply From Port %d (ID %d): [%u:%u]\n", pkt->port, ports->id[pkt->port], (unsigned) in_arp_hdr->arp_data.arp_tip, (unsigned) state_info->source_ips[ports->id[pkt->port]]);
+                        if (in_arp_hdr->arp_data.arp_tip == state_info->source_ips[ports->id[i]]) { //if (in_arp_hdr->arp_data.arp_tip == state_info->source_ips[ports->id[pkt->port]]) {
+                                //result = send_arp_reply(pkt->port, &eth_hdr->s_addr, in_arp_hdr->arp_data.arp_sip);
+                                result = send_arp_reply_v2(pkt->port, i, &eth_hdr->s_addr, in_arp_hdr->arp_data.arp_sip);
+                                if (state_info->print_flag) {
+                                        printf("ARP Reply For Port [%d %d] to port [%d %d]: %d\n", i, ports->id[i], pkt->port, ports->id[pkt->port], result);
+                                }
+                                meta->action = ONVM_NF_ACTION_DROP;
+                                return 0;
                         }
-                        meta->action = ONVM_NF_ACTION_DROP;
-                        return 0;
                 }
         }
         return result;
