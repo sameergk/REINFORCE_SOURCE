@@ -121,4 +121,5 @@ inline uint64_t onvm_util_get_elapsed_cpu_cycles_in_us(uint64_t start);
 //#define USE_TS_TYPE (TS_TYPE_CPU_CYCLES)
 inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16_t nb_pkts);
 inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint16_t nb_pkts);
+inline int onvm_util_get_marked_packet_timestamp(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
 #endif  // _ONVM_COMM_UTILS_H_"

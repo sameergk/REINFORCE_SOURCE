@@ -68,10 +68,17 @@ struct rte_ring *mgr_rsp_queue;
 
 #ifdef ENABLE_NFV_RESL
 struct rte_mempool *nf_state_pool;
+
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 struct rte_mempool *service_state_pool;
 void **services_state_pool;
-#endif //ENABLE_PER_SERVICE_MEMPOOL
+#endif
+
+#ifdef ENABLE_PER_FLOW_TS_STORE
+struct rte_mempool *per_flow_ts_pool;
+void *onvm_mgr_tx_per_flow_ts_info;
+#endif
+
 #endif //#ifdef ENABLE_NFV_RESL
 
 uint16_t **services;
@@ -113,9 +120,15 @@ uint32_t nf_mgr_id;
 static uint32_t read_onvm_mgr_id_from_system(void);
 #endif // ENABLE_NF_MGR_IDENTIFIER
 static int init_nf_state_pool(void);
+
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 static int init_service_state_pool(void);
-#endif //ENABLE_PER_SERVICE_MEMPOOL
+#endif
+
+#ifdef ENABLE_PER_FLOW_TS_STORE
+static int init_per_flow_ts_pool(void);
+#endif
+
 #endif // ENABLE_NFV_RESL
 
 /*****************Internal Configuration Structs and Constants*****************/
@@ -351,6 +364,23 @@ static int init_service_state_pool(void) {
         return (service_state_pool == NULL); /* 0 on success */
 }
 #endif
+#ifdef ENABLE_PER_FLOW_TS_STORE
+static int init_per_flow_ts_pool(void) {
+        per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, MAX_CLIENTS+1,
+                        _PER_FLOW_TS_SIZE, _PER_FLOW_TS_CACHE,
+                                0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+
+                if(NULL == per_flow_ts_pool) {
+                        printf("Failed to Create mbuf service state pool '%s' with cache size...\n", _PER_FLOW_TS_MEMPOOL_NAME);
+                        per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, MAX_CLIENTS+1,
+                                        _PER_FLOW_TS_SIZE, 0,
+                                0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
+                }
+
+                if(per_flow_ts_pool == NULL) { printf("Failed to Create mbuf pkt ts pool '%s' without cache size!...\n", _PER_FLOW_TS_MEMPOOL_NAME);}
+                return (per_flow_ts_pool == NULL); /* 0 on success */
+}
+#endif
 #endif
 /**
  * Set up a mempool to store nf_msg structs
@@ -396,7 +426,12 @@ init_client_info_pool(void)
         if(init_service_state_pool()) {
                rte_exit(EXIT_FAILURE, "Cannot create service state mbuf pool: %s\n", rte_strerror(rte_errno));
         }
-#endif  //ENABLE_PER_SERVICE_MEMPOOL
+#endif
+#ifdef ENABLE_PER_FLOW_TS_STORE
+        if(init_per_flow_ts_pool()) {
+                rte_exit(EXIT_FAILURE, "Cannot create per_flow_ts mbuf pool: %s\n", rte_strerror(rte_errno));
+        }
+#endif
 #endif  //ENABLE_NFV_RESL
 
         return (nf_info_pool == NULL); /* 0 on success */
@@ -550,6 +585,12 @@ init_shm_rings(void) {
                         if(rte_mempool_get(nf_state_pool,&clients[i].nf_state_mempool) < 0) {
                                 rte_exit(EXIT_FAILURE, "Failed to get client state memory");;
                         }
+#ifdef ENABLE_PER_FLOW_TS_STORE
+                        if(rte_mempool_get(per_flow_ts_pool,&clients[i].per_flow_ts_info) < 0) {
+                                rte_exit(EXIT_FAILURE, "Failed to get client per_flow_ts_info memory");;
+                        }
+#endif
+
 #ifdef ENABLE_SHADOW_RINGS
                         rsq_name = get_rx_squeue_name(i);
                         tsq_name = get_tx_squeue_name(i);
@@ -564,6 +605,9 @@ init_shm_rings(void) {
                         clients[i].rx_q = clients[get_associated_active_or_standby_nf_id(i)].rx_q;
                         clients[i].tx_q = clients[get_associated_active_or_standby_nf_id(i)].tx_q;
                         clients[i].nf_state_mempool = clients[get_associated_active_or_standby_nf_id(i)].nf_state_mempool;
+#ifdef ENABLE_PER_FLOW_TS_STORE
+                        clients[i].per_flow_ts_info =  clients[get_associated_active_or_standby_nf_id(i)].per_flow_ts_info;
+#endif
                         fprintf(stderr, "re-using rx and tx queue rings for client %d with %d\n", i, get_associated_active_or_standby_nf_id(i));
 #ifdef ENABLE_SHADOW_RINGS
                         clients[i].rx_sq = clients[get_associated_active_or_standby_nf_id(i)].rx_sq;
@@ -595,17 +639,17 @@ init_shm_rings(void) {
                         rte_exit(EXIT_FAILURE, "Cannot create tx ring queue for client %u\n", i);
 
 
-                #ifdef ENABLE_RING_WATERMARK
+#ifdef ENABLE_RING_WATERMARK
                 rte_ring_set_water_mark(clients[i].rx_q, CLIENT_QUEUE_RING_WATER_MARK_SIZE);
                 //rte_ring_set_water_mark(clients[i].tx_q, CLIENT_QUEUE_RING_WATER_MARK_SIZE);
-                #endif
+#endif
 
-                #ifdef INTERRUPT_SEM
+#ifdef INTERRUPT_SEM
                 sem_name = get_sem_name(i);
                 clients[i].sem_name = sem_name;
                 //fprintf(stderr, "sem_name=%s for client %d\n", sem_name, i);
 
-                #ifdef USE_SEMAPHORE                
+#ifdef USE_SEMAPHORE
                 mutex = sem_open(sem_name, O_CREAT, 06666, 0);
                 if(mutex == SEM_FAILED) {
                         fprintf(stderr, "can not create semaphore for client %d\n", i);
@@ -613,7 +657,7 @@ init_shm_rings(void) {
                         exit(1);
                 }
                 clients[i].mutex = mutex;
-                #endif
+#endif
 
                 key = get_rx_shmkey(i);       
                 if ((shmid = shmget(key, SHMSZ, IPC_CREAT | 0666)) < 0) {
@@ -632,15 +676,16 @@ init_shm_rings(void) {
 #else
                 rte_atomic16_set(clients[i].shm_server, 0);//rte_atomic16_set(clients[i].shm_server, 1);
 #endif
-                #endif
+#endif
 
 
-                #ifdef NF_BACKPRESSURE_APPROACH_1
+#ifdef NF_BACKPRESSURE_APPROACH_1
                 memset(&clients[i].bft_list, 0, sizeof(clients[i].bft_list));
                 clients[i].bft_list.max_len=CLIENT_QUEUE_RINGSIZE*2;
-                #endif
+#endif
         }
-#if defined(ENABLE_NFV_RESL) && defined (ENABLE_PER_SERVICE_MEMPOOL)
+        /* This is a separate service state pool maintained in NF MGR for each of the services: NFs need to attach to it on the run time after the NFs service type is identified */
+#if defined (ENABLE_PER_SERVICE_MEMPOOL)
         services_state_pool = rte_calloc("services_state_pool", num_services, sizeof(struct rte_mempool*), 0);
         if (services_state_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot allocate memory for services_state_pool details\n");
@@ -648,6 +693,11 @@ init_shm_rings(void) {
                 if(rte_mempool_get(service_state_pool,&services_state_pool[i]) < 0) {
                         rte_exit(EXIT_FAILURE, "Failed to get service state memory from service_state_pool");;
                 }
+        }
+#endif
+#ifdef ENABLE_PER_FLOW_TS_STORE
+        if(rte_mempool_get(per_flow_ts_pool,&onvm_mgr_tx_per_flow_ts_info) < 0) {
+                rte_exit(EXIT_FAILURE, "Failed to get onvm_mgr per_flow_ts_info memory");
         }
 #endif
         return 0;

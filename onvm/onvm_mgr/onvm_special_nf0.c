@@ -226,7 +226,11 @@ parse_port_ip_map(void) {
                 if (result < 0) {
                         return;
                 }
-                printf("\n token=%s, state->source_ip[currentID=%d]=%d",token, current_ip,state_info->source_ips[current_ip]);
+                printf("\n token=%s, state->source_ip[currentID=%d]=%d\n",token, current_ip,state_info->source_ips[current_ip]);
+                printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                                        ports->mac[current_ip].addr_bytes[0], ports->mac[current_ip].addr_bytes[1],
+                                        ports->mac[current_ip].addr_bytes[2], ports->mac[current_ip].addr_bytes[3],
+                                        ports->mac[current_ip].addr_bytes[4], ports->mac[current_ip].addr_bytes[5]);
                 ++current_ip;
 
                 token = strtok_r(NULL, delim, &buffer);
@@ -389,7 +393,7 @@ static int onvm_special_nf_arp_responder_init(void) {
         }
         state_info->source_ips = rte_calloc("Array of decimal IPs", ports->num_ports, sizeof(uint32_t), 0);
         if (state_info->source_ips == NULL) {
-                rte_exit(EXIT_FAILURE, "Unable to initialize source IP array\n");
+                rte_exit(EXIT_FAILURE, "Unable to initialize source IP array [%d]\n", ports->num_ports);
         }
         parse_port_ip_map();
         return 0;
@@ -578,8 +582,9 @@ int start_special_nf0(void) {
                 //info->status = NF_RUNNING;
 
                 /* Add all services of Special NF: IDeally Register services from callback */
-                init_onvm_ft_install();
                 onvm_special_nf_arp_responder_init();
+                init_onvm_ft_install();
+
         }
 
         return onvm_nf_is_valid(nf0_cl);

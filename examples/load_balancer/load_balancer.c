@@ -355,6 +355,8 @@ get_iface_inf(void) {
         struct ifreq ifr;
         uint8_t client_addr_bytes[ETHER_ADDR_LEN];
         uint8_t server_addr_bytes[ETHER_ADDR_LEN];
+        uint8_t c_addr[ETHER_ADDR_LEN] = {0x8C, 0xDC, 0xD4, 0xAC, 0x6C, 0x7C};
+        uint8_t s_addr[ETHER_ADDR_LEN] = {0x8C, 0xDC, 0xD4, 0xAC, 0x6C, 0x7D};
 
         fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
         ifr.ifr_addr.sa_family = AF_INET;
@@ -364,20 +366,24 @@ get_iface_inf(void) {
 
         ioctl(fd, SIOCGIFADDR, &ifr);
         lb->ip_lb_server  = *(uint32_t *)(&((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr);
+        lb->ip_lb_server  = 50331658;
 
         ioctl(fd, SIOCGIFHWADDR, &ifr);
         for (i = 0; i < ETHER_ADDR_LEN; i++)
-                server_addr_bytes[i] = ifr.ifr_hwaddr.sa_data[i];
+                //server_addr_bytes[i] = ifr.ifr_hwaddr.sa_data[i];
+                server_addr_bytes[i] = s_addr[i];
 
         /* Parse client interface */
         strncpy(ifr.ifr_name, lb->client_iface_name, IFNAMSIZ-1);
 
         ioctl(fd, SIOCGIFADDR, &ifr);
         lb->ip_lb_client  = *(uint32_t *)(&((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr);
+        lb->ip_lb_client  = 50334218;
 
         ioctl(fd, SIOCGIFHWADDR, &ifr);
         for (i = 0; i < ETHER_ADDR_LEN; i++)
-                client_addr_bytes[i] = ifr.ifr_hwaddr.sa_data[i];
+                //client_addr_bytes[i] = ifr.ifr_hwaddr.sa_data[i];
+                client_addr_bytes[i] = c_addr[i];
 
         /* Compare the interfaces to onvm_mgr ports by hwaddr and assign port id accordingly */
         if (memcmp(&client_addr_bytes, &ports->mac[0], ETHER_ADDR_LEN) == 0) {
@@ -544,10 +550,9 @@ table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow, __attribute__(
                 return -1;
         }
  
+#ifndef ENABLE_NFV_RESL
         int ret = onvm_ft_fill_key_symmetric(&key, pkt);
         if (ret < 0)  return -1;
-
-#ifndef ENABLE_NFV_RESL
         int tbl_index = onvm_ft_lookup_key(lb->ft, &key, (char **)&data);
         if (tbl_index == -ENOENT) {
                 return table_add_entry(&key, flow);
@@ -615,7 +620,8 @@ int lb_callback_handler(void) {
 
         return 0;
 }
-
+//static uint8_t client_mac_addr[6], server_mac_addr[6];
+//static uint32_t client_ip_addr, server_ip_addr;
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
@@ -629,11 +635,16 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
         /* Ignore packets without ip header, also ignore packets with invalid ip */
         if (ip == NULL || ip->src_addr == 0 || ip->dst_addr == 0) {
+                printf("\n Dropping Packet\n");
                 meta->action = ONVM_NF_ACTION_DROP;
                 meta->destination = 0;
+                if (pkt->port == lb->client_port) meta->destination = lb->server_port;
+                else meta->destination = lb->client_port;
+                meta->action = ONVM_NF_ACTION_OUT;
                 return 0;
         }
 
+#ifndef ENABLE_NFV_RESL
         /*
          * Before hashing remove the Load Balancer ip from the pkt so that both
          * connections from client -> lbr and lbr <- server
@@ -644,38 +655,72 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         } else {
                 ip->src_addr = 0;
         }
+#endif
 
         /* Get the packet flow entry */
         ret = table_lookup_entry(pkt, &flow_info, meta);
         if (ret == -1) {
+                printf("\n Dropping Packet2\n");
                 meta->action = ONVM_NF_ACTION_DROP;
                 meta->destination = 0;
+                if (pkt->port == lb->client_port) meta->destination = lb->server_port;
+                else meta->destination = lb->client_port;
+                meta->action = ONVM_NF_ACTION_OUT;
                 return 0;
         }
 
         /* If the flow entry is new, save the client information */
         if (flow_info->is_active == 0) {
                 flow_info->is_active = 1;
-                for (i = 0; i < ETHER_ADDR_LEN; i++) {
-                        flow_info->s_addr_bytes[i] = ehdr->s_addr.addr_bytes[i];
+                if (pkt->port == lb->client_port) {
+                        for (i = 0; i < ETHER_ADDR_LEN; i++) {
+                                flow_info->s_addr_bytes[i] = ehdr->s_addr.addr_bytes[i];
+                                //client_mac_addr[i] = ehdr->s_addr.addr_bytes[i];
+                        }
+                        /* client_ip_addr = ip->src_addr;
+                        printf("Client iface IP: %" PRIu32 " (%" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "), ",
+                                        client_ip_addr,
+                                        client_ip_addr & 0xFF, (client_ip_addr >> 8) & 0xFF, (client_ip_addr >> 16) & 0xFF, (client_ip_addr >> 24) & 0xFF);
+                        printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                                        client_mac_addr[0], client_mac_addr[1],
+                                        client_mac_addr[2], client_mac_addr[3],
+                                        client_mac_addr[4], client_mac_addr[5]);
+                        */
+                }
+                else if (pkt->port == lb->server_port) {
+                        for (i = 0; i < ETHER_ADDR_LEN; i++) {
+                                flow_info->s_addr_bytes[i] = ehdr->d_addr.addr_bytes[i]; //ehdr->d_addr.addr_bytes[i] = flow_info->s_addr_bytes[i];
+                                //server_mac_addr[i] = ehdr->s_addr.addr_bytes[i];
+                        }
+                        /*
+                        server_ip_addr = ip->src_addr;
+                        printf("Server iface IP: %" PRIu32 " (%" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "), ",
+                                        server_ip_addr,
+                                        server_ip_addr & 0xFF, (client_ip_addr >> 8) & 0xFF, (client_ip_addr >> 16) & 0xFF, (client_ip_addr >> 24) & 0xFF);
+                        printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                                        server_mac_addr[0], server_mac_addr[1],
+                                        server_mac_addr[2], server_mac_addr[3],
+                                        server_mac_addr[4], server_mac_addr[5]);
+                        */
                 }
         }
-
         /* If the packet is from Server: the replace the Source MAC, IP from servers to Load Balancers and forward to client port */
         if (pkt->port == lb->server_port) {
+                //Change SRC IP and MAC from Backend server to Load Balancers
+                ip->src_addr = lb->ip_lb_client;
                 rte_eth_macaddr_get(lb->client_port, &ehdr->s_addr);
+
+                //Change DST MAC and IP to Clients MAC and IP
                 for (i = 0; i < ETHER_ADDR_LEN; i++) {
                         ehdr->d_addr.addr_bytes[i] = flow_info->s_addr_bytes[i];
+                        //ehdr->d_addr.addr_bytes[i] = client_mac_addr[i];
                 }
-
-                ip->src_addr = lb->ip_lb_client;
                 meta->destination = lb->client_port;
         /* For packet from client: replace the destination MAC and IP from Load balancers to Server and forward to Server port */
         } else {
                 for (i = 0; i < ETHER_ADDR_LEN; i++) {
                         ehdr->d_addr.addr_bytes[i] = lb->server[flow_info->dest].d_addr_bytes[i];
                 }
-
                 ip->dst_addr = lb->server[flow_info->dest].d_ip;
                 meta->destination = lb->server_port;
         }

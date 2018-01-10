@@ -245,3 +245,18 @@ inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint1
         }
         return 0;
 }
+
+inline int onvm_util_get_marked_packet_timestamp(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts) {
+        unsigned i;
+        for (i = 0; i < nb_pkts; i++) {
+#if (USE_TS_TYPE == TS_TYPE_LOGICAL)
+                ts_info[i] = pkts[i]->ol_flags;
+#elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
+                ts_info[i] = pkts[i]->ol_flags;
+#else
+                //pkts[i]->tx_offload; pkts[i]->ol_flags;
+                ts_info[i] = pkts[i]->tx_offload;
+#endif
+        }
+        return 0;
+}

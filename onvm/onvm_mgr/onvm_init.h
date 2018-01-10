@@ -162,8 +162,15 @@ extern uint32_t nf_mgr_id;
 #endif
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
+/* Service state pool that can be accessed by other modules/files in MGR : Mainly NF.c that sets up the NFs pool based on the instantiated service type. */
 extern void **services_state_pool;
 #endif
+
+#ifdef ENABLE_PER_FLOW_TS_STORE
+/* TS Info that can be accessed and updated by MGR Tx Threads and exported */
+extern void *onvm_mgr_tx_per_flow_ts_info;
+#endif
+
 #endif
 
 #ifdef ENABLE_VXLAN

@@ -317,16 +317,17 @@ static inline void onvm_nflib_handle_tx_shadow_ring(void) {
                 this_nf->stats.tx += tx_spkts;
         }
 }
-#endif // defined(ENABLE_SHADOW_RINGS)
+#endif
 
 #ifdef ENABLE_REPLICA_STATE_UPDATE
 static inline void synchronize_replica_nf_state_memory(void) {
 
         //if(likely(nf_info->nf_state_mempool && pReplicaStateMempool))
-        if(likely(dirty_state_map->dirty_index)) {
+        if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         onvm_util_get_start_time(&ts);
 #endif
+                //Note: Must always ensure that dirty_map is carried over first; so that the remote replica can use this value to update only the changed states
                 uint64_t dirty_index = dirty_state_map->dirty_index;
                 uint64_t copy_index = 0;
                 uint64_t copy_setbit = 0;
@@ -341,10 +342,38 @@ static inline void synchronize_replica_nf_state_memory(void) {
                 }
                 dirty_state_map->dirty_index =0;
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
+        //fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
 #endif
         }
         return;
+}
+#endif
+
+#ifdef ENABLE_PER_FLOW_TS_STORE
+//update the TS for the processed packet
+static inline void update_processed_packet_ts(void **pkts, unsigned max_packets);
+static inline void update_processed_packet_ts(void **pkts, unsigned max_packets) {
+        if(!this_nf->per_flow_ts_info) return;
+        uint16_t i, ft_index=0;
+        uint64_t ts[NF_PKT_BATCH_SIZE];
+        onvm_util_get_marked_packet_timestamp((struct rte_mbuf**)pkts, ts, max_packets);
+        for(i=0; i< max_packets;i++) {
+                struct onvm_pkt_meta *meta = onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]);
+#ifdef ENABLE_FT_INDEX_IN_META
+                if(meta->ft_index) {
+                        ft_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
+                } else
+#endif
+                {
+                        struct onvm_flow_entry *flow_entry = NULL;
+                        onvm_flow_dir_get_pkt((struct rte_mbuf*) pkts[i], &flow_entry);
+                        if(flow_entry) {
+                                ft_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(flow_entry->entry_index);
+                        } else continue;
+                }
+                onvm_per_flow_ts_info_t *t_info = (onvm_per_flow_ts_info_t*)(((dirty_mon_state_map_tbl_t*)this_nf->per_flow_ts_info)+1);
+                t_info[ft_index].ts = ts[i];
+        }
 }
 #endif
 
@@ -386,11 +415,26 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
 static
 inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size) {
         int ret = 0;
-
         /* Perform Post batch processing actions */
-#ifdef REPLICA_UPDATE_MODE_PER_BATCH
+        /** Atomic Operations:
+         * Synchronize the NF Memory State
+         * Update TS of last processed packet.
+         * Clear the Processed Batch of Rx packets.
+         */
+#ifdef REPLICA_STATE_UPDATE_MODE_PER_BATCH
         synchronize_replica_nf_state_memory();
 #endif
+#ifdef PER_FLOW_TS_UPDATE_PER_BATCH
+        //update the TS for the processed batch of packets
+        update_processed_packet_ts(pktsTX,tx_batch_size);
+#endif
+
+#if defined(SHADOW_RING_UPDATE_PER_BATCH)
+        rte_ring_enqueue_bulk(tx_sring, pktsTX, tx_batch_size);
+        void *pktsRX[NF_PKT_BATCH_SIZE];
+        rte_ring_sc_dequeue_bulk(rx_sring, pktsRX,NF_PKT_BATCH_SIZE ); //for now Bypass as we do at the end (down)
+#endif
+
 #if defined(TEST_MEMCPY_MODE_PER_BATCH)
         do_memcopy(nf_info->nf_state_mempool);
 #endif //TEST_MEMCPY_OVERHEAD
@@ -447,9 +491,6 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
 #endif
                 ret = (*handler)((struct rte_mbuf*) pkts[i], onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]));
 
-#ifdef REPLICA_UPDATE_MODE_PER_PACKET
-                synchronize_replica_nf_state_memory();
-#endif
 #if defined(TEST_MEMCPY_MODE_PER_PACKET)
                 do_memcopy(nf_info->nf_state_mempool);
 #endif
@@ -462,7 +503,15 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
                 /* NF returns 0 to return packets or 1 to buffer */
                 if (likely(ret == 0)) {
                         pktsTX[tx_batch_size++] = pkts[i];
-#if defined(ENABLE_SHADOW_RINGS)
+
+#ifdef REPLICA_STATE_UPDATE_MODE_PER_PACKET
+                synchronize_replica_nf_state_memory();
+#endif
+#ifdef PER_FLOW_TS_UPDATE_PER_PKT
+                //update the TS for the processed packet
+                update_processed_packet_ts(&pkts[i],1);
+#endif
+#if defined(SHADOW_RING_UPDATE_PER_PKT)
                         /* Move this processed packet (Head of Rx shadow Ring) to Tx Shadow Ring */
                         void *pkt_rx;
                         rte_ring_sc_dequeue(rx_sring, &pkt_rx);
@@ -473,7 +522,7 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
 #ifdef ENABLE_NF_TX_STAT_LOGS
                         this_nf->stats.tx_buffer++;
 #endif
-#if defined(ENABLE_SHADOW_RINGS)
+#if defined(SHADOW_RING_UPDATE_PER_PKT)
                         /* Remove this buffered packet from Rx shadow Ring, Should we buffer it separately, or assume NF has held on to it and NF state update reflects it. */
                         void *pkt_rx;
                         rte_ring_sc_dequeue(rx_sring, &pkt_rx);
@@ -486,47 +535,7 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
         if(likely(tx_batch_size)) {
                 return onvm_nflib_post_process_packets_batch(pktsTX, tx_batch_size);
         }
-
-#ifdef REPLICA_UPDATE_MODE_PER_BATCH
-        synchronize_replica_nf_state_memory();
-#endif
-#if defined(TEST_MEMCPY_MODE_PER_BATCH)
-        do_memcopy(nf_info->nf_state_mempool);
-#endif //TEST_MEMCPY_OVERHEAD
-
-        if(likely(tx_batch_size)) {
-                if(likely(0 == (ret = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size)))) {
-                        this_nf->stats.tx += tx_batch_size;
-                } else {
-#if defined(NF_LOCAL_BACKPRESSURE)
-                        do {
-#ifdef INTERRUPT_SEM
-                                //printf("\n Yielding till Tx Ring has place to store Packets\n");
-                                onvm_nf_yeild(nf_info, YIELD_DUE_TO_FULL_TX_RING);
-                                //printf("\n Resuming from Tx Ring wait to store Packets\n");
-#endif
-                                if (tx_batch_size > rte_ring_free_count(tx_ring)) {
-                                        continue;
-                                }
-                                if((ret = rte_ring_enqueue_bulk(tx_ring,pktsTX,tx_batch_size)) == 0)break;
-                        } while (ret && ((this_nf->info->status==NF_RUNNING) && keep_running));
-                        this_nf->stats.tx += tx_batch_size;
-#endif  //NF_LOCAL_BACKPRESSURE
-                }
-#if defined(ENABLE_SHADOW_RINGS)
-                /* Finally clear all packets from the Tx Shadow Ring and also Rx shadow Ring ::only if packets from shadow ring have been flushed to Tx Ring: Reason, NF might get paused or stopped */
-                if(likely(ret == 0)) {
-                        rte_ring_sc_dequeue_burst(tx_sring,pktsTX,rte_ring_count(tx_sring));
-                        if(unlikely(rte_ring_count(rx_sring))) {
-                                //These are the held packets in the NF in this round:
-                                rte_ring_sc_dequeue_burst(rx_sring,pktsTX,rte_ring_count(rx_sring));
-                                //fprintf(stderr, "BATCH END: %d packets still in Rx shadow ring!\n", rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring)));
-                        }
-                }
-#endif
-        }
         return ret;
-        //return tx_batch_size;
 }
 
 int
@@ -568,7 +577,7 @@ onvm_nflib_run_callback(struct onvm_nf_info* info, pkt_handler handler,callback_
                 onvm_nflib_dequeue_messages();
 
                 if(callback) {
-                        keep_running = !(*callback)();
+                        keep_running = !(*callback)() && keep_running;
                 }
         }
 
@@ -1068,7 +1077,7 @@ onvm_nflib_startup(void) {
         if (tx_ring == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get TX ring - is server process running?\n");
 
-        #if defined(ENABLE_SHADOW_RINGS)
+#if defined(ENABLE_SHADOW_RINGS)
         rx_sring = rte_ring_lookup(get_rx_squeue_name(nf_info->instance_id));
         if (rx_sring == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get RX Shadow ring - is server process running?\n");
@@ -1076,7 +1085,7 @@ onvm_nflib_startup(void) {
         tx_sring = rte_ring_lookup(get_tx_squeue_name(nf_info->instance_id));
         if (tx_sring == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get TX Shadow ring - is server process running?\n");
-        #endif
+#endif
 
         nf_msg_ring = rte_ring_lookup(get_msg_queue_name(nf_info->instance_id));
         if (nf_msg_ring == NULL)

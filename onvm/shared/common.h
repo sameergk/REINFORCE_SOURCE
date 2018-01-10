@@ -92,7 +92,7 @@
 #define INTERRUPT_SEM
 
 /** Feature to Enable Packet Time stamping and to measure processing latency */
-#define ENABLE_PACKET_TIMESTAMPING
+//#define ENABLE_PACKET_TIMESTAMPING
 
 /** Feature to enable Extra Debug Logs on all components */
 //#define __DEBUG_LOGS__
@@ -298,11 +298,34 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
+#define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.
+//#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
+#ifndef RESL_UPDATE_MODE_PER_PACKET
+#define RESL_UPDATE_MODE_PER_BATCH      //update mode Shadow Ring, Replica state, per flow TS for batch of packets
+#endif
+
+#ifdef ENABLE_SHADOW_RINGS
+#ifdef RESL_UPDATE_MODE_PER_PACKET
+#define SHADOW_RING_UPDATE_PER_PKT
+#else
+#define SHADOW_RING_UPDATE_PER_BATCH
+#endif
+#endif
+
+#ifdef ENABLE_PER_FLOW_TS_STORE
+#ifdef RESL_UPDATE_MODE_PER_PACKET
+#define PER_FLOW_TS_UPDATE_PER_PKT
+#else
+#define PER_FLOW_TS_UPDATE_PER_BATCH
+#endif
+#endif
+
 
 #ifdef ENABLE_REPLICA_STATE_UPDATE
-//#define REPLICA_UPDATE_MODE_PER_PACKET
-#ifndef REPLICA_UPDATE_MODE_PER_PACKET
-#define REPLICA_UPDATE_MODE_PER_BATCH
+#ifdef RESL_UPDATE_MODE_PER_PACKET
+#define REPLICA_STATE_UPDATE_MODE_PER_PACKET
+#else
+#define REPLICA_STATE_UPDATE_MODE_PER_BATCH
 #endif
 #endif
 
@@ -320,13 +343,28 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define _SERVICE_STATE_CACHE     (8)
 #endif
 
+#ifdef ENABLE_PER_FLOW_TS_STORE
+#define _PER_FLOW_TS_MEMPOOL_NAME "PF_TS_MEMPOOL"
+#define _PER_FLOW_TS_SIZE      (16*1024)  //reduced from 64K to 16K for now.
+#define _PER_FLOW_TS_CACHE     (8)
+#endif
+
 #define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
 #define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
 #define ACTIVE_NF_MASK   (MAX_ACTIVE_CLIENTS-1)
+
+typedef struct onvm_per_flow_ts_info {
+        uint64_t ts;
+}onvm_per_flow_ts_info_t;
 #endif  //#ifdef ENABLE_NFV_RESL
 // END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
 /******************************************************************************/
 
+/** Structure to represent the Dirty state map for the in-memory NF state **/
+typedef struct dirty_mon_state_map_tbl {
+        uint64_t dirty_index;
+        // Bit index to every 1K LSB=0-1K, MSB=63-64K
+}dirty_mon_state_map_tbl_t;
 
 /******************************************************************************/
 #ifdef ENABLE_VXLAN
@@ -515,6 +553,11 @@ struct client {
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
         // shared state between all the NFs of the same service type; Note: Mostly not required here in client[] structure
         void *service_state_pool;
+#endif
+
+#ifdef ENABLE_PER_FLOW_TS_STORE
+        //Storehouse for each flows last processed packets TS.
+        void *per_flow_ts_info;
 #endif
 
 #ifdef ENABLE_SHADOW_RINGS
