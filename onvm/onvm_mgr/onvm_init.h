@@ -104,8 +104,6 @@
 
 //For TCP UDP use 70,40
 //For TCP TCP, IO use 80 20
-#define NF_MSG_QUEUE_SIZE   (128)
-
 // Note: Based on the approach the tuned values change. For NF Throttling (80/75,20/25) works better, for Packet Throttling (70,50 or 70,40 or 80,40) seems better -- must be tuned and set accordingly.
 #ifdef NF_BACKPRESSURE_APPROACH_1
 #define CLIENT_QUEUE_RING_THRESHOLD (80)
@@ -121,8 +119,6 @@
 #define ECN_EWMA_ALPHA  (0.25)
 #define CLIENT_QUEUE_RING_ECN_MARK_SIZE ((uint32_t)(((1-ECN_EWMA_ALPHA)*CLIENT_QUEUE_RING_WATER_MARK_SIZE) + ((ECN_EWMA_ALPHA)*CLIENT_QUEUE_RING_LOW_WATER_MARK_SIZE)))///2)
 #define NO_FLAGS 0
-
-#define ONVM_NUM_RX_THREADS 1
 
 #define DYNAMIC_CLIENTS 1
 #define STATIC_CLIENTS 0
@@ -156,7 +152,6 @@ extern unsigned num_sockets;
 extern struct onvm_service_chain *default_chain;
 extern struct onvm_ft *sdn_ft;
 
-#ifdef ENABLE_NFV_RESL
 #ifdef ENABLE_NF_MGR_IDENTIFIER
 extern uint32_t nf_mgr_id;
 #endif
@@ -171,6 +166,15 @@ extern void **services_state_pool;
 extern void *onvm_mgr_tx_per_flow_ts_info;
 #endif
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+extern struct rte_ring *tx_port_ring[RTE_MAX_ETHPORTS];     //ONVM_NUM_RSYNC_PORTS      //ring used by NFs and Other Tx threads to transmit out port packets
+extern struct rte_ring *tx_tx_state_latch_ring[RTE_MAX_ETHPORTS];  //ONVM_NUM_RSYNC_PORTS //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+extern struct rte_ring *tx_nf_state_latch_ring[RTE_MAX_ETHPORTS ]; //ONVM_NUM_RSYNC_PORTS//ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#if 0
+extern struct rte_ring *tx_port_ring;           //ring used by NFs and Other Tx threads to transmit out port packets
+extern struct rte_ring *tx_tx_state_latch_ring; //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+extern struct rte_ring *tx_nf_state_latch_ring; //ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#endif
 #endif
 
 #ifdef ENABLE_VXLAN

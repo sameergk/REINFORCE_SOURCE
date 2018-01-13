@@ -68,6 +68,7 @@ struct rte_ring *mgr_rsp_queue;
 
 #ifdef ENABLE_NFV_RESL
 struct rte_mempool *nf_state_pool;
+#endif //#ifdef ENABLE_NFV_RESL
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 struct rte_mempool *service_state_pool;
@@ -75,11 +76,17 @@ void **services_state_pool;
 #endif
 
 #ifdef ENABLE_PER_FLOW_TS_STORE
+//Allocated Mempool to store the NFs processed and Tx Sent Packets TS info
 struct rte_mempool *per_flow_ts_pool;
+//Allocated Mempool that can be used to store the Tx Packets TS info
 void *onvm_mgr_tx_per_flow_ts_info;
 #endif
 
-#endif //#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+struct rte_ring *tx_port_ring[RTE_MAX_ETHPORTS];           //ring used by NFs and Other Tx threads to transmit out port packets
+struct rte_ring *tx_tx_state_latch_ring[RTE_MAX_ETHPORTS]; //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+struct rte_ring *tx_nf_state_latch_ring[RTE_MAX_ETHPORTS]; //ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#endif
 
 uint16_t **services;
 uint16_t *nf_per_service_count;
@@ -114,12 +121,14 @@ static void check_all_ports_link_status(uint8_t port_num, uint32_t port_mask);
 
 
 #ifdef ENABLE_NFV_RESL
+static int init_nf_state_pool(void);
+#endif // ENABLE_NFV_RESL
+
 #ifdef ENABLE_NF_MGR_IDENTIFIER
 #include <unistd.h>
 uint32_t nf_mgr_id;
 static uint32_t read_onvm_mgr_id_from_system(void);
 #endif // ENABLE_NF_MGR_IDENTIFIER
-static int init_nf_state_pool(void);
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 static int init_service_state_pool(void);
@@ -129,8 +138,9 @@ static int init_service_state_pool(void);
 static int init_per_flow_ts_pool(void);
 #endif
 
-#endif // ENABLE_NFV_RESL
-
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+static int init_rsync_tx_rings(void);
+#endif
 /*****************Internal Configuration Structs and Constants*****************/
 
 /*
@@ -347,6 +357,7 @@ static int init_nf_state_pool(void) {
         if(nf_state_pool == NULL) { printf("Failed to Create mbuf state pool '%s' without cache size!...\n", _NF_STATE_MEMPOOL_NAME);}
         return (nf_state_pool == NULL); /* 0 on success */
 }
+#endif
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 static int init_service_state_pool(void) {
         service_state_pool = rte_mempool_create(_SERVICE_STATE_MEMPOOL_NAME, MAX_SERVICES,
@@ -355,7 +366,7 @@ static int init_service_state_pool(void) {
 
         if(NULL == service_state_pool) {
                 printf("Failed to Create mbuf service state pool '%s' with cache size...\n", _SERVICE_STATE_MEMPOOL_NAME);
-                nf_state_pool = rte_mempool_create(_SERVICE_STATE_MEMPOOL_NAME, MAX_SERVICES,
+                service_state_pool = rte_mempool_create(_SERVICE_STATE_MEMPOOL_NAME, MAX_SERVICES,
                         _SERVICE_STATE_SIZE, 0,
                         0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
         }
@@ -381,6 +392,45 @@ static int init_per_flow_ts_pool(void) {
                 return (per_flow_ts_pool == NULL); /* 0 on success */
 }
 #endif
+
+
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+static int init_rsync_tx_rings(void) {
+        uint8_t i = 0;
+        for(; i< ports->num_ports; i++) {
+                const char * tx_p_name = get_rsync_tx_port_ring_name(i);
+                const char * tx_s_name = get_rsync_tx_tx_state_latch_ring_name(i);
+                const char * tx_n_name = get_rsync_tx_nf_state_latch_ring_name(i);
+
+                //ring used by NFs and Other Tx threads to transmit out port packets
+                tx_port_ring[i] = rte_ring_create(tx_p_name, TX_RSYNC_TX_PORT_RING_SIZE,rte_socket_id(),RING_F_SC_DEQ);
+                if (NULL == tx_port_ring[i])
+                        rte_exit(EXIT_FAILURE, "Cannot create Tx Port Ring\n");
+                //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+                tx_tx_state_latch_ring[i] = rte_ring_create(tx_s_name, TX_RSYNC_TX_LATCH_RING_SIZE,rte_socket_id(),RING_F_SP_ENQ|RING_F_SC_DEQ);
+                if (NULL == tx_tx_state_latch_ring[i])
+                        rte_exit(EXIT_FAILURE, "Cannot create Tx_tx_state_latch_ring Ring\n");
+                //ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+                tx_nf_state_latch_ring[i] = rte_ring_create(tx_n_name, TX_RSYNC_NF_LATCH_RING_SIZE,rte_socket_id(),RING_F_SP_ENQ|RING_F_SC_DEQ);
+                if (NULL == tx_nf_state_latch_ring[i])
+                        rte_exit(EXIT_FAILURE, "Cannot create tx_nf_state_latch_ring Ring\n");
+        }
+#if 0
+        //ring used by NFs and Other Tx threads to transmit out port packets
+        tx_port_ring = rte_ring_create(_TX_RSYNC_TX_PORT_RING_NAME, TX_RSYNC_TX_PORT_RING_SIZE,rte_socket_id(),RING_F_SC_DEQ);
+        if (NULL == tx_port_ring)
+                rte_exit(EXIT_FAILURE, "Cannot create Tx Port Ring\n");
+        //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+        tx_tx_state_latch_ring = rte_ring_create(_TX_RSYNC_TX_LATCH_RING_NAME, TX_RSYNC_TX_LATCH_RING_SIZE,rte_socket_id(),RING_F_SP_ENQ|RING_F_SC_DEQ);
+        if (NULL == tx_tx_state_latch_ring)
+                rte_exit(EXIT_FAILURE, "Cannot create Tx_tx_state_latch_ring Ring\n");
+        //ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+        tx_nf_state_latch_ring = rte_ring_create(_TX_RSYNC_NF_LATCH_RING_NAME, TX_RSYNC_NF_LATCH_RING_SIZE,rte_socket_id(),RING_F_SP_ENQ|RING_F_SC_DEQ);
+        if (NULL == tx_nf_state_latch_ring)
+                rte_exit(EXIT_FAILURE, "Cannot create tx_nf_state_latch_ring Ring\n");
+#endif
+        return 0;
+}
 #endif
 /**
  * Set up a mempool to store nf_msg structs
@@ -460,7 +510,8 @@ init_port(uint8_t port_num) {
                 },
         };
 #endif
-        const uint16_t rx_rings = ONVM_NUM_RX_THREADS, tx_rings = MAX_NFS;
+        const uint16_t rx_rings = ONVM_NUM_RX_THREADS;
+        const uint16_t tx_rings = MAX_NFS;
         const uint16_t rx_ring_size = RTE_MP_RX_DESC_DEFAULT;
         const uint16_t tx_ring_size = RTE_MP_TX_DESC_DEFAULT;
 
@@ -531,7 +582,7 @@ init_shm_rings(void) {
         #endif
         #endif
         
-#if defined(ENABLE_NFV_RESL) && defined(ENABLE_SHADOW_RINGS)
+#if defined(ENABLE_SHADOW_RINGS)
         const char * rsq_name;
         const char * tsq_name;
         const unsigned sringsize = CLIENT_SHADOW_RING_SIZE;
@@ -695,6 +746,7 @@ init_shm_rings(void) {
                 }
         }
 #endif
+
 #ifdef ENABLE_PER_FLOW_TS_STORE
         if(rte_mempool_get(per_flow_ts_pool,&onvm_mgr_tx_per_flow_ts_info) < 0) {
                 rte_exit(EXIT_FAILURE, "Failed to get onvm_mgr per_flow_ts_info memory");
@@ -729,6 +781,9 @@ init_mgr_queues(void)
                 rte_exit(EXIT_FAILURE, "Cannot create MGR Response Ring\n");
 #endif
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        return init_rsync_tx_rings();
+#endif
         return 0;
 }
 
@@ -792,11 +847,9 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask) {
  */
 
 
-#ifdef ENABLE_NFV_RESL
 #ifdef ENABLE_NF_MGR_IDENTIFIER
 static uint32_t read_onvm_mgr_id_from_system(void) {
         nf_mgr_id = gethostid();
         return nf_mgr_id;
 }
 #endif // ENABLE_NF_MGR_IDENTIFIER
-#endif // ENABLE_NFV_RESL

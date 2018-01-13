@@ -55,8 +55,13 @@
 //check on each node by executing command  $"getconf LEVEL1_DCACHE_LINESIZE" or cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
 #define ONVM_CACHE_LINE_SIZE (64)
 
+#ifndef MIN
 #define MIN(a,b) ((a) < (b)? (a):(b))
+#endif
+
+#ifndef MAX
 #define MAX(a,b) ((a) > (b)? (a):(b))
+#endif
 
 #define ARBITER_PERIOD_IN_US (100)      // 250 or 100 micro seconds
 //#define USE_SINGLE_NIC_PORT           // NEEDED FOR VXLAN?
@@ -70,6 +75,11 @@
 #define RTE_MP_TX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define CLIENT_QUEUE_RINGSIZE  (4096)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
 #define ONVM_PACKETS_BATCH_SIZE (32)    // Batch size for Rx/Tx Queue and NFs
+#define NF_MSG_QUEUE_SIZE   (128)       // NFMGR-->NF and vice-versa Messages count
+
+// Number of Rx and Tx Threads
+#define ONVM_NUM_RX_THREADS     (1)
+#define ONVM_NUM_TX_THREADS     (MAX_NFS)
 
 #define ONVM_MAX_CHAIN_LENGTH (12)      // the maximum chain length
 #define SDN_FT_ENTRIES  (1024)          // Max Flow Table Entries
@@ -291,12 +301,14 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 /******************************************************************************/
 // NFV RESILIENCY related extensions, control macros and defines
 /******************************************************************************/
+#define ETHER_TYPE_RSYNC_DATA  (0x1000)
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
 #define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
+#define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 #define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.
 //#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
@@ -320,7 +332,6 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #endif
 #endif
 
-
 #ifdef ENABLE_REPLICA_STATE_UPDATE
 #ifdef RESL_UPDATE_MODE_PER_PACKET
 #define REPLICA_STATE_UPDATE_MODE_PER_PACKET
@@ -328,6 +339,20 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define REPLICA_STATE_UPDATE_MODE_PER_BATCH
 #endif
 #endif
+
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+#define ONVM_NUM_RSYNC_THREADS ((int)1)
+#define ONVM_NUM_RSYNC_PORTS    (3)     //2 + 1 for rest
+#define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
+#define TX_RSYNC_TX_PORT_RING_SIZE      RTE_MP_TX_DESC_DEFAULT
+#define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"
+#define TX_RSYNC_TX_LATCH_RING_SIZE     (8*1024)
+#define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"
+#define TX_RSYNC_NF_LATCH_RING_SIZE     (8*1024)
+#else
+#define ONVM_NUM_RSYNC_THREADS ((int)0)
+#endif
+
 
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)
@@ -339,7 +364,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 #define _SERVICE_STATE_MEMPOOL_NAME "SVC_STATE_MEMPOOL"
-#define _SERVICE_STATE_SIZE      (16*1024)  //reduced from 64K to 16K for now.
+#define _SERVICE_STATE_SIZE      (4*1024*1024) //(16*1024)  //reduced from 64K to 16K for now.
 #define _SERVICE_STATE_CACHE     (8)
 #endif
 
@@ -349,13 +374,18 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define _PER_FLOW_TS_CACHE     (8)
 #endif
 
+
 #define MAX_ACTIVE_CLIENTS  (MAX_CLIENTS>>1)
 #define MAX_STANDBY_CLIENTS  (MAX_CLIENTS - MAX_ACTIVE_CLIENTS)
 #define ACTIVE_NF_MASK   (MAX_ACTIVE_CLIENTS-1)
 
 typedef struct onvm_per_flow_ts_info {
         uint64_t ts;
-}onvm_per_flow_ts_info_t;
+}  __attribute__((__packed__)) onvm_per_flow_ts_info_t;
+#else
+#ifndef ONVM_NUM_RSYNC_THREADS
+#define ONVM_NUM_RSYNC_THREADS ((int)0)
+#endif
 #endif  //#ifdef ENABLE_NFV_RESL
 // END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
 /******************************************************************************/
@@ -798,6 +828,28 @@ get_tx_squeue_name(unsigned id) {
         return buffer;
 }
 #endif  //ENABLE_SHADOW_RINGS
+
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+static inline const char *
+get_rsync_tx_port_ring_name(unsigned id) {
+        static char buffer[sizeof(_TX_RSYNC_TX_PORT_RING_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, _TX_RSYNC_TX_PORT_RING_NAME, id);
+        return buffer;
+}
+static inline const char *
+get_rsync_tx_tx_state_latch_ring_name(unsigned id) {
+        static char buffer[sizeof(_TX_RSYNC_TX_LATCH_RING_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, _TX_RSYNC_TX_LATCH_RING_NAME, id);
+        return buffer;
+}
+static inline const char *
+get_rsync_tx_nf_state_latch_ring_name(unsigned id) {
+        static char buffer[sizeof(_TX_RSYNC_NF_LATCH_RING_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, _TX_RSYNC_NF_LATCH_RING_NAME, id);
+        return buffer;
+}
+#endif
+
 static inline unsigned
 get_associated_active_or_standby_nf_id(unsigned nf_id) {
         if(nf_id&MAX_ACTIVE_CLIENTS) {

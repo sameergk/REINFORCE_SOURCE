@@ -84,8 +84,8 @@
 
 /***********************************Macros************************************/
 
-
-#define PACKET_READ_SIZE ((uint16_t)32)
+#define PACKET_READ_SIZE ONVM_PACKETS_BATCH_SIZE
+//#define PACKET_READ_SIZE ((uint16_t)32)
 
 #define TO_PORT 0
 #define TO_CLIENT 1

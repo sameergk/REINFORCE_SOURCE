@@ -177,4 +177,10 @@ onvm_pkt_get_checksum_offload_flags(uint8_t port_id);
 void
 onvm_pkt_set_checksums(struct rte_mbuf* pkt);
 
+int
+onvm_tcp_con_close(struct rte_mbuf* pkt);
+
+int
+onvm_tcp_ack_close(struct rte_mbuf* pkt, uint8_t lflags) ;
+
 #endif  // _ONVM_PKT_HELPER_H_"

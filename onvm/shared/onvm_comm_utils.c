@@ -184,8 +184,12 @@ inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16
 #if (USE_TS_TYPE == TS_TYPE_LOGICAL) || (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
                 pkts[i]->ol_flags = now;
 #else
+                //uint64_t ns = req->tv_sec * 1000000000 + req->tv_nsec;
+                pkts[i]->ol_flags = uint64_t (now.t.tv_sec * 1000000000 + now.t.tv_sec);
+#if 0
                 pkts[i]->ol_flags = now.t.tv_nsec;
                 pkts[i]->tx_offload = now.t.tv_sec;
+#endif
 #endif
             }
         return 0;
@@ -203,6 +207,7 @@ inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint1
 #else
         onvm_time_t stop, start;
         onvm_util_get_cur_time(&stop);
+        uint64_t now = stop.t.tv_sec * 1000000000 + stop.t.tv_nsec;
         //single U64 precision (tv_nsec) is not good; often results in wrong values
         //uint64_t now = onvm_util_get_current_cpu_cycles();
         //uint64_t now = stop.t.tv_nsec;
@@ -216,12 +221,14 @@ inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint1
 #elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
                 cycles += now - pkts[i]->ol_flags;
 #else
-
+                cycles += now - pkts[i]->ol_flags;
+#if 0
                 start.t.tv_sec = pkts[i]->tx_offload;
                 start.t.tv_nsec = pkts[i]->ol_flags;
 
                 cycles += ((stop.t.tv_sec - start.t.tv_sec) * 1000000000
                         + (stop.t.tv_nsec - start.t.tv_nsec));
+#endif
 #endif
                 pkts[i]->tx_offload=pkts[i]->ol_flags=0;
         }

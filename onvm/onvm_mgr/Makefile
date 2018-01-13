@@ -54,11 +54,11 @@ APP = onvm_mgr
 
 # all source are stored in SRCS-y
 #SRCS-y := main.c onvm_init.c onvm_args.c onvm_stats.c onvm_pkt.c onvm_nf.c onvm_bfd.c onvm_wakemgr.c onvm_special_nf0.c onvm_ft_install.c onvm_zookeeper.c onvm_zk_watch.c onvm_zk_common.c onvm_vxlan.c
-SRCS-y := main.c onvm_init.c onvm_args.c onvm_stats.c onvm_pkt.c onvm_nf.c onvm_bfd.c onvm_wakemgr.c onvm_special_nf0.c onvm_ft_install.c
+SRCS-y := main.c onvm_init.c onvm_args.c onvm_stats.c onvm_pkt.c onvm_nf.c onvm_bfd.c onvm_wakemgr.c onvm_special_nf0.c onvm_ft_install.c onvm_rsync.c
 SRCS-y += onvm_zookeeper.c onvm_zk_watch.c onvm_zk_common.c onvm_vxlan.c
 
 #INC := onvm_mgr.h onvm_init.h onvm_args.h onvm_stats.h onvm_nf.h onvm_pkt.h onvm_bfd.h onvm_wakemgr.h onvm_special_nf0.h onvm_ft_install.h onvm_zookeeper.h onvm_zk_watch.h onvm_zk_common.h onvm_vxlan.h zoo_queue.h
-INC := onvm_mgr.h onvm_init.h onvm_args.h onvm_stats.h onvm_nf.h onvm_pkt.h onvm_bfd.h onvm_wakemgr.h onvm_special_nf0.h onvm_ft_install.h 
+INC := onvm_mgr.h onvm_init.h onvm_args.h onvm_stats.h onvm_nf.h onvm_pkt.h onvm_bfd.h onvm_wakemgr.h onvm_special_nf0.h onvm_ft_install.h onvm_rsync.h
 INC += onvm_zookeeper.h onvm_zk_watch.h onvm_zk_common.h onvm_vxlan.h zoo_queue.h
 
 CFLAGS += $(WERROR_FLAGS) -O3 $(USER_FLAGS)

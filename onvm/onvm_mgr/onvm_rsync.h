@@ -41,76 +41,27 @@
 
 /******************************************************************************
 
-                              onvm_bfd.c
+                                 onvm_special_nf0.h
 
-       This file contains all functions related to BFD management.
+     This file contains the prototypes for all functions related to packet
+     processing within the NF Manager's Plugin/special NF NF[0].
 
 ******************************************************************************/
-#include "onvm_bfd.h"
-#include "onvm_mgr.h"
-/********************* Local Functions Declaration ****************************/
-int create_bfd_packet(struct rte_mbuf* pkt);
 
-/********************** Local Functions Definition ****************************/
-int
-onvm_bfd_start(void) {
-        return 0;
-}
 
-int
-onvm_bfd_stop(void) {
-        return 0;
-}
+#ifndef _ONVM_RSYNC_H_
+#define _ONVM_RSYNC_H_
 
-int create_bfd_packet(struct rte_mbuf* pkt) {
-        printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
+/********************************Globals and varaible declarations ***********************************/
 
-        /* craft eth header */
-        struct ether_hdr *ehdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
-        /* set ether_hdr fields here e.g. */
-        memset(ehdr,0, sizeof(struct ether_hdr));
-        //memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
-        //memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
-        ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
-
-        /* craft ipv4 header */
-        struct ipv4_hdr *iphdr = (struct ipv4_hdr *)(&ehdr[1]);
-        memset(iphdr,0, sizeof(struct ipv4_hdr));
-
-        /* set ipv4 header fields here */
-        struct udp_hdr *uhdr = (struct udp_hdr *)(&iphdr[1]);
-        /* set udp header fields here, e.g. */
-        uhdr->src_port = rte_bswap16(3784);
-        uhdr->dst_port = rte_bswap16(3784);
-
-        BfdPacket *bfdp = (BfdPacket *)(&uhdr[1]);
-        bfdp->header.flags = 0;
-        return 0;
-}
 /********************************Interfaces***********************************/
-int
-onvm_bfd_init(onvm_bfd_init_config_t *bfd_config) {
-        if(unlikely(NULL == bfd_config)) return 0;
-        printf("ONVM_BFD: INIT with identifier=%d(%x)", bfd_config->bfd_identifier, bfd_config->bfd_identifier);
 
-        struct rte_mempool *pktmbuf_pool = NULL;
-        pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
-        if(NULL == pktmbuf_pool) {
-                return -1;
-        }
+/********************************Interfaces***********************************/
+int rsync_main(__attribute__((unused)) void *arg);
 
-        struct rte_mbuf *buf = rte_pktmbuf_alloc(pktmbuf_pool);
-        if(NULL == pktmbuf_pool) {
-                return -1;
-        }
+int rsync_start(__attribute__((unused)) void *arg);
 
-        create_bfd_packet(buf);
-        return 0;
-}
+int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
+/****************************Internal functions*******************************/
 
-int
-onvm_bfd_deinit(void) {
-        return 0;
-}
-
-
+#endif  //

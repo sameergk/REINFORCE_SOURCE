@@ -537,3 +537,28 @@ onvm_pkt_set_checksums(struct rte_mbuf *pkt) {
                 }
         }
 }
+
+int
+onvm_tcp_con_close(struct rte_mbuf* pkt) {
+        struct tcp_hdr *tcp_hdr;
+        tcp_hdr = onvm_pkt_tcp_hdr(pkt);
+
+        if (unlikely(tcp_hdr == NULL)) {
+                return 0;
+        }
+        return ((tcp_hdr->tcp_flags & TCP_FIN_FLAG));
+        //return ((tcp_hdr->tcp_flags & TCP_FIN_FLAG) == (TCP_FIN_FLAG));
+}
+
+int
+onvm_tcp_ack_close(struct rte_mbuf* pkt, uint8_t lflags) {
+        struct tcp_hdr *tcp_hdr;
+        tcp_hdr = onvm_pkt_tcp_hdr(pkt);
+
+        if (tcp_hdr == NULL) {
+                return 0;
+        }
+
+        return ((lflags & TCP_FIN_FLAG) && (tcp_hdr->tcp_flags & TCP_ACK_FLAG) == TCP_ACK_FLAG);
+        //return ((tcp_hdr->tcp_flags & TCP_ACK_FLAG) == TCP_ACK_FLAG);
+}

@@ -217,7 +217,7 @@ for i in $(find . -maxdepth 1 -type d ); do
 
 if  [ $clean_make -le 1 ] ; then
         cd $ODIR
-        ./kill_all.sh
+        #./kill_all.sh
         exit 0
 fi
 

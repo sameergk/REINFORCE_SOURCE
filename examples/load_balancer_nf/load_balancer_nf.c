@@ -97,8 +97,12 @@ flow_info_t ft[TABLE_SIZE];
 /* Struct for load balancer information */
 typedef struct nf_loadbalance {
 
+#ifndef ENABLE_NFV_RESL
+        struct onvm_ft *ft;
+#else
         //flow_info_t ft[TABLE_SIZE];
         flow_info_t *ft;
+#endif
 
         /* for cleaning up connections */
         uint16_t num_stored;
@@ -276,6 +280,7 @@ setup_nf_instances_for_chain( __attribute__((unused)) struct rte_mbuf* pkt,  __a
                 active_nf_count = nf_per_service_count[service_id];
                 if(0 == active_nf_count) return -1;
                 dst_instance_id = services[service_id][lb->last_sel_inst_id[service_id]%active_nf_count];
+#ifdef ENABLE_NFV_RESL
                 /* If we pick the standby NF then reset from beginning:: This will esnure that we never pick the stanbdy NF for load balancing :: Assuming secondary NFs are always at the bottom of the list  */
                 if(is_secondary_active_nf_id(dst_instance_id)) {
                         lb->last_sel_inst_id[service_id] = 0;
@@ -283,6 +288,9 @@ setup_nf_instances_for_chain( __attribute__((unused)) struct rte_mbuf* pkt,  __a
                 } else {
                         lb->last_sel_inst_id[service_id]++;
                 }
+#else
+                lb->last_sel_inst_id[service_id]++;
+#endif
                 if(dst_instance_id) {
                         printf("\n Resolved packet: dst_instance_id=[%d] for service_id[%d], active_nf_count[%d]", dst_instance_id,service_id, active_nf_count);
                         //update the action for this flow entry to use the instance mapping directly
@@ -332,8 +340,13 @@ table_lookup_and_set_entry(struct rte_mbuf* pkt,  __attribute__((unused)) struct
                 printf("Some other error occurred with the packet hashing\n");
                 return -1;
         }
-
+#ifdef ENABLE_NFV_RESL
         data = &lb->ft[tbl_index];
+#else
+        struct onvm_ft_ipv4_5tuple key;
+        onvm_ft_fill_key_symmetric(&key, pkt);
+        tbl_index = onvm_ft_lookup_key(lb->ft, &key, (char **)&data); //Note: TODO: Currently incomplete
+#endif
         if(data->is_active == 0) {
                 table_add_entry(pkt,meta,data,flow_entry);
                 update_dirty_state_index(tbl_index);

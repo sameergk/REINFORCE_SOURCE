@@ -54,10 +54,12 @@
 #include "onvm_nf.h"
 #include "onvm_wakemgr.h"
 #include "onvm_special_nf0.h"
+#include "onvm_rsync.h"
 
 
 #ifdef ENABLE_BFD
 #include "onvm_bfd.h"
+onvm_bfd_init_config_t bfd_config;
 #endif
 
 /****************************Internal Declarations****************************/
@@ -427,7 +429,6 @@ tx_thread_main(void *arg) {
         return 0;
 }
 
-
 /*******************************Main function*********************************/
 int
 main(int argc, char *argv[]) {
@@ -437,7 +438,10 @@ main(int argc, char *argv[]) {
 
         /* initialise the system */
 #ifdef INTERRUPT_SEM
-        unsigned wakeup_lcores;        
+        unsigned wakeup_lcores;
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        unsigned rsync_lcores;
+#endif
 #endif
 
         register_signal_handler();
@@ -452,17 +456,20 @@ main(int argc, char *argv[]) {
         onvm_stats_clear_all_clients();
 
         /* Reserve n cores for: 1 main thread, ONVM_NUM_RX_THREADS for Rx, ONVM_NUM_WAKEUP_THREADS for wakeup and remaining for Tx */
-        if(rte_lcore_count() < (2+ONVM_NUM_RX_THREADS+ONVM_NUM_WAKEUP_THREADS)) {
+        if(rte_lcore_count() < (2+ONVM_NUM_RX_THREADS+ONVM_NUM_WAKEUP_THREADS+ONVM_NUM_RSYNC_THREADS)) {
                 rte_exit(EXIT_FAILURE, "Need Minimum of [%d] cores! \n",(2+ONVM_NUM_RX_THREADS+ONVM_NUM_WAKEUP_THREADS));
         }
         cur_lcore = rte_lcore_id();
         rx_lcores = ONVM_NUM_RX_THREADS;
-
-        tx_lcores = rte_lcore_count() - rx_lcores - 1;
 #ifdef INTERRUPT_SEM
         wakeup_lcores = ONVM_NUM_WAKEUP_THREADS;
-        tx_lcores -= wakeup_lcores; //tx_lcores= (tx_lcores>2)?(2):(tx_lcores);
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        rsync_lcores = ONVM_NUM_RSYNC_THREADS;
+#endif
+        tx_lcores = MIN((rte_lcore_count() - rx_lcores - ONVM_NUM_WAKEUP_THREADS -ONVM_NUM_RSYNC_THREADS - 1), ONVM_NUM_TX_THREADS); //tx_lcores -= wakeup_lcores; //tx_lcores= (tx_lcores>2)?(2):(tx_lcores);
         //tx_lcores=1;
+#else
+        tx_lcores = MIN((rte_lcore_count() - rx_lcores - 1), ONVM_NUM_TX_THREADS);
 #endif
 
         /* Offset cur_lcore to start assigning TX cores */
@@ -493,6 +500,7 @@ main(int argc, char *argv[]) {
                 temp_num_clients = (unsigned)num_clients;
         }
 
+        //printf("$$$$$$$$$: MAX_ETH_PORTS=%d $$$$$$$$\n", RTE_MAX_ETHPORTS)RTE_MAX_ETHPORTS=32;
         //num_clients = temp_num_clients;
         for (i = 0; i < tx_lcores; i++) {
                 struct thread_info *tx = calloc(1, sizeof(struct thread_info));
@@ -562,8 +570,23 @@ main(int argc, char *argv[]) {
         }
 #endif
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        if(rsync_lcores) {
+                for (i = 0; i < rsync_lcores; i++) {
+                        cur_lcore = rte_get_next_lcore(cur_lcore, 1, 1);
+                        rte_eal_remote_launch(rsync_main, NULL, cur_lcore);
+                        RTE_LOG(INFO, APP, "Core %d: Running rsync thread \n", cur_lcore);
+                }
+        }
+#endif
+
 #ifdef ENABLE_BFD
-        onvm_bfd_init(nf_mgr_id);
+        bfd_config.bfd_identifier = nf_mgr_id;
+        bfd_config.num_ports = ports->num_ports;
+        for (i = 0; i < ports->num_ports; i++) {
+                bfd_config.session_mode[i] = BFD_SESSION_MODE_ACTIVE;
+        }
+        onvm_bfd_init(&bfd_config);
 #endif
 
 #ifdef ENABLE_VXLAN

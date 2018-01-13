@@ -55,10 +55,6 @@
 #include "onvm_mgr.h"
 
 /***************************** Globals/Macros *********************************/
-#ifdef ENABLE_NFV_RESL
-// Global identifier
-//extern uint32_t nf_mgr_id;
-#endif
 
 
 /***************************** Data Structures ********************************/
@@ -223,6 +219,15 @@ typedef struct BfdPacket
 
 
 /********************************Interfaces***********************************/
+#define MAX_BFD_SESSIONS (10)
+typedef struct onvm_bfd_init_config {
+        uint32_t bfd_identifier;
+        uint8_t num_ports;
+        uint8_t session_mode[MAX_BFD_SESSIONS];
+}onvm_bfd_init_config_t;
+
+#define BFD_SESSION_MODE_PASSIVE    (0)
+#define BFD_SESSION_MODE_ACTIVE     (1)
 
 /*
  * Interface to initialize the BFD.
@@ -232,7 +237,7 @@ typedef struct BfdPacket
  *
  */
 int
-onvm_bfd_init(uint32_t my_identifier);
+onvm_bfd_init(onvm_bfd_init_config_t *bfd_config);
 
 /*
  * Interface to De-initialize the BFD.

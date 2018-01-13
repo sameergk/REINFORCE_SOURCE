@@ -712,7 +712,7 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
                 //Change DST MAC and IP to Clients MAC and IP
                 for (i = 0; i < ETHER_ADDR_LEN; i++) {
-                        ehdr->d_addr.addr_bytes[i] = flow_info->s_addr_bytes[i];
+                        ehdr->d_addr.addr_bytes[i] = flow_info->s_addr_bytes[i]; //concern-- as it is not clients MAC; (still it works with this.. )anyway skip this and check.
                         //ehdr->d_addr.addr_bytes[i] = client_mac_addr[i];
                 }
                 meta->destination = lb->client_port;

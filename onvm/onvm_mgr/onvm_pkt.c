@@ -270,10 +270,17 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
 #endif
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        uint16_t enq_port = ((port > ONVM_NUM_RSYNC_PORTS)?(ONVM_NUM_RSYNC_PORTS-1):(port));
+        sent = rte_ring_enqueue_burst(tx_port_ring[enq_port], (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
+        //sent = rte_ring_enqueue_burst(tx_port_ring, (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
+#else
         sent = rte_eth_tx_burst(port,
                                 tx->queue_id,
                                 tx->port_tx_buf[port].buffer,
                                 tx->port_tx_buf[port].count);
+
+#endif
         if (unlikely(sent < tx->port_tx_buf[port].count)) {
                 for (i = sent; i < tx->port_tx_buf[port].count; i++) {
                         onvm_pkt_drop(tx->port_tx_buf[port].buffer[i]);

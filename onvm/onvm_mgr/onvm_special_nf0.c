@@ -54,6 +54,7 @@
 //#include "onvm_stats.h"
 #include "onvm_ft_install.h"
 //#include "shared/onvm_pkt_helper.h"
+#include "onvm_rsync.h"
 #include <rte_common.h>
 #include <rte_mbuf.h>
 #include <rte_ip.h>
@@ -541,6 +542,15 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
                                         onvm_pkt_drop_batch(&pkts[i], 1);
                                 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
                                 break;
+                        case ETHER_TYPE_RSYNC_DATA:
+                                /* For now Only service is INTERNAL_BRIDGE */
+                                #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+                                        rsync_process_rsync_in_pkts(NULL,&pkts[i],1);
+                                #else
+                                        onvm_pkt_drop_batch(&pkts[i], 1);
+                                #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                                break;
+
                         }
                 }
 #if 0
