@@ -302,6 +302,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 // NFV RESILIENCY related extensions, control macros and defines
 /******************************************************************************/
 #define ETHER_TYPE_RSYNC_DATA  (0x1000)
+#define ETHER_TYPE_BFD         (0x2000)
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
@@ -342,7 +343,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 #define ONVM_NUM_RSYNC_THREADS ((int)1)
-#define ONVM_NUM_RSYNC_PORTS    (3)     //2 + 1 for rest
+#define ONVM_NUM_RSYNC_PORTS    (RTE_MAX_ETHPORTS)      //(3)     //2 + 1 for rest
 #define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
 #define TX_RSYNC_TX_PORT_RING_SIZE      RTE_MP_TX_DESC_DEFAULT
 #define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"

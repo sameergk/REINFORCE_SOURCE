@@ -93,17 +93,22 @@ static remote_node_config_t rsync_node_info = {
                 .ip_addr=IPv4(10,10,1,4)
 };
 
-#define STATE_TYPE_TX_TS_TABLE  (0)
-#define STATE_TYPE_NF_MEMPOOL   (1)
-#define STATE_TYPE_SVC_MEMPOOL  (2)
+#define STATE_TYPE_TX_TS_TABLE  (0x01)
+#define STATE_TYPE_NF_MEMPOOL   (0x02)
+#define STATE_TYPE_SVC_MEMPOOL  (0x04)
+#define STATE_TYPE_TX_TS_ACK    (0x10)
+#define STATE_TYPE_NF_MEM_ACK   (0x20)
+#define STATE_TYPE_SVC_MEM_ACK  (0x40)
+#define STATE_TYPE_REQ_MASK     (0x0F)
+#define STATE_TYPE_RSP_MASK     (0xF0)
 
 #define MAX_STATE_SIZE_PER_PACKET   (1024)
 typedef struct state_tx_meta {
         uint8_t state_type;     //TX_TS_TYPE; NF_STATE; SERV_STATE;
+        uint8_t trans_id;       //Id of the atomic transaction
+        uint8_t flags;          //Additional Flags: TBD; ex. last packet or still more to follow.
         uint8_t nf_or_svc_id;   //Id of the NF(NF_STATE) or SVC (SERVICE_STATE)
         uint16_t start_offset;  //Offset in the global mempool
-        uint8_t trans_id;       //Id of the atomic transaction
-        uint8_t last_packet;    //Indicate whether it is last packet or still more to follow.
         uint32_t reserved;      //Note Size per packet is Fixed to 1024 Bytes.
 }state_tx_meta_t;
 
@@ -112,6 +117,9 @@ typedef struct state_transfer_packet_hdr {
         uint8_t data[MAX_STATE_SIZE_PER_PACKET];
 }state_transfer_packet_hdr_t;
 
+typedef struct transfer_ack_packet_hdr {
+        state_tx_meta_t meta;
+}transfer_ack_packet_hdr_t;
 struct rte_mempool *pktmbuf_pool = NULL;
 
 
@@ -156,6 +164,15 @@ static inline int initialize_rsync_timers(void) {
 
 /***********************Internal Functions************************************/
 /***********************DPDK TIMER FUNCTIONS**********************************/
+static inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt) {
+        printf("TYPE: %" PRIu8 "\n", rsync_pkt->meta.state_type & 0b11111111);
+        printf("NF_ID: %" PRIu8 "\n", rsync_pkt->meta.nf_or_svc_id & 0b11111111);
+        printf("TRAN_ID: %" PRIu8 "\n", rsync_pkt->meta.trans_id & 0b11111111);
+        printf("FLAGS: %" PRIu8 "\n", rsync_pkt->meta.flags & 0b11111111);
+        printf("start Offset: %" PRIu16 "\n", rte_be_to_cpu_16(rsync_pkt->meta.start_offset));
+        printf("Reserved: %" PRIu32 "\n", rte_be_to_cpu_32(rsync_pkt->meta.reserved));
+        return rsync_pkt->meta.state_type;
+}
 static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t meta, uint8_t *pData, uint32_t data_len) {
         struct rte_mbuf *out_pkt = NULL;
         //struct onvm_pkt_meta *pmeta = NULL;
@@ -591,9 +608,60 @@ static int extract_and_parse_tx_port_packets(void) {
         return ret;
 }
 /***********************PACKET TRANSMIT FUNCTIONS******************************/
+/* PACKET RECEIVE FUNCTIONS */
+static inline int rsync_process_req_packet(__attribute__((unused)) state_transfer_packet_hdr_t *rsync_req) {
+#if 0
+        uint8_t type   = rsync_req->meta.state_type & 0b11111111;
+        uint8_t nf_id  = rsync_req->meta.nf_or_svc_id & 0b11111111;
+        uint8_t tnx_id = rsync_req->meta.trans_id & 0b11111111;
+        uint8_t flags  = rsync_req->meta.flags & 0b11111111;
+        uint16_t s_offt= rte_be_to_cpu_16(rsync_req->meta.start_offset);
+        uint32_t resv =  rte_be_to_cpu_32(rsync_req->meta.reserved);
+        uint8_t *pdata = rsync_req->data;
 
+        //For Tx_TS State:  copy sent data from the start_offset to the mempool.
+        //For NF_STATE_MEMORY: <Communicate to Standby NF, if none; then it must be instantiated first; then send message to NFLIB so that it can copy the state
+        //FOR_SVC_STATE_MEMORY:
+
+#endif
+        return 0;
+}
+static inline int rsync_process_rsp_packet(__attribute__((unused)) transfer_ack_packet_hdr_t *rsync_rsp) {
+#if 0
+        //Parse the transaction id and notify/unblock processing thread to release the packets out.
+#endif
+        return 0;
+}
 /******************************APIs********************************************/
 int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
+        uint16_t i=0;
+        //struct ether_hdr *eth = NULL;
+        transfer_ack_packet_hdr_t *rsycn_pkt = NULL;
+        state_transfer_packet_hdr_t *rsync_req = NULL;
+
+        //Validate packet properties
+        //if(pkts[i]->pkt_len < (sizeof(struct ether_hdr) + sizeof(struct transfer_ack_packet_hdr_t));
+        //if(pkts[i]->data_len < (sizeof(struct ether_hdr) + sizeof(struct state_transfer_packet_hdr_t));
+
+        //process each packet
+        for(i=0; i < rx_count; i++) {
+                //eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
+                rsycn_pkt = (transfer_ack_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
+                printf("Received RSYNC Message Type [%d]:\n",rsync_print_rsp_packet(rsycn_pkt));
+                if(rsycn_pkt) {
+                        if( STATE_TYPE_REQ_MASK & rsycn_pkt->meta.state_type) {
+                                rsync_req = (state_transfer_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
+                                rsync_process_req_packet(rsync_req);
+                                //process rsync_req packet: check the nf_svd_id; extract data and update mempool memory of respective NFs
+                                //Once you receive last flag or flag with different Transaction ID then, Generate response packet for the (current) marked transaction.
+                        }
+                        else {
+                              //process the response packet: check for Tran ID and unblock 2 phase commit..
+                                rsync_process_rsp_packet(rsycn_pkt);
+                        }
+                }
+        }
+        //release all the packets and return
         onvm_pkt_drop_batch(pkts,rx_count);
         if(pkts) return rx_count;
         return 0;
@@ -612,6 +680,10 @@ int rsync_start(__attribute__((unused)) void *arg) {
         }
         //Now release the packets from Tx State Latch Ring
         transmit_tx_tx_state_latch_rings();
+
+        //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
+        //How? -- there can be packets in fastchain and some in slow chain. How will you notify? -- rely on best effort (every 1ms) it will refresh.
+        //14.88Mpps => 14.88K (~15K, 1.25MB) for 1ms,  and 100ms => (~1500K packets, 125MB) data.
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
@@ -647,7 +719,7 @@ rsync_main(__attribute__((unused)) void *arg) {
                 //check for timer Expiry
                 rte_timer_manage();
 
-                //nanosleep(&req, &res); //usleep(100);
+                //nanosleep(&req, &res);
         }
         return 0;
 }

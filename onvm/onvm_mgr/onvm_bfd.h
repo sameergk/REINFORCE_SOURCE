@@ -56,6 +56,24 @@
 
 /***************************** Globals/Macros *********************************/
 
+   /*
+   *  BFD Control packet format:
+   *   0                   1                   2                   3
+   *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |Vers |  Diag   |Sta|P|F|C|A|D|M|  Detect Mult  |    Length     |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |                       My Discriminator                        |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |                      Your Discriminator                       |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |                    Desired Min TX Interval                    |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |                   Required Min RX Interval                    |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |                 Required Min Echo RX Interval                 |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  */
 
 /***************************** Data Structures ********************************/
 /**************************************************************
@@ -219,11 +237,13 @@ typedef struct BfdPacket
 
 
 /********************************Interfaces***********************************/
+typedef int(*bfd_status_notifier_cb)(uint8_t port_id, uint8_t bfd_status);
 #define MAX_BFD_SESSIONS (10)
 typedef struct onvm_bfd_init_config {
         uint32_t bfd_identifier;
         uint8_t num_ports;
         uint8_t session_mode[MAX_BFD_SESSIONS];
+        bfd_status_notifier_cb cb_func;
 }onvm_bfd_init_config_t;
 
 #define BFD_SESSION_MODE_PASSIVE    (0)
@@ -248,6 +268,9 @@ onvm_bfd_init(onvm_bfd_init_config_t *bfd_config);
  */
 int
 onvm_bfd_deinit(void);
+
+int
+onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
 
 /****************************Internal functions*******************************/
 

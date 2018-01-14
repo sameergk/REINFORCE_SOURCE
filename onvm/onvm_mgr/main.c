@@ -60,6 +60,7 @@
 #ifdef ENABLE_BFD
 #include "onvm_bfd.h"
 onvm_bfd_init_config_t bfd_config;
+static int bfd_handle_callback(uint8_t port, uint8_t status);
 #endif
 
 /****************************Internal Declarations****************************/
@@ -234,7 +235,7 @@ initialize_master_timers(void) {
 }
 #endif //ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
 /*******************************Worker threads********************************/
-
+#define MAIN_THREAD_SLEEP_INTERVAL_NS  (1000)
 /*
  * Stats thread periodically prints per-port and per-NF stats.
  */
@@ -255,7 +256,7 @@ master_thread_main(void) {
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
                 if(initialize_master_timers() == 0) {
-                        struct timespec req = {0,1000}, res = {0,0};
+                        struct timespec req = {0,MAIN_THREAD_SLEEP_INTERVAL_NS}, res = {0,0};
                         do {
                                 rte_timer_manage();
 #ifdef ONVM_ENABLE_SPEACILA_NF
@@ -583,6 +584,7 @@ main(int argc, char *argv[]) {
 #ifdef ENABLE_BFD
         bfd_config.bfd_identifier = nf_mgr_id;
         bfd_config.num_ports = ports->num_ports;
+        bfd_config.cb_func = bfd_handle_callback;
         for (i = 0; i < ports->num_ports; i++) {
                 bfd_config.session_mode[i] = BFD_SESSION_MODE_ACTIVE;
         }
@@ -624,6 +626,15 @@ main(int argc, char *argv[]) {
 }
 
 /*******************************Helper functions********************************/
+static int bfd_handle_callback(uint8_t port, uint8_t status) {
+        //check for valid port and BFD_StateValue
+        if(port < ports->num_ports) {
+                if(status == AdminDown || status == Down) {
+                        return 1;
+                }
+        }
+        return 0;
+}
 static void signal_handler(int sig,  __attribute__((unused)) siginfo_t *info,  __attribute__((unused)) void *secret) {
         //2 means terminal interrupt, 3 means terminal quit, 9 means kill and 15 means termination
         printf("Got Signal [%d]\n", sig);

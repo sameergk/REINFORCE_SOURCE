@@ -77,7 +77,7 @@ extern void state_free(void *p);
 uint64_t detection_module_size;
 #endif
 
-#define STATE_MEM_TEST
+//#define STATE_MEM_TEST
 #ifdef STATE_MEM_TEST
 void *module_mem_snapshot;
 void *service_mem_snapshot;

@@ -48,9 +48,35 @@
 ******************************************************************************/
 #include "onvm_bfd.h"
 #include "onvm_mgr.h"
+//#include <rte_mbuf.h>
+/********************* BFD Specific Defines and Structs ***********************/
+#define BFD_PKT_OFFSET (sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr))
+#define BFD_CHECKPOINT_PERIOD_IN_US  (100)  // use high precision 100us; ensure that it is at least 1RTT
+
+typedef struct bfd_session_status {
+        BFD_StateValue local_state;
+        BFD_StateValue remote_state;
+        BFD_DiagStateValue local_diags;
+        BFD_DiagStateValue remote_diags;
+
+        uint64_t local_descr;
+        uint64_t remote_descr;
+
+        uint64_t tx_rx_interval;
+        uint64_t last_sent_pkt_ts;
+        uint64_t last_rcvd_pkt_ts;
+        uint64_t pkt_missed_counter;
+
+}bfd_session_status_t;
+
+
+struct rte_timer bfd_status_checkpoint_timer;
+bfd_session_status_t bfd_sess_info[RTE_MAX_ETHPORTS];
+/********************* BFD Specific Defines and Structs ***********************/
+
 /********************* Local Functions Declaration ****************************/
 int create_bfd_packet(struct rte_mbuf* pkt);
-
+int parse_bfd_packet(struct rte_mbuf* pkt);
 /********************** Local Functions Definition ****************************/
 int
 onvm_bfd_start(void) {
@@ -61,7 +87,20 @@ int
 onvm_bfd_stop(void) {
         return 0;
 }
+static void
+bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
+        __attribute__((unused)) void *ptr_data) {
+        //printf("In nf_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
+        return;
+}
+static inline int initialize_bfd_timers(void) {
+        uint64_t ticks = ((uint64_t)BFD_CHECKPOINT_PERIOD_IN_US *(rte_get_timer_hz()/1000000));
+        rte_timer_reset_sync(&bfd_status_checkpoint_timer,ticks,PERIODICAL,
+                        rte_lcore_id(), &bfd_status_checkpoint_timer_cb, NULL);
+        return 0;
+}
 
+/******************** BFD Packet Processing Functions *************************/
 int create_bfd_packet(struct rte_mbuf* pkt) {
         printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
 
@@ -72,6 +111,7 @@ int create_bfd_packet(struct rte_mbuf* pkt) {
         //memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
         //memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
         ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
+        ehdr->ether_type = rte_bswap16(ETHER_TYPE_BFD);     //change to specific type for ease of packet handling.
 
         /* craft ipv4 header */
         struct ipv4_hdr *iphdr = (struct ipv4_hdr *)(&ehdr[1]);
@@ -87,7 +127,29 @@ int create_bfd_packet(struct rte_mbuf* pkt) {
         bfdp->header.flags = 0;
         return 0;
 }
+int parse_bfd_packet(struct rte_mbuf* pkt) {
+        struct udp_hdr *uhdr;
+        BfdPacket *bfdp = NULL;
+
+        uhdr = (struct udp_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr));
+        bfdp = (BfdPacket *)(&uhdr[1]);
+        //bfdp = (BfdPacket*)(rte_pktmbuf_mtod(pkt, uint8_t*) + BFD_PKT_OFFSET);
+
+        if(unlikely((sizeof(BfdPacket) > rte_be_to_cpu_16(uhdr->dgram_len)))) return -1;
+
+        if(bfdp->header.flags == 0) return 0;
+        return 0;
+}
+
 /********************************Interfaces***********************************/
+int
+onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
+        uint16_t i=0;
+        for(;i<rx_count;i++) {
+                parse_bfd_packet(pkts[i]);
+        }
+        return 0;
+}
 int
 onvm_bfd_init(onvm_bfd_init_config_t *bfd_config) {
         if(unlikely(NULL == bfd_config)) return 0;
@@ -105,6 +167,10 @@ onvm_bfd_init(onvm_bfd_init_config_t *bfd_config) {
         }
 
         create_bfd_packet(buf);
+
+        //@Note: The Timer runs in the caller thread context (Main or Wakethread): Must ensure the freq is > 1/bfd interval
+        initialize_bfd_timers();
+
         return 0;
 }
 

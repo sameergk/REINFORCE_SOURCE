@@ -345,7 +345,7 @@ inline void handle_wakeup(__attribute__((unused))struct wakeup_info *wakeup_info
         handle_wakeup_ordered(wakeup_info);
         return;
 }
-
+#define WAKE_THREAD_SLEEP_INTERVAL_NS  (1000)
 int
 wakemgr_main(void *arg) {
 
@@ -353,6 +353,7 @@ wakemgr_main(void *arg) {
         initialize_wake_timers(arg);
 #endif
 
+        struct timespec req = {0,WAKE_THREAD_SLEEP_INTERVAL_NS}, res = {0,0};
         while (true) {
                 //do it more periodically: poll mode (better than 100microsec delay) -- remove usleep(USLEEP_INTERVAL)
                 check_and_enqueue_or_dequeue_nfs_from_bottleneck_watch_list();
@@ -361,7 +362,7 @@ wakemgr_main(void *arg) {
                 rte_timer_manage();
 #endif
                 handle_wakeup((struct wakeup_info *)arg);
-                usleep(USLEEP_INTERVAL);
+                nanosleep(&req, &res); //usleep(USLEEP_INTERVAL);
         }
 
         return 0;
