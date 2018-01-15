@@ -171,7 +171,7 @@ int create_bfd_packet(struct rte_mbuf* pkt) {
         memset(ehdr,0, sizeof(struct ether_hdr));
         //memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
         //memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
-        ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
+        //ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
         ehdr->ether_type = rte_bswap16(ETHER_TYPE_BFD);     //change to specific type for ease of packet handling.
 
         /* craft ipv4 header */
@@ -188,6 +188,12 @@ int create_bfd_packet(struct rte_mbuf* pkt) {
         bfdp->header.flags = 0;
 
         rte_memcpy(bfdp, &bfd_template, sizeof(BfdPacketHeader));
+
+        //set packet properties
+        size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) +sizeof(BfdPacket);
+        pkt->data_len = pkt_size;
+        pkt->pkt_len = pkt_size;
+
         return 0;
 }
 int parse_bfd_packet(struct rte_mbuf* pkt) {
@@ -243,6 +249,7 @@ static void check_bdf_remote_status(void) {
 int
 onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
         uint16_t i=0;
+        printf("\n parsing Incoming BFD packets[%d]!!!\n", rx_count);
         for(;i<rx_count;i++) {
                 parse_bfd_packet(pkts[i]);
         }
@@ -276,3 +283,15 @@ onvm_bfd_deinit(void) {
 }
 
 
+int onvm_print_bfd_status(__attribute__((unused)) FILE *fp) {
+        fprintf(fp, "BFD\n");
+        fprintf(fp,"-----\n");
+        uint8_t i = 0;
+        for(i=0; i< ports->num_ports; i++) {
+                fprintf(fp, "Port:%d Local status:%d, Remote Status:%d rx_us:%"PRIu64" tx_us:%"PRIu64"\n",
+                                i, bfd_sess_info[i].local_state,  bfd_sess_info[i].remote_state,
+                                onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_sent_pkt_ts),
+                                onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts));
+        }
+        return 0;
+}

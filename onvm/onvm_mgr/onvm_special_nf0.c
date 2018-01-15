@@ -555,6 +555,7 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
 #ifdef ENABLE_BFD
                                 onvm_bfd_process_incoming_packets(NULL,&pkts[i],1);
 #endif
+                                onvm_pkt_drop_batch(&pkts[i], 1);
                                 break;
 
                         }

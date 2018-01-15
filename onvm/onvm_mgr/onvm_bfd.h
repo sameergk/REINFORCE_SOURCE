@@ -302,4 +302,5 @@ onvm_bfd_start(void);
 int
 onvm_bfd_stop(void);
 
+int onvm_print_bfd_status(__attribute__((unused)) FILE *fp);
 #endif  // _ONVM_BFD_H_
