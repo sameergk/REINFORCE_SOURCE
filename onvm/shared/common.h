@@ -350,6 +350,8 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define TX_RSYNC_TX_LATCH_RING_SIZE     (8*1024)
 #define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"
 #define TX_RSYNC_NF_LATCH_RING_SIZE     (8*1024)
+
+#define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions
 #else
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif

@@ -145,6 +145,15 @@ onvm_stats_cleanup(void) {
         }
 }
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+void onvm_stats_display_rsync_tx_thread_stats(void);
+void onvm_stats_display_rsync_tx_thread_stats(void) {
+        int j = 0;
+        for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
+                fprintf(stats_out, "\nIdx:%d, Tx_port_Ring:%d, TX_Latch_Ring:%d, NF_Latch_Ring:%d\n", j, rte_ring_count(tx_port_ring[j]), rte_ring_count(tx_tx_state_latch_ring[j]), rte_ring_count(tx_nf_state_latch_ring[j]));
+        }
+}
+#endif
 void
 onvm_stats_display_all(unsigned difftime) {
        if (stats_out == stdout) {
@@ -161,6 +170,9 @@ onvm_stats_display_all(unsigned difftime) {
               fprintf(stats_out,"%s\n", cJSON_Print(onvm_json_root));
        }
        onvm_stats_flush();
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+       onvm_stats_display_rsync_tx_thread_stats();
+#endif
 }
 
 

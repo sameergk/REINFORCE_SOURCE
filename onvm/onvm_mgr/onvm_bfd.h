@@ -120,6 +120,11 @@
 //const uint32_t BaseMinTxInterval = 1000000L;  // The base "slow" Tx interval.
 #define BaseMinTxInterval (1000000L)
 
+#define BFDEchoInterval_us      (100)
+#define BFDMinRxInterval_us     (100)
+#define BFDMinTxInterval_us     (100)
+#define BFDEchoMissMultiplier   (3)
+#define BFD_TIMEOUT_INTERVAL    (BFDEchoInterval_us*BFDEchoMissMultiplier)
 // State codes
 typedef enum BFD_StateValue
 {
@@ -237,6 +242,8 @@ typedef struct BfdPacket
 
 
 /********************************Interfaces***********************************/
+#define BFD_STATUS_REMOTE_DOWN  (1)
+#define BFD_STATUS_LOCAL_DOWN   (2)
 typedef int(*bfd_status_notifier_cb)(uint8_t port_id, uint8_t bfd_status);
 #define MAX_BFD_SESSIONS (10)
 typedef struct onvm_bfd_init_config {

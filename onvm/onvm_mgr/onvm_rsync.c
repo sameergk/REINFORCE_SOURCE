@@ -49,6 +49,7 @@
 
 #include "onvm_mgr.h"
 #include "onvm_pkt.h"
+#include "onvm_init.h"
 #include "onvm_nf.h"
 #include "onvm_special_nf0.h"
 #include "onvm_rsync.h"
@@ -96,11 +97,13 @@ static remote_node_config_t rsync_node_info = {
 #define STATE_TYPE_TX_TS_TABLE  (0x01)
 #define STATE_TYPE_NF_MEMPOOL   (0x02)
 #define STATE_TYPE_SVC_MEMPOOL  (0x04)
-#define STATE_TYPE_TX_TS_ACK    (0x10)
-#define STATE_TYPE_NF_MEM_ACK   (0x20)
-#define STATE_TYPE_SVC_MEM_ACK  (0x40)
+#define STATE_REQ_TO_RSP_LSH    (4)
+#define STATE_TYPE_TX_TS_ACK    (STATE_TYPE_TX_TS_TABLE << STATE_REQ_TO_RSP_LSH)    //(0x10)
+#define STATE_TYPE_NF_MEM_ACK   STATE_TYPE_NF_MEMPOOL << STATE_REQ_TO_RSP_LSH)      //(0x20)
+#define STATE_TYPE_SVC_MEM_ACK  STATE_TYPE_SVC_MEMPOOL << STATE_REQ_TO_RSP_LSH)     // (0x40)
 #define STATE_TYPE_REQ_MASK     (0x0F)
 #define STATE_TYPE_RSP_MASK     (0xF0)
+
 
 #define MAX_STATE_SIZE_PER_PACKET   (1024)
 typedef struct state_tx_meta {
@@ -120,12 +123,13 @@ typedef struct state_transfer_packet_hdr {
 typedef struct transfer_ack_packet_hdr {
         state_tx_meta_t meta;
 }transfer_ack_packet_hdr_t;
-struct rte_mempool *pktmbuf_pool = NULL;
+extern struct rte_mempool *pktmbuf_pool;
 
 
 extern uint32_t nf_mgr_id;
 /***********************Internal Functions************************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
+static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
 static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t meta, uint8_t *pData, uint32_t data_len);
 
 int transmit_tx_port_packets(void);
@@ -133,9 +137,18 @@ static int transmit_tx_tx_state_latch_rings(void);
 static int transmit_tx_nf_state_latch_rings(void);
 static int extract_and_parse_tx_port_packets(void);
 
-static int rsync_tx_ts_state(void);
-static int rsync_nf_state(void);
-static int rsync_wait_for_commit_ack(void);
+//Functions to transmit local state to remote node
+static int rsync_tx_ts_state_to_remote(void);
+static int rsync_nf_state_to_remote(void);
+static int rsync_wait_for_commit_ack(uint8_t trans_id);
+
+//Functions to send response for remote node updates
+//static int rsync_tx_ts_state_ack_resp_to_remote();
+//static int rsync_nf_state_ack_resp_to_remote();
+
+//Functions to sync local state from remote node packets
+//static int rsync_tx_ts_state_from_remote(void);
+//static int rsync_nf_state_from_remote(void);
 
 static inline int initialize_rsync_timers(void);
 /***********************Internal Functions************************************/
@@ -143,13 +156,23 @@ static uint8_t get_transaction_id(void) {
         static uint8_t trans_id = 0;
         return trans_id++;
 }
+#define MAX_RSYNC_TRANSACTIONS (256)    //(sizeof(uint8_t)*CHAR_BIT)
+static volatile uint8_t trans_queue[MAX_RSYNC_TRANSACTIONS];
+static uint8_t log_transaction_id(uint8_t tid) {
+        return (trans_queue[tid] = tid);
+}
+static uint8_t clear_transaction_id (uint8_t tid) {
+        return (trans_queue[tid]^= tid);
+}
 /***********************DPDK TIMER FUNCTIONS**********************************/
 static void
 nf_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
 
-        rsync_nf_state();
-        rsync_wait_for_commit_ack();
+        uint8_t trans_id = rsync_nf_state_to_remote();
+        if(trans_id) {
+                rsync_wait_for_commit_ack(trans_id);
+        }
         transmit_tx_nf_state_latch_rings();
         //printf("In nf_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
         return;
@@ -164,6 +187,17 @@ static inline int initialize_rsync_timers(void) {
 
 /***********************Internal Functions************************************/
 /***********************DPDK TIMER FUNCTIONS**********************************/
+static void bswap_rsync_hdr_data(state_tx_meta_t *meta, int to_be) {
+        if(to_be) {
+                meta->start_offset = rte_cpu_to_be_16(meta->start_offset);
+                meta->reserved = rte_cpu_to_be_32(meta->reserved);
+
+        } else {
+                meta->start_offset = rte_be_to_cpu_16(meta->start_offset);
+                meta->reserved =  rte_be_to_cpu_32(meta->reserved);
+                //uint8_t *pdata = rsync_req->data;
+        }
+}
 static inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt) {
         printf("TYPE: %" PRIu8 "\n", rsync_pkt->meta.state_type & 0b11111111);
         printf("NF_ID: %" PRIu8 "\n", rsync_pkt->meta.nf_or_svc_id & 0b11111111);
@@ -201,7 +235,10 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
         //SET RSYNC DATA
         s_hdr = rte_pktmbuf_mtod_offset(out_pkt, state_transfer_packet_hdr_t*, sizeof(struct ether_hdr));
         s_hdr->meta = meta;
-        rte_memcpy(s_hdr->data, pData, data_len);
+        bswap_rsync_hdr_data(&s_hdr->meta, 1);
+        if(data_len) {
+                rte_memcpy(s_hdr->data, pData, data_len);
+        }
 
         //SEND PACKET OUT/SET METAINFO
         //pmeta = onvm_get_pkt_meta(out_pkt);
@@ -213,17 +250,18 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
 }
 
 /***********************TX STATE TABLE UPDATE**********************************/
-static int rsync_tx_ts_state(void) {
+static int rsync_tx_ts_state_to_remote(void) {
 
         uint16_t i=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
-        state_tx_meta_t meta = {.state_type= STATE_TYPE_TX_TS_TABLE, .nf_or_svc_id=0, .start_offset=0, .reserved=nf_mgr_id, .trans_id=get_transaction_id()};
+        state_tx_meta_t meta = {.state_type= STATE_TYPE_TX_TS_TABLE, .nf_or_svc_id=0, .start_offset=0, .reserved=nf_mgr_id, .trans_id=0};
 
         if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
                 onvm_util_get_start_time(&ts);
 #endif
+                meta.trans_id = get_transaction_id();
                 //Note: Must always ensure that dirty_map is carried over first; so that the remote replica can use this value to update only the changed states
                 uint64_t dirty_index = dirty_state_map->dirty_index;
                 uint64_t copy_index = 0;
@@ -238,19 +276,20 @@ static int rsync_tx_ts_state(void) {
                         }
                 }
                 dirty_state_map->dirty_index =0;
+                //check if packets are created and need to be transmitted out;
+                if(i) {
+                        uint8_t out_port = 0;
+                        //printf("\n $$$$ Sending [%d] packets for Tx_TimeStamp Sync $$$$\n", i);
+                        log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                }
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
                 //fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
 #endif
-        }
-        //check if packets are created and need to be transmitted out;
-        if(i) {
-                uint8_t out_port = 0;
-                //printf("\n $$$$ Sending [%d] packets for Tx_TimeStamp Sync $$$$\n", i);
-                send_packets_out(out_port, 0, pkts, i);
+                return meta.trans_id;
         }
         return 0;
 }
-static int rsync_nf_state(void) {
+static int rsync_nf_state_to_remote(void) {
         //Note: Size of NF_STATE_SIZE=64K and total_chunks=64 => size_per_chunk=1K -- can fit in 1 packet But
         //      size of SVC_STATE_SIZE=4MB and total_chunks=64 => size_per_chunk=64K -- so, each service each chunk requires 64 sends. -- must optimize -- DPI is an exception..
 
@@ -258,7 +297,7 @@ static int rsync_nf_state(void) {
         uint16_t i=0;
         uint8_t active_services[MAX_SERVICES] = {0};
         struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
-        state_tx_meta_t meta = {.state_type= STATE_TYPE_NF_MEMPOOL, .nf_or_svc_id=0, .start_offset=0, .reserved=nf_mgr_id,.trans_id=get_transaction_id()};
+        state_tx_meta_t meta = {.state_type= STATE_TYPE_NF_MEMPOOL, .nf_or_svc_id=0, .start_offset=0, .reserved=nf_mgr_id,.trans_id=0};
         void *pReplicaStateMempool = NULL;
         dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
         uint16_t nf_id = 0; //uint16_t alt_nf_id;
@@ -283,6 +322,7 @@ static int rsync_nf_state(void) {
 
                         if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
                                 meta.nf_or_svc_id = nf_id;
+                                if(unlikely(0 == meta.trans_id)) meta.trans_id=get_transaction_id();
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
                                 onvm_util_get_start_time(&ts);
@@ -300,7 +340,7 @@ static int rsync_nf_state(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if( (i+1) == PACKET_READ_SIZE*2) {
-                                                        send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
                                                 }
                                         }
@@ -314,7 +354,7 @@ static int rsync_nf_state(void) {
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(out_port, 0, pkts, i);
+                                send_packets_out(out_port, 0, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
                                 i=0;
                         }
                 }
@@ -334,6 +374,7 @@ static int rsync_nf_state(void) {
 
                         if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
                                 meta.nf_or_svc_id = nf_id;
+                                if(unlikely(0 == meta.trans_id)) meta.trans_id=get_transaction_id();
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
                                 onvm_util_get_start_time(&ts);
@@ -351,7 +392,7 @@ static int rsync_nf_state(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if( (i+1) == PACKET_READ_SIZE*2) {
-                                                        send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
                                                 }
                                         }
@@ -365,18 +406,50 @@ static int rsync_nf_state(void) {
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instdance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(out_port, 0, pkts, i);
+                                send_packets_out(out_port, 0, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
                                 i=0;
                         }
                 }
         }
 
+        return meta.trans_id;
         return 0;
 }
-static int rsync_wait_for_commit_ack(void) {
+#define MAX_TRANS_COMMIT_WAIT_COUNTER   (0)
+static int rsync_wait_for_commit_ack(uint8_t trans_id) {
+        struct timespec req = {0,100}, res = {0,0};
+        int wait_counter = 0; //hack till remote_node also sends
+        do {
+                nanosleep(&req, &res);
+                if((++wait_counter) > MAX_TRANS_COMMIT_WAIT_COUNTER) break;
+        }while(trans_queue[trans_id]);
+        clear_transaction_id(trans_id);
         return 0;
 }
-
+static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count) {
+        uint8_t i; uint8_t wait_needed=0;
+        //push the trans_ids to trans_queue
+        for(i=0; i< count; i++) {
+                trans_queue[trans_id_list[i]] = trans_id_list[i];
+        }
+        //poll/wait till trans_queue[ids[]] is cleared.
+        struct timespec req = {0,100}, res = {0,0};
+        int wait_counter = 0; //hack till remote_node also sends
+        do {
+                wait_needed= 0;
+                for(i=0; i< count; i++) {
+                        if(trans_queue[trans_id_list[i]]) wait_needed = 1;
+                }
+                nanosleep(&req, &res);
+                if((++wait_counter) > MAX_TRANS_COMMIT_WAIT_COUNTER) break;
+        }while(wait_needed);
+        //need notifier to clear the transactions
+        //clear the transactions.
+        for(i=0; i< count; i++) {
+                clear_transaction_id(trans_id_list[i]);
+        }
+        return 0;
+}
 /***********************Internal Functions************************************/
 /***********************TX STATE TABLE UPDATE**********************************/
 #ifdef ENABLE_PER_FLOW_TS_STORE
@@ -432,6 +505,16 @@ static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rt
         }
         return sent_packets;
 }
+static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
+        log_transaction_id(trans_id);
+        uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
+        if(unlikely(sent_packets < nb_pkts)) {
+                uint16_t i = sent_packets;
+                for(; i< nb_pkts;i++)
+                        onvm_pkt_drop(tx_pkts[i]);
+        }
+        return sent_packets;
+}
 //Bypass Function to directly enqueue to Tx Port Ring and Flush to ETH Ports
 int transmit_tx_port_packets(void) {
         uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
@@ -473,6 +556,7 @@ int transmit_tx_port_packets(void) {
         return sent;
 }
 
+//Function to transmit/release the Tx packets (that were waiting for Tx state update completion)
 static int transmit_tx_tx_state_latch_rings(void) {
         uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
@@ -497,6 +581,7 @@ static int transmit_tx_tx_state_latch_rings(void) {
         }
         return sent;
 }
+//Function to transmit/release the Tx packets (that were waiting for NF state update completion)
 static int transmit_tx_nf_state_latch_rings(void) {
         uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
@@ -609,8 +694,13 @@ static int extract_and_parse_tx_port_packets(void) {
 }
 /***********************PACKET TRANSMIT FUNCTIONS******************************/
 /* PACKET RECEIVE FUNCTIONS */
-static inline int rsync_process_req_packet(__attribute__((unused)) state_transfer_packet_hdr_t *rsync_req) {
+static inline int rsync_process_req_packet(__attribute__((unused)) state_transfer_packet_hdr_t *rsync_req, uint8_t in_port) {
+
+        state_tx_meta_t meta_out = rsync_req->meta;
+        struct rte_mbuf *pkt;
 #if 0
+        uint16_t i=0;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
         uint8_t type   = rsync_req->meta.state_type & 0b11111111;
         uint8_t nf_id  = rsync_req->meta.nf_or_svc_id & 0b11111111;
         uint8_t tnx_id = rsync_req->meta.trans_id & 0b11111111;
@@ -618,18 +708,50 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         uint16_t s_offt= rte_be_to_cpu_16(rsync_req->meta.start_offset);
         uint32_t resv =  rte_be_to_cpu_32(rsync_req->meta.reserved);
         uint8_t *pdata = rsync_req->data;
+        //bswap_rsync_hdr_data(&rsync_req->meta, 0);
+#endif
+        bswap_rsync_hdr_data(&meta_out, 0);
+        printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] got committed!\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
 
         //For Tx_TS State:  copy sent data from the start_offset to the mempool.
         //For NF_STATE_MEMORY: <Communicate to Standby NF, if none; then it must be instantiated first; then send message to NFLIB so that it can copy the state
         //FOR_SVC_STATE_MEMORY:
 
-#endif
+        switch(meta_out.state_type) {
+        case STATE_TYPE_TX_TS_TABLE:
+                //update TX_TS_TABLE and send Response to TID
+                break;
+        case STATE_TYPE_NF_MEMPOOL:
+                //update NF_MEMPOOL_TABLE and send Response to TID
+                break;
+        case STATE_TYPE_SVC_MEMPOOL:
+                //update SVC_MEMPOOL_TABLE and send Response to TID
+                break;
+        default:
+                break;
+        }
+
+        //send response packet
+        meta_out.state_type = (meta_out.state_type<<STATE_REQ_TO_RSP_LSH);
+        pkt = craft_state_update_packet(in_port,meta_out,NULL,0);
+        if(pkt) {
+                send_packets_out(in_port, 0, &pkt, 1);
+        }
+
         return 0;
 }
 static inline int rsync_process_rsp_packet(__attribute__((unused)) transfer_ack_packet_hdr_t *rsync_rsp) {
 #if 0
         //Parse the transaction id and notify/unblock processing thread to release the packets out.
 #endif
+        uint8_t trans_id = rsync_rsp->meta.trans_id;
+        if(trans_queue[trans_id]) {
+                trans_queue[trans_id] = 0;
+                printf("\n Transaction:[%d] for [Type:%d, SVC/NFID:%d] got committed!\n", trans_id, rsync_rsp->meta.state_type, rsync_rsp->meta.nf_or_svc_id);
+        }
+        //will it be better to copy to temp and byte swap then byteswap packet memory?
+        //bswap_rsync_hdr_data(&rsync_rsp->meta, 0);
+
         return 0;
 }
 /******************************APIs********************************************/
@@ -649,15 +771,15 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
                 rsycn_pkt = (transfer_ack_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
                 printf("Received RSYNC Message Type [%d]:\n",rsync_print_rsp_packet(rsycn_pkt));
                 if(rsycn_pkt) {
-                        if( STATE_TYPE_REQ_MASK & rsycn_pkt->meta.state_type) {
-                                rsync_req = (state_transfer_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
-                                rsync_process_req_packet(rsync_req);
-                                //process rsync_req packet: check the nf_svd_id; extract data and update mempool memory of respective NFs
-                                //Once you receive last flag or flag with different Transaction ID then, Generate response packet for the (current) marked transaction.
+                        if( STATE_TYPE_RSP_MASK & rsycn_pkt->meta.state_type) {
+                                //process the response packet: check for Tran ID and unblock 2 phase commit..
+                                rsync_process_rsp_packet(rsycn_pkt);
                         }
                         else {
-                              //process the response packet: check for Tran ID and unblock 2 phase commit..
-                                rsync_process_rsp_packet(rsycn_pkt);
+                                rsync_req = (state_transfer_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
+                                rsync_process_req_packet(rsync_req, pkts[i]->port);
+                                //process rsync_req packet: check the nf_svd_id; extract data and update mempool memory of respective NFs
+                                //Once you receive last flag or flag with different Transaction ID then, Generate response packet for the (current) marked transaction.
                         }
                 }
         }
@@ -668,6 +790,7 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
 }
 int rsync_start(__attribute__((unused)) void *arg) {
 
+        uint8_t trans_ids[2] = {0,0},tid=0;
         //return transmit_tx_port_packets();
 
         //First Extract and Parse Tx Port Packets and update TS info in Tx Table
@@ -676,10 +799,21 @@ int rsync_start(__attribute__((unused)) void *arg) {
 
         //Check and Initiate Remote Sync of Tx State
         if(ret & NEED_REMOTE_TS_TABLE_SYNC) {
-                rsync_tx_ts_state();
+                uint8_t trans_id = rsync_tx_ts_state_to_remote();
+                if(trans_id) {
+#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
+                        trans_ids[tid++] = trans_id;
+#else
+                        rsync_wait_for_commit_ack(trans_id);
+#endif
+
+
+                }
+#ifndef USE_BATCHED_RSYNC_TRANSACTIONS
+                //Now release the packets from Tx State Latch Ring
+                transmit_tx_tx_state_latch_rings();
+#endif
         }
-        //Now release the packets from Tx State Latch Ring
-        transmit_tx_tx_state_latch_rings();
 
         //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
         //How? -- there can be packets in fastchain and some in slow chain. How will you notify? -- rely on best effort (every 1ms) it will refresh.
@@ -687,22 +821,41 @@ int rsync_start(__attribute__((unused)) void *arg) {
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-
+                uint8_t trans_id = rsync_nf_state_to_remote();
+                if(trans_id) {
+#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
+                        trans_ids[tid++] = trans_id;
+#else
+                        rsync_wait_for_commit_ack(trans_id);
+#endif
+                }
+#ifndef USE_BATCHED_RSYNC_TRANSACTIONS
+                //Now release the packets from NF
+                transmit_tx_nf_state_latch_rings();
+#endif
         }
-        //Now release the packets from NF
-        transmit_tx_nf_state_latch_rings();
+#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
+        //optimize by batching transactions.. transfer all transactions and wait or acks
+        {
+                rsync_wait_for_commit_acks(trans_ids,tid);
+                //Now release the packets from Tx State Latch Ring
+                transmit_tx_tx_state_latch_rings();
+                //Now release the packets from NF
+                transmit_tx_nf_state_latch_rings();
+        }
+#endif
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
-
         return 0;
 }
 
 int
 rsync_main(__attribute__((unused)) void *arg) {
 
-
-        pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
         if(NULL == pktmbuf_pool) {
-                return -1;
+                pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
+                if(NULL == pktmbuf_pool) {
+                        return -1;
+                }
         }
 
         //Initalize the Timer for performing periodic NF State Snapshotting

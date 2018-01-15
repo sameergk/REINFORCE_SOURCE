@@ -48,6 +48,8 @@
 ******************************************************************************/
 #include "onvm_bfd.h"
 #include "onvm_mgr.h"
+#include "onvm_pkt.h"
+
 //#include <rte_mbuf.h>
 /********************* BFD Specific Defines and Structs ***********************/
 #define BFD_PKT_OFFSET (sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr))
@@ -70,14 +72,37 @@ typedef struct bfd_session_status {
 }bfd_session_status_t;
 
 
+extern struct rte_mempool *pktmbuf_pool;
 struct rte_timer bfd_status_checkpoint_timer;
 bfd_session_status_t bfd_sess_info[RTE_MAX_ETHPORTS];
+bfd_status_notifier_cb notifier_cb;
+BfdPacket bfd_template;
 /********************* BFD Specific Defines and Structs ***********************/
 
 /********************* Local Functions Declaration ****************************/
 int create_bfd_packet(struct rte_mbuf* pkt);
 int parse_bfd_packet(struct rte_mbuf* pkt);
+static void send_bfd_echo_packets(void);
+static void check_bdf_remote_status(void);
 /********************** Local Functions Definition ****************************/
+static void init_bfd_session_status(uint64_t local_desc) {
+        uint8_t i = 0;
+        for(i=0;i< ports->num_ports;i++) {
+                bfd_sess_info[i].local_state    = Init;
+                bfd_sess_info[i].remote_state   = Init;
+
+                bfd_sess_info[i].local_diags    = None;
+                bfd_sess_info[i].remote_diags   = None;
+
+                bfd_sess_info[i].local_descr    = local_desc;
+                bfd_sess_info[i].remote_descr   = local_desc;
+
+                bfd_sess_info[i].tx_rx_interval = 0;
+                bfd_sess_info[i].last_sent_pkt_ts = 0;
+                bfd_sess_info[i].last_rcvd_pkt_ts = 0;
+                bfd_sess_info[i].pkt_missed_counter = 0;
+        }
+}
 int
 onvm_bfd_start(void) {
         return 0;
@@ -91,6 +116,8 @@ static void
 bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
         //printf("In nf_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
+        send_bfd_echo_packets();
+        check_bdf_remote_status();
         return;
 }
 static inline int initialize_bfd_timers(void) {
@@ -101,8 +128,42 @@ static inline int initialize_bfd_timers(void) {
 }
 
 /******************** BFD Packet Processing Functions *************************/
+static inline int bfd_send_packet_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf *tx_pkt) {
+        uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, &tx_pkt, 1);
+        if(unlikely(sent_packets  == 0)) {
+                onvm_pkt_drop(tx_pkt);
+        }
+        return sent_packets;
+}
+static void set_bfd_packet_template(uint32_t my_desc) {
+        bfd_template.header.versAndDiag = 0x00;
+        bfd_template.header.flags= 0x00;
+        bfd_template.header.length=sizeof(BfdPacket);
+        bfd_template.header.myDisc=rte_cpu_to_be_32(my_desc);
+        bfd_template.header.yourDisc=0;
+        bfd_template.header.txDesiredMinInt=rte_cpu_to_be_32(BFDMinTxInterval_us);
+        bfd_template.header.rxRequiredMinInt=rte_cpu_to_be_32(BFDMinRxInterval_us);
+        bfd_template.header.rxRequiredMinEchoInt=rte_cpu_to_be_32(BFDEchoInterval_us);
+}
+
+static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp) {
+        uint8_t port_id = pkt->port; //rem_desc & 0xFF;
+        if(port_id < ports->num_ports) {
+                if(Init == bfd_sess_info[port_id].remote_state) {
+                        bfd_sess_info[port_id].remote_state = Up;
+                        bfd_sess_info[port_id].remote_descr = rte_be_to_cpu_32(bfdp->header.myDisc);
+                } else if (Down == bfd_sess_info[port_id].remote_state || AdminDown == bfd_sess_info[port_id].remote_state) {
+                        bfd_sess_info[port_id].remote_state = Up;
+                        bfd_sess_info[port_id].remote_descr = rte_be_to_cpu_32(bfdp->header.myDisc);
+                }
+                //bfd_sess_info[port_id].remote_state = (BFD_StateValue)bfdp->header.flags;   //todo: parse flag to status
+                bfd_sess_info[port_id].remote_diags = (BFD_DiagStateValue)bfdp->header.versAndDiag; //todo: parse verse_and_diag to diag_status
+                bfd_sess_info[port_id].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
+        }
+}
+
 int create_bfd_packet(struct rte_mbuf* pkt) {
-        printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
+        //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
 
         /* craft eth header */
         struct ether_hdr *ehdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
@@ -125,6 +186,8 @@ int create_bfd_packet(struct rte_mbuf* pkt) {
 
         BfdPacket *bfdp = (BfdPacket *)(&uhdr[1]);
         bfdp->header.flags = 0;
+
+        rte_memcpy(bfdp, &bfd_template, sizeof(BfdPacketHeader));
         return 0;
 }
 int parse_bfd_packet(struct rte_mbuf* pkt) {
@@ -137,10 +200,45 @@ int parse_bfd_packet(struct rte_mbuf* pkt) {
 
         if(unlikely((sizeof(BfdPacket) > rte_be_to_cpu_16(uhdr->dgram_len)))) return -1;
 
-        if(bfdp->header.flags == 0) return 0;
+        parse_and_set_bfd_session_info(pkt, bfdp);
+        //if(bfdp->header.flags == 0) return 0;
         return 0;
 }
+static void send_bfd_echo_packets(void) {
+        uint16_t i=0;
+        struct rte_mbuf *pkt = NULL;
+        for(i=0; i< ports->num_ports; i++) {
+                if(Init == bfd_sess_info[i].local_state) {
+                        bfd_sess_info[i].local_state = Up;
+                } else if (Down == bfd_sess_info[i].local_state || AdminDown == bfd_sess_info[i].local_state) continue;
 
+                pkt = rte_pktmbuf_alloc(pktmbuf_pool);
+                if(NULL == pktmbuf_pool) {
+                        continue;
+                }
+                create_bfd_packet(pkt);
+
+                bfd_sess_info[i].last_sent_pkt_ts = onvm_util_get_current_cpu_cycles();
+                bfd_send_packet_out(i, 0, pkt);
+        }
+        return ;
+}
+static void check_bdf_remote_status(void) {
+        uint16_t i=0;
+        uint64_t elapsed_time = 0;
+        for(i=0; i< ports->num_ports; i++) {
+                if(bfd_sess_info[i].remote_state !=Up) continue;
+                elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
+                if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
+                        //Shift from Up to Down and notify Link Down Status
+                        bfd_sess_info[i].remote_state = Down;
+                        if(notifier_cb) {
+                                notifier_cb(i,BFD_STATUS_REMOTE_DOWN);
+                        }
+                }
+        }
+        return ;
+}
 /********************************Interfaces***********************************/
 int
 onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
@@ -155,18 +253,16 @@ onvm_bfd_init(onvm_bfd_init_config_t *bfd_config) {
         if(unlikely(NULL == bfd_config)) return 0;
         printf("ONVM_BFD: INIT with identifier=%d(%x)", bfd_config->bfd_identifier, bfd_config->bfd_identifier);
 
-        struct rte_mempool *pktmbuf_pool = NULL;
-        pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
         if(NULL == pktmbuf_pool) {
-                return -1;
+                pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
+                if(NULL == pktmbuf_pool) {
+                        return -1;
+                }
         }
 
-        struct rte_mbuf *buf = rte_pktmbuf_alloc(pktmbuf_pool);
-        if(NULL == pktmbuf_pool) {
-                return -1;
-        }
-
-        create_bfd_packet(buf);
+        notifier_cb = bfd_config->cb_func;
+        set_bfd_packet_template(bfd_config->bfd_identifier);
+        init_bfd_session_status(bfd_config->bfd_identifier);
 
         //@Note: The Timer runs in the caller thread context (Main or Wakethread): Must ensure the freq is > 1/bfd interval
         initialize_bfd_timers();

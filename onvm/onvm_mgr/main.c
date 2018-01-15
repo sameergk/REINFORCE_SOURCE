@@ -628,10 +628,14 @@ main(int argc, char *argv[]) {
 /*******************************Helper functions********************************/
 static int bfd_handle_callback(uint8_t port, uint8_t status) {
         //check for valid port and BFD_StateValue
+        printf("BFD::Port[%d] moved to status[%d]\n",port,status);
         if(port < ports->num_ports) {
-                if(status == AdminDown || status == Down) {
+                if(status == BFD_STATUS_REMOTE_DOWN || status == BFD_STATUS_LOCAL_DOWN) {
                         return 1;
                 }
+                /* if(status == AdminDown || status == Down) {
+                        return 1;
+                }*/
         }
         return 0;
 }
