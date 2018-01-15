@@ -56,6 +56,7 @@
 #define BFD_CHECKPOINT_PERIOD_IN_US  (100)  // use high precision 100us; ensure that it is at least 1RTT
 
 typedef struct bfd_session_status {
+        uint8_t mode;
         BFD_StateValue local_state;
         BFD_StateValue remote_state;
         BFD_DiagStateValue local_diags;
@@ -85,17 +86,18 @@ int parse_bfd_packet(struct rte_mbuf* pkt);
 static void send_bfd_echo_packets(void);
 static void check_bdf_remote_status(void);
 /********************** Local Functions Definition ****************************/
-static void init_bfd_session_status(uint64_t local_desc) {
+static void init_bfd_session_status(onvm_bfd_init_config_t *bfd_config) {
         uint8_t i = 0;
         for(i=0;i< ports->num_ports;i++) {
+                bfd_sess_info[i].mode           = bfd_config->session_mode[i];
                 bfd_sess_info[i].local_state    = Init;
                 bfd_sess_info[i].remote_state   = Init;
 
                 bfd_sess_info[i].local_diags    = None;
                 bfd_sess_info[i].remote_diags   = None;
 
-                bfd_sess_info[i].local_descr    = local_desc;
-                bfd_sess_info[i].remote_descr   = local_desc;
+                bfd_sess_info[i].local_descr    = bfd_config->bfd_identifier;
+                bfd_sess_info[i].remote_descr   = bfd_config->bfd_identifier;
 
                 bfd_sess_info[i].tx_rx_interval = 0;
                 bfd_sess_info[i].last_sent_pkt_ts = 0;
@@ -153,9 +155,13 @@ static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp)
                 if(Init == bfd_sess_info[port_id].remote_state) {
                         bfd_sess_info[port_id].remote_state = Up;
                         bfd_sess_info[port_id].remote_descr = rte_be_to_cpu_32(bfdp->header.myDisc);
-                } else if (Down == bfd_sess_info[port_id].remote_state || AdminDown == bfd_sess_info[port_id].remote_state) {
+                } else if ((Down == bfd_sess_info[port_id].remote_state) || (AdminDown == bfd_sess_info[port_id].remote_state)) {
                         bfd_sess_info[port_id].remote_state = Up;
                         bfd_sess_info[port_id].remote_descr = rte_be_to_cpu_32(bfdp->header.myDisc);
+                        printf("BFD in Down or Admin Down State:%d\n", bfd_sess_info[port_id].remote_state);
+                }else if (Up == bfd_sess_info[port_id].remote_state) {
+                } else {
+                        printf("BFD in Unknown State:%d\n", bfd_sess_info[port_id].remote_state);
                 }
                 //bfd_sess_info[port_id].remote_state = (BFD_StateValue)bfdp->header.flags;   //todo: parse flag to status
                 bfd_sess_info[port_id].remote_diags = (BFD_DiagStateValue)bfdp->header.versAndDiag; //todo: parse verse_and_diag to diag_status
@@ -189,6 +195,7 @@ struct rte_mbuf* create_bfd_packet(void) {
         /* set udp header fields here, e.g. */
         uhdr->src_port = rte_bswap16(3784);
         uhdr->dst_port = rte_bswap16(3784);
+        uhdr->dgram_len = sizeof(BfdPacket);
 
         BfdPacket *bfdp = (BfdPacket *)(&uhdr[1]);
         bfdp->header.flags = 0;
@@ -207,11 +214,16 @@ int parse_bfd_packet(struct rte_mbuf* pkt) {
         BfdPacket *bfdp = NULL;
 
         uhdr = (struct udp_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr));
+        bfdp = (BfdPacket*)(rte_pktmbuf_mtod(pkt, uint8_t*) + BFD_PKT_OFFSET);
         bfdp = (BfdPacket *)(&uhdr[1]);
-        //bfdp = (BfdPacket*)(rte_pktmbuf_mtod(pkt, uint8_t*) + BFD_PKT_OFFSET);
 
-        if(unlikely((sizeof(BfdPacket) > rte_be_to_cpu_16(uhdr->dgram_len)))) return -1;
 
+        if(unlikely((sizeof(BfdPacket) > rte_be_to_cpu_16(uhdr->dgram_len)))) {
+                printf("Size of BfdPacket[%d], size of UDP Header Data Len:%d\n", (int) sizeof(BfdPacket), (int) rte_be_to_cpu_16(uhdr->dgram_len));
+                return -1;
+        }
+
+        //printf("\n Parse BFD packet\n");
         parse_and_set_bfd_session_info(pkt, bfdp);
         //if(bfdp->header.flags == 0) return 0;
         return 0;
@@ -236,10 +248,11 @@ static void check_bdf_remote_status(void) {
         uint16_t i=0;
         uint64_t elapsed_time = 0;
         for(i=0; i< ports->num_ports; i++) {
-                if(bfd_sess_info[i].remote_state !=Up) continue;
+                if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
                 elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
                 if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
                         //Shift from Up to Down and notify Link Down Status
+                        printf("Port[%d]: BFD elapserd time:%lld exceeded Allowed Time_us:%d\n", i, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
                         bfd_sess_info[i].remote_state = Down;
                         if(notifier_cb) {
                                 notifier_cb(i,BFD_STATUS_REMOTE_DOWN);
@@ -252,7 +265,7 @@ static void check_bdf_remote_status(void) {
 int
 onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
         uint16_t i=0;
-        printf("\n parsing Incoming BFD packets[%d]!!!\n", rx_count);
+        //printf("\n parsing Incoming BFD packets[%d]!!!\n", rx_count);
         for(;i<rx_count;i++) {
                 parse_bfd_packet(pkts[i]);
         }
@@ -272,7 +285,7 @@ onvm_bfd_init(onvm_bfd_init_config_t *bfd_config) {
 
         notifier_cb = bfd_config->cb_func;
         set_bfd_packet_template(bfd_config->bfd_identifier);
-        init_bfd_session_status(bfd_config->bfd_identifier);
+        init_bfd_session_status(bfd_config);
 
         //@Note: The Timer runs in the caller thread context (Main or Wakethread): Must ensure the freq is > 1/bfd interval
         initialize_bfd_timers();
