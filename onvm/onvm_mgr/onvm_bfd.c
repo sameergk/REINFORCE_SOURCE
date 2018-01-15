@@ -80,7 +80,7 @@ BfdPacket bfd_template;
 /********************* BFD Specific Defines and Structs ***********************/
 
 /********************* Local Functions Declaration ****************************/
-int create_bfd_packet(struct rte_mbuf* pkt);
+struct rte_mbuf* create_bfd_packet(void);
 int parse_bfd_packet(struct rte_mbuf* pkt);
 static void send_bfd_echo_packets(void);
 static void check_bdf_remote_status(void);
@@ -133,6 +133,7 @@ static inline int bfd_send_packet_out(uint8_t port_id, uint16_t queue_id, struct
         if(unlikely(sent_packets  == 0)) {
                 onvm_pkt_drop(tx_pkt);
         }
+        //printf("\n %d BFD Packets were sent!", sent_packets);
         return sent_packets;
 }
 static void set_bfd_packet_template(uint32_t my_desc) {
@@ -162,8 +163,13 @@ static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp)
         }
 }
 
-int create_bfd_packet(struct rte_mbuf* pkt) {
+struct rte_mbuf* create_bfd_packet(void) {
         //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
+
+        struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool);
+        if(NULL == pktmbuf_pool) {
+                return NULL;
+        }
 
         /* craft eth header */
         struct ether_hdr *ehdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
@@ -194,7 +200,7 @@ int create_bfd_packet(struct rte_mbuf* pkt) {
         pkt->data_len = pkt_size;
         pkt->pkt_len = pkt_size;
 
-        return 0;
+        return pkt;
 }
 int parse_bfd_packet(struct rte_mbuf* pkt) {
         struct udp_hdr *uhdr;
@@ -218,14 +224,11 @@ static void send_bfd_echo_packets(void) {
                         bfd_sess_info[i].local_state = Up;
                 } else if (Down == bfd_sess_info[i].local_state || AdminDown == bfd_sess_info[i].local_state) continue;
 
-                pkt = rte_pktmbuf_alloc(pktmbuf_pool);
-                if(NULL == pktmbuf_pool) {
-                        continue;
+                pkt = create_bfd_packet();
+                if(pkt) {
+                        bfd_sess_info[i].last_sent_pkt_ts = onvm_util_get_current_cpu_cycles();
+                        bfd_send_packet_out(i, 0, pkt);
                 }
-                create_bfd_packet(pkt);
-
-                bfd_sess_info[i].last_sent_pkt_ts = onvm_util_get_current_cpu_cycles();
-                bfd_send_packet_out(i, 0, pkt);
         }
         return ;
 }
