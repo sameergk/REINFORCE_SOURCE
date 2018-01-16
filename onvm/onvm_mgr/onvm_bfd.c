@@ -53,7 +53,6 @@
 //#include <rte_mbuf.h>
 /********************* BFD Specific Defines and Structs ***********************/
 #define BFD_PKT_OFFSET (sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr))
-#define BFD_CHECKPOINT_PERIOD_IN_US  (100)  // use high precision 100us; ensure that it is at least 1RTT
 
 typedef struct bfd_session_status {
         uint8_t mode;

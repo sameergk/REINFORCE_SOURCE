@@ -326,10 +326,13 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #endif
 
 #ifdef ENABLE_PER_FLOW_TS_STORE
+//#define ENABLE_NFLIB_PER_FLOW_TS_STORE    //enable TS update for each NF
+#ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
 #ifdef RESL_UPDATE_MODE_PER_PACKET
 #define PER_FLOW_TS_UPDATE_PER_PKT
 #else
 #define PER_FLOW_TS_UPDATE_PER_BATCH
+#endif
 #endif
 #endif
 

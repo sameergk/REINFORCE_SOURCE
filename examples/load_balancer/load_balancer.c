@@ -574,10 +574,8 @@ table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow, __attribute__(
          * TODO: either of the above two approaches.
          * */
 #ifdef ENABLE_FT_INDEX_IN_META
-        if(meta->ft_index) {
-                tbl_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
-        } else
-#endif
+        tbl_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
+#else
         {
                 //printf("\n\n Inserting Vlan Tag\n");
                 struct onvm_flow_entry *flow_entry = NULL;
@@ -586,6 +584,7 @@ table_lookup_entry(struct rte_mbuf* pkt, struct flow_info **flow, __attribute__(
                         tbl_index = flow_entry->entry_index;
                 }
         }
+#endif
 
         if (tbl_index == -ENOENT) {
                 return -1; //table_add_entry(&key, flow);

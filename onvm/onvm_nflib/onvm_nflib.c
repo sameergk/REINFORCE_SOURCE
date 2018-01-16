@@ -349,7 +349,7 @@ static inline void synchronize_replica_nf_state_memory(void) {
 }
 #endif
 
-#ifdef ENABLE_PER_FLOW_TS_STORE
+#ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
 //update the TS for the processed packet
 static inline void update_processed_packet_ts(void **pkts, unsigned max_packets);
 static inline void update_processed_packet_ts(void **pkts, unsigned max_packets) {
@@ -360,10 +360,8 @@ static inline void update_processed_packet_ts(void **pkts, unsigned max_packets)
         for(i=0; i< max_packets;i++) {
                 struct onvm_pkt_meta *meta = onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]);
 #ifdef ENABLE_FT_INDEX_IN_META
-                if(meta->ft_index) {
                         ft_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
-                } else
-#endif
+#else
                 {
                         struct onvm_flow_entry *flow_entry = NULL;
                         onvm_flow_dir_get_pkt((struct rte_mbuf*) pkts[i], &flow_entry);
@@ -371,6 +369,7 @@ static inline void update_processed_packet_ts(void **pkts, unsigned max_packets)
                                 ft_index = meta->ft_index; //(uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(flow_entry->entry_index);
                         } else continue;
                 }
+#endif
                 onvm_per_flow_ts_info_t *t_info = (onvm_per_flow_ts_info_t*)(((dirty_mon_state_map_tbl_t*)this_nf->per_flow_ts_info)+1);
                 t_info[ft_index].ts = ts[i];
         }

@@ -430,12 +430,95 @@ tx_thread_main(void *arg) {
         return 0;
 }
 
+static inline int create_rx_threads(unsigned *pcur_lcore, unsigned rx_lcores) {
+        unsigned i = 0;
+        for (i = 0; i < rx_lcores; i++) {
+                struct thread_info *rx = calloc(1, sizeof(struct thread_info));
+                rx->queue_id = i;
+                rx->port_tx_buf = NULL;
+                rx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
+                *pcur_lcore = rte_get_next_lcore(*pcur_lcore, 1, 1);
+                if (rte_eal_remote_launch(rx_thread_main, (void *)rx, *pcur_lcore) == -EBUSY) {
+                        RTE_LOG(ERR, APP, "Core %d is already busy, can't use for RX queue id %d\n", *pcur_lcore, rx->queue_id);
+                        return -1;
+                }
+                thread_core_map.rx_th_core[i]=*pcur_lcore;
+        }
+        return 0;
+}
+static inline int create_tx_threads(unsigned *pcur_lcore, unsigned tx_lcores, unsigned num_clients) {
+        unsigned i = 0;
+        unsigned clients_per_tx = ceil((float)num_clients/tx_lcores);
+        for (; i < tx_lcores; i++) {
+                struct thread_info *tx = calloc(1, sizeof(struct thread_info));
+                tx->queue_id = i;
+                tx->port_tx_buf = calloc(RTE_MAX_ETHPORTS, sizeof(struct packet_buf));
+                tx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
+
+                tx->first_cl = RTE_MIN(i * clients_per_tx, num_clients);       //(inclusive) read from NF[0] to NF[clients_per_tx-1]
+                tx->last_cl = RTE_MIN((i+1) * clients_per_tx, num_clients);
+
+                //Dedicate 1 Tx for NF0 and next Tx for all NFs
+                //if(i==0) tx->first_cl = 0;tx->last_cl=1;
+                //else tx->first_cl = 1;tx->last_cl=temp_num_clients;
+
+                *pcur_lcore = rte_get_next_lcore(*pcur_lcore, 1, 1);
+                if (rte_eal_remote_launch(tx_thread_main, (void*)tx,  *pcur_lcore) == -EBUSY) {
+                        RTE_LOG(ERR,APP, "Core %d is already busy, can't use for client %d TX\n", *pcur_lcore,tx->first_cl);
+                        return -1;
+                }
+                thread_core_map.tx_t_core[i]=*pcur_lcore;
+                RTE_LOG(INFO, APP, "Tx thread [%d] on core [%d] cores for [%d:%d]\n", i+1, *pcur_lcore, tx->first_cl, tx->last_cl);
+        }
+        return 0;
+}
+#ifdef INTERRUPT_SEM
+static inline int create_wakeup_threads(unsigned *pcur_lcore, unsigned wakeup_lcores, unsigned num_clients) {
+        if(wakeup_lcores) {
+                int clients_per_wakethread = ceil(num_clients / wakeup_lcores);
+                wakeup_infos = (struct wakeup_info *)calloc(wakeup_lcores, sizeof(struct wakeup_info));
+                if (wakeup_infos == NULL) {
+                        printf("can not alloc space for wakeup_info\n");
+                        exit(1);
+                }
+                unsigned i = 0;
+                for (; i < wakeup_lcores; i++) {
+                        wakeup_infos[i].first_client = RTE_MIN(i * clients_per_wakethread + 1, num_clients);
+                        wakeup_infos[i].last_client = RTE_MIN((i+1) * clients_per_wakethread + 1, num_clients);
+                        *pcur_lcore = rte_get_next_lcore(*pcur_lcore, 1, 1);
+
+                        thread_core_map.wk_th_core[i]=*pcur_lcore;
+                        //initialize_wake_core_timers(i, (void*)&wakeup_infos); //better to do it inside the registred thread callback function.
+
+                        rte_eal_remote_launch(wakemgr_main, (void*)&wakeup_infos[i], *pcur_lcore);
+                        //printf("wakeup lcore_id=%d, first_client=%d, last_client=%d\n", cur_lcore, wakeup_infos[i].first_client, wakeup_infos[i].last_client);
+                        RTE_LOG(INFO, APP, "Core %d: Running wakeup thread, first_client=%d, last_client=%d\n", *pcur_lcore, wakeup_infos[i].first_client, wakeup_infos[i].last_client);
+
+                }
+        }
+        return 0;
+}
+#endif
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+static inline int create_rsync_threads(unsigned *pcur_lcore, unsigned rsync_lcores) {
+        if(rsync_lcores) {
+                unsigned i = 0;
+                for (; i < rsync_lcores; i++) {
+                        *pcur_lcore = rte_get_next_lcore(*pcur_lcore, 1, 1);
+                        rte_eal_remote_launch(rsync_main, NULL, *pcur_lcore);
+                        RTE_LOG(INFO, APP, "Core %d: Running rsync thread \n", *pcur_lcore);
+                }
+        }
+        return 0;
+}
+#endif
 /*******************************Main function*********************************/
 int
 main(int argc, char *argv[]) {
         unsigned cur_lcore, rx_lcores, tx_lcores;
-        unsigned clients_per_tx, temp_num_clients;
-        unsigned i;
+        //unsigned clients_per_tx;
+        unsigned temp_num_clients;
+        //unsigned i;
 
         /* initialise the system */
 #ifdef INTERRUPT_SEM
@@ -474,7 +557,7 @@ main(int argc, char *argv[]) {
 #endif
 
         /* Offset cur_lcore to start assigning TX cores */
-        cur_lcore += (rx_lcores-1);
+        //cur_lcore += (rx_lcores-1);
 
         RTE_LOG(INFO, APP, "%d cores available in total\n", rte_lcore_count());
         RTE_LOG(INFO, APP, "%d cores available for handling manager RX queues\n", rx_lcores);
@@ -494,97 +577,31 @@ main(int argc, char *argv[]) {
          * TX threads
          */
         if (num_clients == 0) {
-                clients_per_tx = ceil((float)MAX_CLIENTS/tx_lcores);
                 temp_num_clients = (unsigned)MAX_CLIENTS;
         } else {
-                clients_per_tx = ceil((float)num_clients/tx_lcores);
                 temp_num_clients = (unsigned)num_clients;
         }
 
         //printf("$$$$$$$$$: MAX_ETH_PORTS=%d $$$$$$$$\n", RTE_MAX_ETHPORTS)RTE_MAX_ETHPORTS=32;
         //num_clients = temp_num_clients;
-        for (i = 0; i < tx_lcores; i++) {
-                struct thread_info *tx = calloc(1, sizeof(struct thread_info));
-                tx->queue_id = i;
-                tx->port_tx_buf = calloc(RTE_MAX_ETHPORTS, sizeof(struct packet_buf));
-                tx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
-
-                tx->first_cl = RTE_MIN(i * clients_per_tx, temp_num_clients);       //(inclusive) read from NF[0] to NF[clients_per_tx-1]
-                tx->last_cl = RTE_MIN((i+1) * clients_per_tx, temp_num_clients);
-
-                //Dedicate 1 Tx for NF0 and next Tx for all NFs
-                //if(i==0) tx->first_cl = 0;tx->last_cl=1;
-                //else tx->first_cl = 1;tx->last_cl=temp_num_clients;
-
-                cur_lcore = rte_get_next_lcore(cur_lcore, 1, 1);
-                if (rte_eal_remote_launch(tx_thread_main, (void*)tx,  cur_lcore) == -EBUSY) {
-                        RTE_LOG(ERR,
-                                APP,
-                                "Core %d is already busy, can't use for client %d TX\n",
-                                cur_lcore,
-                                tx->first_cl);
-                        return -1;
-                }
-                thread_core_map.tx_t_core[i]=cur_lcore;
-                RTE_LOG(INFO, APP, "Tx thread [%d] on core [%d] cores for [%d:%d]\n", i+1, cur_lcore, tx->first_cl, tx->last_cl);
-        }
+        create_tx_threads(&cur_lcore, tx_lcores, temp_num_clients);
        
         /* Launch RX thread main function for each RX queue on cores */
-        for (i = 0; i < rx_lcores; i++) {
-                struct thread_info *rx = calloc(1, sizeof(struct thread_info));
-                rx->queue_id = i;
-                rx->port_tx_buf = NULL;
-                rx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
-                cur_lcore = rte_get_next_lcore(cur_lcore, 1, 1);
-                if (rte_eal_remote_launch(rx_thread_main, (void *)rx, cur_lcore) == -EBUSY) {
-                        RTE_LOG(ERR,
-                                APP,
-                                "Core %d is already busy, can't use for RX queue id %d\n",
-                                cur_lcore,
-                                rx->queue_id);
-                        return -1;
-                }
-                thread_core_map.rx_th_core[i]=cur_lcore;
-        }
-        
-#ifdef INTERRUPT_SEM
-        if(wakeup_lcores) {
-                int clients_per_wakethread = ceil(temp_num_clients / wakeup_lcores);
-                wakeup_infos = (struct wakeup_info *)calloc(wakeup_lcores, sizeof(struct wakeup_info));
-                if (wakeup_infos == NULL) {
-                        printf("can not alloc space for wakeup_info\n");
-                        exit(1);
-                }
-                for (i = 0; i < wakeup_lcores; i++) {
-                        wakeup_infos[i].first_client = RTE_MIN(i * clients_per_wakethread + 1, temp_num_clients);
-                        wakeup_infos[i].last_client = RTE_MIN((i+1) * clients_per_wakethread + 1, temp_num_clients);
-                        cur_lcore = rte_get_next_lcore(cur_lcore, 1, 1);
-
-                        thread_core_map.wk_th_core[i]=cur_lcore;
-                        //initialize_wake_core_timers(i, (void*)&wakeup_infos); //better to do it inside the registred thread callback function.
-
-                        rte_eal_remote_launch(wakemgr_main, (void*)&wakeup_infos[i], cur_lcore);
-                        //printf("wakeup lcore_id=%d, first_client=%d, last_client=%d\n", cur_lcore, wakeup_infos[i].first_client, wakeup_infos[i].last_client);
-                        RTE_LOG(INFO, APP, "Core %d: Running wakeup thread, first_client=%d, last_client=%d\n", cur_lcore, wakeup_infos[i].first_client, wakeup_infos[i].last_client);
-
-                }
-        }
-#endif
+        create_rx_threads(&cur_lcore, rx_lcores);
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
-        if(rsync_lcores) {
-                for (i = 0; i < rsync_lcores; i++) {
-                        cur_lcore = rte_get_next_lcore(cur_lcore, 1, 1);
-                        rte_eal_remote_launch(rsync_main, NULL, cur_lcore);
-                        RTE_LOG(INFO, APP, "Core %d: Running rsync thread \n", cur_lcore);
-                }
-        }
+        create_rsync_threads(&cur_lcore, rsync_lcores);
+#endif
+
+#ifdef INTERRUPT_SEM
+        create_wakeup_threads(&cur_lcore, wakeup_lcores, temp_num_clients);
 #endif
 
 #ifdef ENABLE_BFD
         bfd_config.bfd_identifier = nf_mgr_id;
         bfd_config.num_ports = ports->num_ports;
         bfd_config.cb_func = bfd_handle_callback;
+        int i = 0;
         for (i = 0; i < ports->num_ports; i++) {
                 bfd_config.session_mode[i] = BFD_SESSION_MODE_ACTIVE;
         }
@@ -626,6 +643,7 @@ main(int argc, char *argv[]) {
 }
 
 /*******************************Helper functions********************************/
+#ifdef ENABLE_BFD
 static int bfd_handle_callback(uint8_t port, uint8_t status) {
         //check for valid port and BFD_StateValue
         printf("BFD::Port[%d] moved to status[%d]\n",port,status);
@@ -639,6 +657,7 @@ static int bfd_handle_callback(uint8_t port, uint8_t status) {
         }
         return 0;
 }
+#endif
 static void signal_handler(int sig,  __attribute__((unused)) siginfo_t *info,  __attribute__((unused)) void *secret) {
         //2 means terminal interrupt, 3 means terminal quit, 9 means kill and 15 means termination
         printf("Got Signal [%d]\n", sig);

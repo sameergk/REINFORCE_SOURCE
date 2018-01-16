@@ -256,13 +256,10 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
                 }
                 /* Get the FT Index and Index in VLAN STATE TABLE  */
                 uint16_t vlan_ft_index = 0;
-#ifdef ENABLE_NFV_RESL
 #ifdef ENABLE_FT_INDEX_IN_META
-                if(meta->ft_index) {
-                        vlan_ft_index = (uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
-                } else
-#endif
-#endif
+                vlan_ft_index = (uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(meta->ft_index);
+#else
+
                 {
                         //printf("\n\n Inserting Vlan Tag\n");
                         struct onvm_flow_entry *flow_entry = NULL;
@@ -271,6 +268,7 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
                                 vlan_ft_index = (uint16_t) MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(flow_entry->entry_index);
                         }
                 }
+#endif
                 /* Extract the vlan tag: Reuse if entry is set; or get new one */
                 uint16_t vlan_tag = ((vtag_tbl[vlan_ft_index].vlan_tag)?(vtag_tbl[vlan_ft_index].vlan_tag):get_new_vlan_tag_value());
                 //printf("\n\n Inserting Vlan Tag=%d for vlan_ft_index=%d\n",vlan_tag, vlan_ft_index);

@@ -432,6 +432,8 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count) {
         for(i=0; i< count; i++) {
                 trans_queue[trans_id_list[i]] = trans_id_list[i];
         }
+        //TEST_HACK to bypass wait_on_acks //return wait_needed;
+
         //poll/wait till trans_queue[ids[]] is cleared.
         struct timespec req = {0,100}, res = {0,0};
         int wait_counter = 0; //hack till remote_node also sends
@@ -532,6 +534,12 @@ int transmit_tx_port_packets(void) {
                                 }
                         } else {
                                 sent = send_packets_out(j,0, pkts,count);
+#if 0
+                                for(i=0; i < count;i++) {
+                                        uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
+                                        sent = send_packets_out(port,0, &pkts[i],1);
+                                }
+#endif
                         }
                         //tx_count-=count;
                         if(tx_count > count) tx_count-=count;
@@ -558,8 +566,8 @@ int transmit_tx_port_packets(void) {
 
 //Function to transmit/release the Tx packets (that were waiting for Tx state update completion)
 static int transmit_tx_tx_state_latch_rings(void) {
-        uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        uint16_t i, j, count= PACKET_READ_SIZE*10, sent=0;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE*10];
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_tx_state_latch_ring[j]);
@@ -606,16 +614,17 @@ static int transmit_tx_nf_state_latch_rings(void) {
         }
         return sent;
 }
-static inline int get_flow_entry_index(struct rte_mbuf *pkt, struct onvm_pkt_meta *meta) {
+static inline int get_flow_entry_index(__attribute__((unused)) struct rte_mbuf *pkt, struct onvm_pkt_meta *meta) {
 #ifdef ENABLE_FT_INDEX_IN_META
-        if(meta->ft_index) return meta->ft_index;
-        else
-#endif
+        return meta->ft_index;
+#else
         {
+                //printf("\n Extracting from Flow DIR Entry: \n");
                 struct onvm_flow_entry *flow_entry = NULL;
                 onvm_flow_dir_get_pkt(pkt, &flow_entry);
                 if(flow_entry) return flow_entry->entry_index;
         }
+#endif
         return -1;
 }
 /* This Function extracts the packets from the Tx_Port_RingBuffers and
@@ -791,10 +800,11 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
 int rsync_start(__attribute__((unused)) void *arg) {
 
         uint8_t trans_ids[2] = {0,0},tid=0;
-        //return transmit_tx_port_packets();
+        //return transmit_tx_port_packets();    //TEST_HACK to directly transfer out the packets
 
         //First Extract and Parse Tx Port Packets and update TS info in Tx Table
         int ret = extract_and_parse_tx_port_packets();
+        //ret = 0;    //TEST_HACK to bypass TS Table and NF Shared Memory packet transfer
         //printf("\n extract_and_parse_tx_port_packets() returned %d\n",ret);
 
         //Check and Initiate Remote Sync of Tx State

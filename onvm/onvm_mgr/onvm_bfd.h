@@ -120,7 +120,9 @@
 //const uint32_t BaseMinTxInterval = 1000000L;  // The base "slow" Tx interval.
 #define BaseMinTxInterval (1000000L)
 
-#define BFDEchoInterval_us      (1000)
+#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1RTT
+
+#define BFDEchoInterval_us      (BFD_CHECKPOINT_PERIOD_IN_US)
 #define BFDMinRxInterval_us     (100)
 #define BFDMinTxInterval_us     (100)
 #define BFDEchoMissMultiplier   (3)
