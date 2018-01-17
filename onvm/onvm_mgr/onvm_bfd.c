@@ -273,7 +273,7 @@ onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx
 int
 onvm_bfd_init(onvm_bfd_init_config_t *bfd_config) {
         if(unlikely(NULL == bfd_config)) return 0;
-        printf("ONVM_BFD: INIT with identifier=%d(%x)", bfd_config->bfd_identifier, bfd_config->bfd_identifier);
+        printf("ONVM_BFD: INIT with identifier=%d(%x)\n", bfd_config->bfd_identifier, bfd_config->bfd_identifier);
 
         if(NULL == pktmbuf_pool) {
                 pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);

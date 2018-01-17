@@ -198,7 +198,10 @@ static void bswap_rsync_hdr_data(state_tx_meta_t *meta, int to_be) {
                 //uint8_t *pdata = rsync_req->data;
         }
 }
-static inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt) {
+//static
+inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt);
+//static
+inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt) {
         printf("TYPE: %" PRIu8 "\n", rsync_pkt->meta.state_type & 0b11111111);
         printf("NF_ID: %" PRIu8 "\n", rsync_pkt->meta.nf_or_svc_id & 0b11111111);
         printf("TRAN_ID: %" PRIu8 "\n", rsync_pkt->meta.trans_id & 0b11111111);
@@ -499,21 +502,38 @@ static inline int initialize_tx_ts_table(void) {
 /***********************Internal Functions************************************/
 /***********************PACKET TRANSMIT FUNCTIONS******************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
+
+#ifdef PROFILE_PACKET_PROCESSING_LATENCY
+        onvm_util_calc_chain_processing_latency(tx_pkts, nb_pkts);
+#endif
         uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
         if(unlikely(sent_packets < nb_pkts)) {
                 uint16_t i = sent_packets;
                 for(; i< nb_pkts;i++)
                         onvm_pkt_drop(tx_pkts[i]);
         }
+        {
+                volatile struct tx_stats *tx_stats = &(ports->tx_stats);
+                tx_stats->tx_drop[port_id] = sent_packets;
+                tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
+        }
         return sent_packets;
 }
 static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
         log_transaction_id(trans_id);
+#ifdef PROFILE_PACKET_PROCESSING_LATENCY
+        onvm_util_calc_chain_processing_latency(tx_pkts, nb_pkts);
+#endif
         uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
         if(unlikely(sent_packets < nb_pkts)) {
                 uint16_t i = sent_packets;
                 for(; i< nb_pkts;i++)
                         onvm_pkt_drop(tx_pkts[i]);
+        }
+        {
+                volatile struct tx_stats *tx_stats = &(ports->tx_stats);
+                tx_stats->tx_drop[port_id] = sent_packets;
+                tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
         }
         return sent_packets;
 }
@@ -720,7 +740,7 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         //bswap_rsync_hdr_data(&rsync_req->meta, 0);
 #endif
         bswap_rsync_hdr_data(&meta_out, 0);
-        printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] got committed!\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
+        printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
 
         //For Tx_TS State:  copy sent data from the start_offset to the mempool.
         //For NF_STATE_MEMORY: <Communicate to Standby NF, if none; then it must be instantiated first; then send message to NFLIB so that it can copy the state
@@ -756,7 +776,8 @@ static inline int rsync_process_rsp_packet(__attribute__((unused)) transfer_ack_
         uint8_t trans_id = rsync_rsp->meta.trans_id;
         if(trans_queue[trans_id]) {
                 trans_queue[trans_id] = 0;
-                printf("\n Transaction:[%d] for [Type:%d, SVC/NFID:%d] got committed!\n", trans_id, rsync_rsp->meta.state_type, rsync_rsp->meta.nf_or_svc_id);
+                //printf("\n Received RSYNC Response Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", rsync_rsp->meta.trans_id, rsync_rsp->meta.state_type, rsync_rsp->meta.nf_or_svc_id, rsync_rsp->meta.start_offset);
+                printf("\n Received RSYNC Response:: Transaction:[%d] for [Type:%d, SVC/NFID:%d] got committed!\n", trans_id, rsync_rsp->meta.state_type, rsync_rsp->meta.nf_or_svc_id);
         }
         //will it be better to copy to temp and byte swap then byteswap packet memory?
         //bswap_rsync_hdr_data(&rsync_rsp->meta, 0);
@@ -778,7 +799,7 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
         for(i=0; i < rx_count; i++) {
                 //eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
                 rsycn_pkt = (transfer_ack_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
-                printf("Received RSYNC Message Type [%d]:\n",rsync_print_rsp_packet(rsycn_pkt));
+                //printf("Received RSYNC Message Type [%d]:\n",rsync_print_rsp_packet(rsycn_pkt));
                 if(rsycn_pkt) {
                         if( STATE_TYPE_RSP_MASK & rsycn_pkt->meta.state_type) {
                                 //process the response packet: check for Tran ID and unblock 2 phase commit..

@@ -265,9 +265,10 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
                 return;
 
         tx_stats = &(ports->tx_stats);
-
+#if 0
 #ifdef PROFILE_PACKET_PROCESSING_LATENCY
         onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
+#endif
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
@@ -275,6 +276,10 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         sent = rte_ring_enqueue_burst(tx_port_ring[enq_port], (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
         //sent = rte_ring_enqueue_burst(tx_port_ring, (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
 #else
+
+#ifdef PROFILE_PACKET_PROCESSING_LATENCY
+        onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
+#endif
         sent = rte_eth_tx_burst(port,
                                 tx->queue_id,
                                 tx->port_tx_buf[port].buffer,
