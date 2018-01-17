@@ -605,7 +605,8 @@ static int setup_flowrule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta*
         /* Unknown packet type */
         if (pkt->hash.rss == 0) {
                 printf("Setting to redirect on alternate port\n ");
-                meta->destination = (pkt->port == 0)? (1):(0);
+                if(ports->num_ports > 1) meta->destination = (pkt->port == 0)? (1):(0);
+                else meta->destination = pkt->port;
                 meta->action = ONVM_NF_ACTION_OUT; //ONVM_NF_ACTION_DROP;
                 return 0;
         }

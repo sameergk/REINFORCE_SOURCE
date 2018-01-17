@@ -190,8 +190,6 @@ static struct rte_mbuf* create_ipv4_udp_packet(void) {
         struct ether_hdr *ehdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
         /* set ether_hdr fields here e.g. */
         memset(ehdr,0, sizeof(struct ether_hdr));
-        memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
-        memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
         memcpy(&ehdr->s_addr, c_addr, sizeof(c_addr));
         memcpy(&ehdr->d_addr, s_addr, sizeof(s_addr));
         ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
@@ -262,7 +260,7 @@ int main(int argc, char *argv[]) {
                 //pkts[i] = rte_pktmbuf_alloc(pktmbuf_pool_g);
                 pkts[i] = create_ipv4_udp_packet();
                 pmeta = onvm_get_pkt_meta(pkts[i]);
-                pmeta->destination = destination;
+                pmeta->destination = 1;
                 pmeta->action = ONVM_NF_ACTION_TONF;
                 pkts[i]->port = 3;
                 pkts[i]->hash.rss = i+1;
