@@ -52,6 +52,9 @@
 #include "onvm_pkt.h"
 #include "onvm_nf.h"
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+#include "onvm_rsync.h"
+#endif
 
 /**********************************Interfaces*********************************/
 //#define USE_KEY_MODE_FOR_FLOW_ENTRY       //Note: Enabling this flag is costing upto 4Mpps (reason: softrss() call)
@@ -256,7 +259,9 @@ onvm_pkt_drop_batch(struct rte_mbuf **pkts, uint16_t size) {
 void
 onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         uint16_t i, sent;
+#ifndef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
         volatile struct tx_stats *tx_stats;
+#endif
 
         if (unlikely(tx == NULL))
                 return;
@@ -264,7 +269,6 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         if (unlikely(tx->port_tx_buf[port].count == 0))
                 return;
 
-        tx_stats = &(ports->tx_stats);
 #if 0
 #ifdef PROFILE_PACKET_PROCESSING_LATENCY
         onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
@@ -275,24 +279,41 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         uint16_t enq_port = ((port > ONVM_NUM_RSYNC_PORTS)?(ONVM_NUM_RSYNC_PORTS-1):(port));
         sent = rte_ring_enqueue_burst(tx_port_ring[enq_port], (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
         //sent = rte_ring_enqueue_burst(tx_port_ring, (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
+        if (unlikely(sent < tx->port_tx_buf[port].count)) {
+                for (i = sent; i < tx->port_tx_buf[port].count; i++) {
+                        onvm_pkt_drop(tx->port_tx_buf[port].buffer[i]);
+                }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                rsync_stat.drop_count_tx_port_ring[enq_port] +=(tx->port_tx_buf[port].count - sent); //tx_stats->tx_drop[port] += (tx->port_tx_buf[port].count - sent);
+#endif
+        }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+        rsync_stat.enq_count_tx_port_ring[enq_port] += sent; //tx_stats->tx[port] += sent;
+#endif
+
 #else
 
 #ifdef PROFILE_PACKET_PROCESSING_LATENCY
         onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
 #endif
+        tx_stats = &(ports->tx_stats);
         sent = rte_eth_tx_burst(port,
                                 tx->queue_id,
                                 tx->port_tx_buf[port].buffer,
                                 tx->port_tx_buf[port].count);
 
-#endif
         if (unlikely(sent < tx->port_tx_buf[port].count)) {
                 for (i = sent; i < tx->port_tx_buf[port].count; i++) {
                         onvm_pkt_drop(tx->port_tx_buf[port].buffer[i]);
                 }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
                 tx_stats->tx_drop[port] += (tx->port_tx_buf[port].count - sent);
+#endif
         }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
         tx_stats->tx[port] += sent;
+#endif
+#endif
 
         tx->port_tx_buf[port].count = 0;
 }

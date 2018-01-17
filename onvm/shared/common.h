@@ -110,6 +110,9 @@
 /** Feature to Enable NFs Tx Statistics Logs */
 #define ENABLE_NF_TX_STAT_LOGS
 
+/** Feature to enable port Tx Statistic Logs */
+#define ENABLE_PORT_TX_STATS_LOGS
+
 /** Feature to Enable Synchonous Message->Response from MGR->NF->MGR */
 #define ENABLE_SYNC_MGR_TO_NF_MSG
 
@@ -303,6 +306,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 /******************************************************************************/
 #define ETHER_TYPE_RSYNC_DATA  (0x1000)
 #define ETHER_TYPE_BFD         (0x2000)
+
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
@@ -393,6 +397,21 @@ typedef struct onvm_per_flow_ts_info {
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif
 #endif  //#ifdef ENABLE_NFV_RESL
+
+//Note the NUM_OF_QUEUES in PORT seem to be only 16; so ensure the queue value with MAX_NFS ( but unforunately the init_port() doesnt fail.
+#ifdef ENABLE_BFD
+#define BFD_TX_PORT_QUEUE_ID    ((MAX_NFS/2)+1)
+#else
+#define BFD_TX_PORT_QUEUE_ID    (MAX_NFS/2)
+#endif
+
+#ifdef ENABLE_REPLICA_STATE_UPDATE
+//for external events
+#define RSYNC_TX_PORT_QUEUE_ID_0    (BFD_TX_PORT_QUEUE_ID+1)
+//for internal thread
+#define RSYNC_TX_PORT_QUEUE_ID_1    (RSYNC_TX_PORT_QUEUE_ID_0+1)
+#endif
+
 // END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
 /******************************************************************************/
 

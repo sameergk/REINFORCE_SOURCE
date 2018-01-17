@@ -52,8 +52,26 @@
 #ifndef _ONVM_RSYNC_H_
 #define _ONVM_RSYNC_H_
 
+#include "shared/onvm_includes.h"
 /********************************Globals and varaible declarations ***********************************/
+typedef struct rsync_stats {
 
+        /* Counters to keep track of number of packets transferred for Tx table and NF state sync */
+        uint64_t tx_state_sync_pkt_counter;
+        uint64_t nf_state_sync_pkt_counter[MAX_CLIENTS];
+
+        /* Counters to measure the actual packets enqueued vs Dropped  to these specific internal rings */
+        uint64_t enq_coun_tx_tx_state_latch_ring[RTE_MAX_ETHPORTS];
+        uint64_t drop_count_tx_tx_state_latch_ring[RTE_MAX_ETHPORTS];
+
+        uint64_t enq_count_tx_nf_state_latch_ring[RTE_MAX_ETHPORTS];
+        uint64_t drop_count_tx_nf_state_latch_ring[RTE_MAX_ETHPORTS];
+
+        uint64_t enq_count_tx_port_ring[RTE_MAX_ETHPORTS];
+        uint64_t drop_count_tx_port_ring[RTE_MAX_ETHPORTS];
+
+}rsync_stats_t;
+extern rsync_stats_t rsync_stat;
 /********************************Interfaces***********************************/
 
 /********************************Interfaces***********************************/
@@ -62,6 +80,8 @@ int rsync_main(__attribute__((unused)) void *arg);
 int rsync_start(__attribute__((unused)) void *arg);
 
 int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
+
+int onvm_print_rsync_stats(unsigned difftime, FILE *fout);
 /****************************Internal functions*******************************/
 
 #endif  //

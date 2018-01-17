@@ -580,6 +580,7 @@ main(int argc, char *argv[]) {
                 temp_num_clients = (unsigned)MAX_CLIENTS;
         } else {
                 temp_num_clients = (unsigned)num_clients;
+                num_clients = 0;
         }
 
         //printf("$$$$$$$$$: MAX_ETH_PORTS=%d $$$$$$$$\n", RTE_MAX_ETHPORTS)RTE_MAX_ETHPORTS=32;

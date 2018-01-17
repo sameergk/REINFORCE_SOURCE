@@ -61,7 +61,7 @@ uint16_t num_nfs;
 
 
 /* global var for number of clients - extern in header init.h */
-volatile uint16_t num_clients;
+volatile uint16_t num_clients = 0;
 
 /* global var for number of services - extern in header init.h */
 uint16_t num_services = MAX_SERVICES;

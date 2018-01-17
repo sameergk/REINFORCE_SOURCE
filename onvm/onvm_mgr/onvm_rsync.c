@@ -124,9 +124,11 @@ typedef struct transfer_ack_packet_hdr {
         state_tx_meta_t meta;
 }transfer_ack_packet_hdr_t;
 extern struct rte_mempool *pktmbuf_pool;
-
-
 extern uint32_t nf_mgr_id;
+
+//To maintain the statistics for rsync activity
+rsync_stats_t rsync_stat;
+
 /***********************Internal Functions************************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
 static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
@@ -142,13 +144,13 @@ static int rsync_tx_ts_state_to_remote(void);
 static int rsync_nf_state_to_remote(void);
 static int rsync_wait_for_commit_ack(uint8_t trans_id);
 
+//Functions to sync local state from remote node packets
+static int rsync_tx_ts_state_from_remote(state_tx_meta_t *meta, uint8_t *data,  uint16_t data_len);
+static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *data,  uint16_t data_len);
+
 //Functions to send response for remote node updates
 //static int rsync_tx_ts_state_ack_resp_to_remote();
 //static int rsync_nf_state_ack_resp_to_remote();
-
-//Functions to sync local state from remote node packets
-//static int rsync_tx_ts_state_from_remote(void);
-//static int rsync_nf_state_from_remote(void);
 
 static inline int initialize_rsync_timers(void);
 /***********************Internal Functions************************************/
@@ -249,7 +251,7 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
         //pmeta->action = ONVM_NF_ACTION_OUT;
 
         return out_pkt;
-        //return send_packets_out(port, 0, &out_pkt, 1);
+        //return send_packets_out(port, RSYNC_TX_PORT_QUEUE_ID_1, &out_pkt, 1);
 }
 
 /***********************TX STATE TABLE UPDATE**********************************/
@@ -283,7 +285,10 @@ static int rsync_tx_ts_state_to_remote(void) {
                 if(i) {
                         uint8_t out_port = 0;
                         //printf("\n $$$$ Sending [%d] packets for Tx_TimeStamp Sync $$$$\n", i);
-                        log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                        log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                        rsync_stat.tx_state_sync_pkt_counter +=i;
+#endif
                 }
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
                 //fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
@@ -343,8 +348,11 @@ static int rsync_nf_state_to_remote(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if( (i+1) == PACKET_READ_SIZE*2) {
-                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                        rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
+#endif
                                                 }
                                         }
                                 }
@@ -357,8 +365,11 @@ static int rsync_nf_state_to_remote(void) {
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(out_port, 0, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
+                                send_packets_out(out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
                                 i=0;
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                        rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
+#endif
                         }
                 }
         }
@@ -395,7 +406,7 @@ static int rsync_nf_state_to_remote(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if( (i+1) == PACKET_READ_SIZE*2) {
-                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
                                                 }
                                         }
@@ -409,7 +420,7 @@ static int rsync_nf_state_to_remote(void) {
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instdance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(out_port, 0, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
+                                send_packets_out(out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
                                 i=0;
                         }
                 }
@@ -418,9 +429,42 @@ static int rsync_nf_state_to_remote(void) {
         return meta.trans_id;
         return 0;
 }
-#define MAX_TRANS_COMMIT_WAIT_COUNTER   (0)
+
+static int rsync_tx_ts_state_from_remote(state_tx_meta_t *meta, uint8_t *pData, uint16_t data_len) {
+#if 0
+        uint16_t i=0;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        uint8_t type   = rsync_req->meta.state_type & 0b11111111;
+        uint8_t nf_id  = rsync_req->meta.nf_or_svc_id & 0b11111111;
+        uint8_t tnx_id = rsync_req->meta.trans_id & 0b11111111;
+        uint8_t flags  = rsync_req->meta.flags & 0b11111111;
+        uint16_t s_offt= rte_be_to_cpu_16(rsync_req->meta.start_offset);
+        uint32_t resv =  rte_be_to_cpu_32(rsync_req->meta.reserved);
+        uint8_t *pdata = rsync_req->data;
+        //bswap_rsync_hdr_data(&rsync_req->meta, 0);
+#endif
+        uint8_t* pDst = (((uint8_t*)onvm_mgr_tx_per_flow_ts_info)+meta->start_offset);
+        rte_memcpy(pDst, pData, MIN(data_len, DIRTY_MAP_PER_CHUNK_SIZE)); //should be MIN(pkt->data_len, DIRTY_MAP_PER_CHUNK_SIZE)
+        return 0;
+}
+
+static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *pData,  uint16_t data_len) {
+        void *pReplicaStateMempool = NULL;
+        if (likely(STATE_TYPE_NF_MEMPOOL == meta->state_type)) {
+                pReplicaStateMempool = clients[get_associated_active_or_standby_nf_id(meta->nf_or_svc_id)].nf_state_mempool;
+        }else if(STATE_TYPE_SVC_MEMPOOL == meta->state_type) {
+                pReplicaStateMempool = services_state_pool[meta->nf_or_svc_id];
+        } else return 1;
+        if(NULL == pReplicaStateMempool) return 2;
+
+        uint8_t* pDst = (((uint8_t*)pReplicaStateMempool)+meta->start_offset);
+        rte_memcpy(pDst, pData, MIN(data_len, DIRTY_MAP_PER_CHUNK_SIZE)); //should be MIN(pkt->data_len, DIRTY_MAP_PER_CHUNK_SIZE)
+        return 0;
+}
+
+#define MAX_TRANS_COMMIT_WAIT_COUNTER   (5) //depends on RTT (seen to be around 350 micro seconds)
 static int rsync_wait_for_commit_ack(uint8_t trans_id) {
-        struct timespec req = {0,100}, res = {0,0};
+        struct timespec req = {0,100*1000}, res = {0,0};
         int wait_counter = 0; //hack till remote_node also sends
         do {
                 nanosleep(&req, &res);
@@ -530,11 +574,13 @@ static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t
                 for(; i< nb_pkts;i++)
                         onvm_pkt_drop(tx_pkts[i]);
         }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
         {
                 volatile struct tx_stats *tx_stats = &(ports->tx_stats);
                 tx_stats->tx_drop[port_id] = sent_packets;
                 tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
         }
+#endif
         return sent_packets;
 }
 //Bypass Function to directly enqueue to Tx Port Ring and Flush to ETH Ports
@@ -550,14 +596,14 @@ int transmit_tx_port_packets(void) {
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
-                                        sent = send_packets_out(port,0, &pkts[i],1);
+                                        sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1);
                                 }
                         } else {
-                                sent = send_packets_out(j,0, pkts,count);
+                                sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_0, pkts,count);
 #if 0
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
-                                        sent = send_packets_out(port,0, &pkts[i],1);
+                                        sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1);
                                 }
 #endif
                         }
@@ -572,7 +618,7 @@ int transmit_tx_port_packets(void) {
                 count = rte_ring_dequeue_burst(tx_port_ring, (void**)pkts, PACKET_READ_SIZE*2);
                 for(i=0; i < count;i++) {
                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
-                        if(likely(rte_eth_tx_burst(port,0, &pkts[i],1))) {
+                        if(likely(rte_eth_tx_burst(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1))) {
                                 ;
                         } else {
                                 onvm_pkt_drop(pkts[i]);
@@ -597,10 +643,10 @@ static int transmit_tx_tx_state_latch_rings(void) {
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
-                                        sent = send_packets_out(port,0, &pkts[i],1);
+                                        sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_1, &pkts[i],1);
                                 }
                         } else {
-                                sent = send_packets_out(j,0, pkts,count);
+                                sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_1, pkts,count);
                         }
                         //tx_count-=count;
                         if(tx_count > count) tx_count-=count;
@@ -622,10 +668,10 @@ static int transmit_tx_nf_state_latch_rings(void) {
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
-                                        sent = send_packets_out(port,0, &pkts[i],1);
+                                        sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_1, &pkts[i],1);
                                 }
                         } else {
-                                sent = send_packets_out(j,0, pkts,count);
+                                sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_1, pkts,count);
                         }
                         //tx_count-=count;
                         if(tx_count > count) tx_count-=count;
@@ -705,6 +751,10 @@ static int extract_and_parse_tx_port_packets(void) {
                                                 onvm_pkt_drop(out_pkts_tx[k]);
                                         }
                                 }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                                rsync_stat.enq_coun_tx_tx_state_latch_ring[j] += sent;
+                                rsync_stat.drop_count_tx_tx_state_latch_ring[j] += (out_pkts_tx_count -sent);
+#endif
                         }
                         if(unlikely(out_pkts_nf_count)){
                                 sent = rte_ring_enqueue_burst(tx_nf_state_latch_ring[j], (void**)out_pkts_nf,  out_pkts_nf_count);
@@ -714,6 +764,10 @@ static int extract_and_parse_tx_port_packets(void) {
                                                 onvm_pkt_drop(out_pkts_nf[k]);
                                         }
                                 }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                                rsync_stat.enq_count_tx_nf_state_latch_ring[j] += sent;
+                                rsync_stat.drop_count_tx_nf_state_latch_ring[j] += (out_pkts_tx_count -sent);
+#endif
                         }
                         if(tx_count > count) tx_count-=count;
                         else break;
@@ -727,18 +781,7 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
 
         state_tx_meta_t meta_out = rsync_req->meta;
         struct rte_mbuf *pkt;
-#if 0
-        uint16_t i=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
-        uint8_t type   = rsync_req->meta.state_type & 0b11111111;
-        uint8_t nf_id  = rsync_req->meta.nf_or_svc_id & 0b11111111;
-        uint8_t tnx_id = rsync_req->meta.trans_id & 0b11111111;
-        uint8_t flags  = rsync_req->meta.flags & 0b11111111;
-        uint16_t s_offt= rte_be_to_cpu_16(rsync_req->meta.start_offset);
-        uint32_t resv =  rte_be_to_cpu_32(rsync_req->meta.reserved);
-        uint8_t *pdata = rsync_req->data;
-        //bswap_rsync_hdr_data(&rsync_req->meta, 0);
-#endif
+
         bswap_rsync_hdr_data(&meta_out, 0);
         printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
 
@@ -749,14 +792,19 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         switch(meta_out.state_type) {
         case STATE_TYPE_TX_TS_TABLE:
                 //update TX_TS_TABLE and send Response to TID
+                rsync_tx_ts_state_from_remote(&meta_out, rsync_req->data, rte_be_to_cpu_16(pkt->data_len));
                 break;
         case STATE_TYPE_NF_MEMPOOL:
                 //update NF_MEMPOOL_TABLE and send Response to TID
+                rsync_nf_state_from_remote(&meta_out, rsync_req->data, rte_be_to_cpu_16(pkt->data_len));
                 break;
         case STATE_TYPE_SVC_MEMPOOL:
                 //update SVC_MEMPOOL_TABLE and send Response to TID
+                rsync_nf_state_from_remote(&meta_out, rsync_req->data, rte_be_to_cpu_16(pkt->data_len));
                 break;
         default:
+                //unknown packet type;
+                return meta_out.state_type;
                 break;
         }
 
@@ -764,7 +812,7 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         meta_out.state_type = (meta_out.state_type<<STATE_REQ_TO_RSP_LSH);
         pkt = craft_state_update_packet(in_port,meta_out,NULL,0);
         if(pkt) {
-                send_packets_out(in_port, 0, &pkt, 1);
+                send_packets_out(in_port, RSYNC_TX_PORT_QUEUE_ID_0, &pkt, 1);
         }
 
         return 0;
@@ -879,6 +927,34 @@ int rsync_start(__attribute__((unused)) void *arg) {
         return 0;
 }
 
+int onvm_print_rsync_stats(unsigned difftime, FILE *fout) {
+        static rsync_stats_t prev_state;
+        fprintf(fout, "RSYNC\n");
+        fprintf(fout,"-----\n");
+        uint8_t i = 0;
+        if(difftime==0)difftime=1;
+        fprintf(fout, "Total Tx State SYNC Packets:%"PRIu64" (%"PRIu64" pps) \n",
+                        rsync_stat.tx_state_sync_pkt_counter, (rsync_stat.tx_state_sync_pkt_counter -prev_state.tx_state_sync_pkt_counter)/difftime);
+
+        for(i=0; i< MAX_CLIENTS; i++) {
+                if(!onvm_nf_is_processing(&clients[i]))continue;
+                fprintf(fout, "NF[%d]: Total State SYNC Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
+                                        rsync_stat.nf_state_sync_pkt_counter[i],(rsync_stat.nf_state_sync_pkt_counter[i] -prev_state.nf_state_sync_pkt_counter[i])/difftime);
+        }
+        for(i=0; i< ports->num_ports; i++) {
+                fprintf(fout, "Port:%d, Total Tx Port Packets:%"PRIu64" (%"PRIu64" pps) Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
+                                rsync_stat.enq_count_tx_port_ring[i], (rsync_stat.enq_count_tx_port_ring[i] -prev_state.enq_count_tx_port_ring[i])/difftime,
+                                rsync_stat.drop_count_tx_port_ring[i], (rsync_stat.drop_count_tx_port_ring[i] -prev_state.drop_count_tx_port_ring[i])/difftime);
+                fprintf(fout, "Port:%d, Total Tx State Latch Packets:%"PRIu64" (%"PRIu64" pps) Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
+                                rsync_stat.enq_coun_tx_tx_state_latch_ring[i], (rsync_stat.enq_coun_tx_tx_state_latch_ring[i] -prev_state.enq_coun_tx_tx_state_latch_ring[i])/difftime,
+                                rsync_stat.drop_count_tx_tx_state_latch_ring[i], (rsync_stat.drop_count_tx_tx_state_latch_ring[i] -prev_state.drop_count_tx_tx_state_latch_ring[i])/difftime);
+                fprintf(fout, "Port:%d, Total NF State Latch Packets:%"PRIu64" (%"PRIu64" pps) Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
+                                rsync_stat.enq_count_tx_nf_state_latch_ring[i], (rsync_stat.enq_count_tx_nf_state_latch_ring[i] -prev_state.enq_count_tx_nf_state_latch_ring[i])/difftime,
+                                rsync_stat.drop_count_tx_nf_state_latch_ring[i], (rsync_stat.drop_count_tx_nf_state_latch_ring[i] -prev_state.drop_count_tx_nf_state_latch_ring[i])/difftime);
+        }
+        prev_state = rsync_stat;
+        return 0;
+}
 int
 rsync_main(__attribute__((unused)) void *arg) {
 

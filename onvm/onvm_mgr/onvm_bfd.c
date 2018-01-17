@@ -50,6 +50,10 @@
 #include "onvm_mgr.h"
 #include "onvm_pkt.h"
 
+#ifndef BFD_TX_PORT_QUEUE_ID
+#define BFD_TX_PORT_QUEUE_ID (0)
+#endif
+
 //#include <rte_mbuf.h>
 /********************* BFD Specific Defines and Structs ***********************/
 #define BFD_PKT_OFFSET (sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr))
@@ -71,6 +75,12 @@ typedef struct bfd_session_status {
 
 }bfd_session_status_t;
 
+typedef struct bfd_pkt_stat_t {
+        uint64_t rx_count;
+        uint64_t tx_count;
+}bfd_pkt_stat_t;
+
+bfd_pkt_stat_t bfd_stat;
 
 extern struct rte_mempool *pktmbuf_pool;
 struct rte_timer bfd_status_checkpoint_timer;
@@ -238,7 +248,8 @@ static void send_bfd_echo_packets(void) {
                 pkt = create_bfd_packet();
                 if(pkt) {
                         bfd_sess_info[i].last_sent_pkt_ts = onvm_util_get_current_cpu_cycles();
-                        bfd_send_packet_out(i, 0, pkt);
+                        bfd_send_packet_out(i, BFD_TX_PORT_QUEUE_ID, pkt);
+                        bfd_stat.tx_count+=1;
                 }
         }
         return ;
@@ -268,6 +279,7 @@ onvm_bfd_process_incoming_packets(__attribute__((unused)) struct thread_info *rx
         for(;i<rx_count;i++) {
                 parse_bfd_packet(pkts[i]);
         }
+        bfd_stat.rx_count+=rx_count;
         return 0;
 }
 int
@@ -298,10 +310,16 @@ onvm_bfd_deinit(void) {
 }
 
 
-int onvm_print_bfd_status(__attribute__((unused)) FILE *fp) {
+int onvm_print_bfd_status(unsigned difftime, __attribute__((unused)) FILE *fp) {
         fprintf(fp, "BFD\n");
         fprintf(fp,"-----\n");
         uint8_t i = 0;
+        static bfd_pkt_stat_t prev_stat;
+        if(difftime == 0) difftime = 1;
+        fprintf(fp, "rx_us:%"PRIu64" (%"PRIu64" pps) tx_us:%"PRIu64" (%"PRIu64" pps) \n",
+                        bfd_stat.rx_count, (bfd_stat.rx_count - prev_stat.rx_count)/difftime,
+                        bfd_stat.tx_count, (bfd_stat.tx_count - prev_stat.tx_count)/difftime);
+        prev_stat = bfd_stat;
         for(i=0; i< ports->num_ports; i++) {
                 fprintf(fp, "Port:%d Local status:%d, Remote Status:%d rx_us:%"PRIu64" tx_us:%"PRIu64"\n",
                                 i, bfd_sess_info[i].local_state,  bfd_sess_info[i].remote_state,

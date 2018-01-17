@@ -57,6 +57,9 @@
 #ifdef ENABLE_BFD
 #include "onvm_bfd.h"
 #endif
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+#include "onvm_rsync.h"
+#endif
 /************************Internal Functions Prototypes************************/
 
 
@@ -151,7 +154,7 @@ onvm_stats_cleanup(void) {
 void onvm_stats_display_rsync_tx_thread_stats(void);
 void onvm_stats_display_rsync_tx_thread_stats(void) {
         int j = 0;
-        fprintf(stats_out, "Remot Sync\n");
+        fprintf(stats_out, "Remote Sync\n");
         fprintf(stats_out,"-------\n");
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 fprintf(stats_out, "Idx:%d, Tx_port_Ring:%d, TX_Latch_Ring:%d, NF_Latch_Ring:%d\n", j, rte_ring_count(tx_port_ring[j]), rte_ring_count(tx_tx_state_latch_ring[j]), rte_ring_count(tx_nf_state_latch_ring[j]));
@@ -178,7 +181,10 @@ onvm_stats_display_all(unsigned difftime) {
        onvm_stats_display_rsync_tx_thread_stats();
 #endif
 #ifdef ENABLE_BFD
-       onvm_print_bfd_status(stats_out);
+       onvm_print_bfd_status(difftime, stats_out);
+#endif
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+       onvm_print_rsync_stats(difftime, stats_out);
 #endif
 }
 
