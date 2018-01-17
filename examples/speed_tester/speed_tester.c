@@ -169,6 +169,9 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         else {
                 /* Drop real incoming packets */
                 meta->action = ONVM_NF_ACTION_DROP;
+                //Loob back to same node
+                meta->destination = pkt->port;
+                meta->action = ONVM_NF_ACTION_OUT;
         }
         return 0;
 }
