@@ -176,6 +176,8 @@ struct rte_mempool *pktmbuf_pool_g;
 static struct rte_mbuf* create_ipv4_udp_packet(void) {
         //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
 
+        uint8_t c_addr[ETHER_ADDR_LEN] = {0x8C, 0xDC, 0xD4, 0xAC, 0x6C, 0x7C};
+        uint8_t s_addr[ETHER_ADDR_LEN] = {0x8C, 0xDC, 0xD4, 0xAC, 0x6C, 0x7D};
         struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool_g);
         if(NULL == pktmbuf_pool_g) {
                 return NULL;
@@ -185,13 +187,17 @@ static struct rte_mbuf* create_ipv4_udp_packet(void) {
         struct ether_hdr *ehdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
         /* set ether_hdr fields here e.g. */
         memset(ehdr,0, sizeof(struct ether_hdr));
-        //memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
-        //memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
+        memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
+        memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
+        memcpy(&ehdr->s_addr, c_addr, sizeof(c_addr));
+        memcpy(&ehdr->d_addr, s_addr, sizeof(s_addr));
         ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
 
         /* craft ipv4 header */
         struct ipv4_hdr *iphdr = (struct ipv4_hdr *)(&ehdr[1]);
         memset(iphdr,0, sizeof(struct ipv4_hdr));
+        iphdr->src_addr = IPv4(10,10,1,4);
+        iphdr->dst_addr = IPv4(10,0,0,3);
 
         /* set ipv4 header fields here */
         struct udp_hdr *uhdr = (struct udp_hdr *)(&iphdr[1]);
