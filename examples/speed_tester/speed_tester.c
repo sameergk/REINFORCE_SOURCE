@@ -213,12 +213,12 @@ static int callback_fp(void) {
         printf("Callback: creating %d packets to send to %d\n", NUM_PKTS, destination);
         for (i=0; i < NUM_PKTS; i++) {
                 struct onvm_pkt_meta* pmeta;
-                pkts[i] = rte_pktmbuf_alloc(pktmbuf_pool_g);
+                pkts[i] = create_ipv4_udp_packet();//rte_pktmbuf_alloc(pktmbuf_pool_g);
                 pmeta = onvm_get_pkt_meta(pkts[i]);
                 pmeta->destination = destination;
                 pmeta->action = ONVM_NF_ACTION_TONF;
                 pkts[i]->port = 3;
-                pkts[i]->hash.rss = i;
+                pkts[i]->hash.rss = i+1;
 
                 pmeta->destination = 0;
                 pmeta->action = ONVM_NF_ACTION_OUT;
@@ -256,7 +256,7 @@ int main(int argc, char *argv[]) {
                 pmeta->destination = destination;
                 pmeta->action = ONVM_NF_ACTION_TONF;
                 pkts[i]->port = 3;
-                pkts[i]->hash.rss = i;
+                pkts[i]->hash.rss = i+1;
 
                 pmeta->destination = 0;
                 pmeta->action = ONVM_NF_ACTION_OUT;

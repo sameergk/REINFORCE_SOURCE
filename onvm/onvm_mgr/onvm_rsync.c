@@ -228,7 +228,7 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
 
         //set packet properties
         pkt_size = sizeof(struct ether_hdr) + sizeof(struct state_transfer_packet_hdr);
-        out_pkt->data_len = pkt_size;
+        out_pkt->data_len = data_len;
         out_pkt->pkt_len = pkt_size;
 
         //Set Ethernet Header info
@@ -783,7 +783,7 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         struct rte_mbuf *pkt;
 
         bswap_rsync_hdr_data(&meta_out, 0);
-        printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
+        //printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
 
         //For Tx_TS State:  copy sent data from the start_offset to the mempool.
         //For NF_STATE_MEMORY: <Communicate to Standby NF, if none; then it must be instantiated first; then send message to NFLIB so that it can copy the state

@@ -71,7 +71,8 @@
 /**************************Macros and Feature Definitions**********************/
 /* Enable the ONVM_MGR to act as a 2-port bridge without any NFs */
 #define ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE    // Work as bridge < without any NFs :: only testing purpose.. >
-//#define SEND_DIRECT_ON_ALT_PORT
+#define SEND_DIRECT_ON_ALT_PORT
+
 //#define DELAY_BEFORE_SEND
 //#define DELAY_PER_PKT (5) //20micro seconds
 
