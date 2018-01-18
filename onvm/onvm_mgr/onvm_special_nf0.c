@@ -71,7 +71,7 @@
 /**************************Macros and Feature Definitions**********************/
 /* Enable the ONVM_MGR to act as a 2-port bridge without any NFs */
 #define ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE    // Work as bridge < without any NFs :: only testing purpose.. >
-#define SEND_DIRECT_ON_ALT_PORT
+//#define SEND_DIRECT_ON_ALT_PORT
 
 //#define DELAY_BEFORE_SEND
 //#define DELAY_PER_PKT (5) //20micro seconds
@@ -113,9 +113,9 @@ int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
                         for (i = sent_0; i < count_0; i++) {
                                 onvm_pkt_drop(pkts_0[i]);
                         }
-                        tx_stats->tx_drop[0] += (count_0 - sent_0);
+                        tx_stats->tx_drop[port_id] += (count_0 - sent_0);
                 }
-                tx_stats->tx[0] += sent_0;
+                tx_stats->tx[port_id] += sent_0;
         }
 #ifdef DELAY_BEFORE_SEND
         usleep(DELAY_PER_PKT*count_1);
@@ -131,9 +131,9 @@ int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
                         for (i = sent_1; i < count_1; i++) {
                                 onvm_pkt_drop(pkts_1[i]);
                         }
-                        tx_stats->tx_drop[1] += (count_1 - sent_1);
+                        tx_stats->tx_drop[port_id] += (count_1 - sent_1);
                 }
-                tx_stats->tx[1] += sent_1;
+                tx_stats->tx[port_id] += sent_1;
         }
         return 0;
 }
@@ -548,15 +548,15 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
                                 /* For now Only service is INTERNAL_BRIDGE */
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
                                 rsync_process_rsync_in_pkts(NULL,&pkts[i],1);
-#else
-                                        onvm_pkt_drop_batch(&pkts[i], 1);
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
+                                rte_pktmbuf_free(pkts[i]);//onvm_pkt_drop_batch(&pkts[i], 1);
+
                                 break;
                         case ETHER_TYPE_BFD:
 #ifdef ENABLE_BFD
                                 onvm_bfd_process_incoming_packets(NULL,&pkts[i],1);
 #endif
-                                onvm_pkt_drop_batch(&pkts[i], 1);
+                                rte_pktmbuf_free(pkts[i]);//onvm_pkt_drop_batch(&pkts[i], 1);
                                 break;
 
                         }

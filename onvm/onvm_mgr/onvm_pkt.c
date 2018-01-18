@@ -269,10 +269,9 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
         if (unlikely(tx->port_tx_buf[port].count == 0))
                 return;
 
-#if 0
+
 #ifdef PROFILE_PACKET_PROCESSING_LATENCY
-        onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
-#endif
+        //onvm_util_calc_chain_processing_latency(tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH

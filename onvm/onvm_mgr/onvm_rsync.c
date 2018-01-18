@@ -78,8 +78,8 @@ struct rte_timer nf_status_checkpoint_timer;
 #define NEED_REMOTE_NF_STATE_SYNC   (0x10)
 
 #ifdef ENABLE_PER_FLOW_TS_STORE
-dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
-onvm_per_flow_ts_info_t   *tx_ts_table = NULL;
+static dirty_mon_state_map_tbl_t *dirty_state_map_tx_ts = NULL;
+static onvm_per_flow_ts_info_t   *tx_ts_table = NULL;
 //size of mempool = _PER_FLOW_TS_SIZE;
 #define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/(sizeof(uint64_t)*CHAR_BIT))
 #define MAX_TX_TS_ENTRIES        ((_NF_STATE_SIZE -sizeof(dirty_mon_state_map_tbl_t))/(sizeof(uint64_t)*CHAR_BIT))
@@ -129,6 +129,7 @@ extern uint32_t nf_mgr_id;
 //To maintain the statistics for rsync activity
 rsync_stats_t rsync_stat;
 
+#define PACKET_READ_SIZE_LARGE  (PACKET_READ_SIZE * 2)
 /***********************Internal Functions************************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
 static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
@@ -170,16 +171,17 @@ static uint8_t clear_transaction_id (uint8_t tid) {
 static void
 nf_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
-
         uint8_t trans_id = rsync_nf_state_to_remote();
         if(trans_id) {
                 rsync_wait_for_commit_ack(trans_id);
         }
         transmit_tx_nf_state_latch_rings();
+
         //printf("In nf_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
         return;
 }
 static inline int initialize_rsync_timers(void) {
+        //return 0;
         uint64_t ticks = ((uint64_t)NF_CHECKPOINT_PERIOD_IN_US *(rte_get_timer_hz()/1000000));
         rte_timer_reset_sync(&nf_status_checkpoint_timer,ticks,PERIODICAL,
                         rte_lcore_id(), &nf_status_checkpoint_timer_cb, NULL);
@@ -223,12 +225,13 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
         out_pkt = rte_pktmbuf_alloc(pktmbuf_pool);
         if (out_pkt == NULL) {
                 rte_free(out_pkt);
+                rte_exit(EXIT_FAILURE, "onvm_rsync:Failed to alloc packet!! \n");
                 return NULL;
         }
 
         //set packet properties
         pkt_size = sizeof(struct ether_hdr) + sizeof(struct state_transfer_packet_hdr);
-        out_pkt->data_len = data_len;
+        out_pkt->data_len = MAX(pkt_size, data_len);    //todo: crirical error if 0 or lesser than pkt_len: mooongen discards; check again and confirm
         out_pkt->pkt_len = pkt_size;
 
         //Set Ethernet Header info
@@ -258,17 +261,13 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
 static int rsync_tx_ts_state_to_remote(void) {
 
         uint16_t i=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         state_tx_meta_t meta = {.state_type= STATE_TYPE_TX_TS_TABLE, .nf_or_svc_id=0, .start_offset=0, .reserved=nf_mgr_id, .trans_id=0};
 
-        if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
-
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                onvm_util_get_start_time(&ts);
-#endif
+        if(likely(dirty_state_map_tx_ts && dirty_state_map_tx_ts->dirty_index)) {
                 meta.trans_id = get_transaction_id();
                 //Note: Must always ensure that dirty_map is carried over first; so that the remote replica can use this value to update only the changed states
-                uint64_t dirty_index = dirty_state_map->dirty_index;
+                uint64_t dirty_index = dirty_state_map_tx_ts->dirty_index;
                 uint64_t copy_index = 0;
                 uint64_t copy_setbit = 0;
                 //uint16_t copy_offset = 0;
@@ -280,7 +279,7 @@ static int rsync_tx_ts_state_to_remote(void) {
                                 dirty_index^=copy_setbit;
                         }
                 }
-                dirty_state_map->dirty_index =0;
+                dirty_state_map_tx_ts->dirty_index =0;
                 //check if packets are created and need to be transmitted out;
                 if(i) {
                         uint8_t out_port = 0;
@@ -304,11 +303,11 @@ static int rsync_nf_state_to_remote(void) {
         uint8_t out_port = 0;
         uint16_t i=0;
         uint8_t active_services[MAX_SERVICES] = {0};
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         state_tx_meta_t meta = {.state_type= STATE_TYPE_NF_MEMPOOL, .nf_or_svc_id=0, .start_offset=0, .reserved=nf_mgr_id,.trans_id=0};
         void *pReplicaStateMempool = NULL;
-        dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
-        uint16_t nf_id = 0; //uint16_t alt_nf_id;
+        dirty_mon_state_map_tbl_t *dirty_state_map_nf = NULL;
+        uint16_t nf_id = 0;
         for(;nf_id < MAX_SERVICES; nf_id++) active_services[nf_id]=0;
 
         //Start with Each NF Instance ID which is active and valid and start gathering all changed NF state;
@@ -324,19 +323,16 @@ static int rsync_nf_state_to_remote(void) {
                         //sync state from the standby NFs memory: To avoid sync issues-- still possible; TODO: must ensure that update (write in NFLIB must not happen while we read here). How?
                         pReplicaStateMempool = clients[get_associated_active_or_standby_nf_id(nf_id)].nf_state_mempool;
                         if(likely(NULL != pReplicaStateMempool)) {
-                                dirty_state_map = (dirty_mon_state_map_tbl_t*)pReplicaStateMempool;
+                                dirty_state_map_nf = (dirty_mon_state_map_tbl_t*)pReplicaStateMempool;
 
                         } else continue;
 
-                        if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
+                        if(likely(dirty_state_map_nf && dirty_state_map_nf->dirty_index)) {
                                 meta.nf_or_svc_id = nf_id;
                                 if(unlikely(0 == meta.trans_id)) meta.trans_id=get_transaction_id();
 
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                                onvm_util_get_start_time(&ts);
-#endif
                                 //Note: Must always ensure that dirty_map is carried over first; so that the remote replica can use this value to update only the changed states
-                                uint64_t dirty_index = dirty_state_map->dirty_index;
+                                uint64_t dirty_index = dirty_state_map_nf->dirty_index;
                                 uint64_t copy_index = 0;
                                 uint64_t copy_setbit = 0;
                                 //uint16_t copy_offset = 0;
@@ -347,29 +343,26 @@ static int rsync_nf_state_to_remote(void) {
                                                 pkts[i++] = craft_state_update_packet(0,meta, (((uint8_t*)pReplicaStateMempool)+meta.start_offset),DIRTY_MAP_PER_CHUNK_SIZE);
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
-                                                if( (i+1) == PACKET_READ_SIZE*2) {
+                                                if( i == PACKET_READ_SIZE_LARGE) {
                                                         log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
-                                                        i=0;
 #ifdef ENABLE_PORT_TX_STATS_LOGS
-                        rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
+                                                        rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
 #endif
+                                                        i=0;
                                                 }
                                         }
                                 }
-                                dirty_state_map->dirty_index =0;
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                                        //fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
-#endif
+                                dirty_state_map_nf->dirty_index =0;
                         }
                         //Either Send State update for each NF or batch with other NF State? ( IF batch multiple NFs, then move it out of for_loop )
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
                                 send_packets_out(out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
-                                i=0;
 #ifdef ENABLE_PORT_TX_STATS_LOGS
-                        rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
+                                rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
 #endif
+                                i=0;
                         }
                 }
         }
@@ -382,19 +375,16 @@ static int rsync_nf_state_to_remote(void) {
                         //sync state from the standby NFs memory: To avoid sync issues-- still possible; TODO: must ensure that update (write in NFLIB must not happen while we read here). How?
                         pReplicaStateMempool = services_state_pool[nf_id];
                         if(likely(NULL != pReplicaStateMempool)) {
-                                dirty_state_map = (dirty_mon_state_map_tbl_t*)pReplicaStateMempool;
+                                dirty_state_map_nf = (dirty_mon_state_map_tbl_t*)pReplicaStateMempool;
 
                         } else continue;
 
-                        if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
+                        if(likely(dirty_state_map_nf && dirty_state_map_nf->dirty_index)) {
                                 meta.nf_or_svc_id = nf_id;
                                 if(unlikely(0 == meta.trans_id)) meta.trans_id=get_transaction_id();
 
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                                onvm_util_get_start_time(&ts);
-#endif
                                 //Note: Must always ensure that dirty_map is carried over first; so that the remote replica can use this value to update only the changed states
-                                uint64_t dirty_index = dirty_state_map->dirty_index;
+                                uint64_t dirty_index = dirty_state_map_nf->dirty_index;
                                 uint64_t copy_index = 0;
                                 uint64_t copy_setbit = 0;
                                 //uint16_t copy_offset = 0;
@@ -405,16 +395,13 @@ static int rsync_nf_state_to_remote(void) {
                                                 pkts[i++] = craft_state_update_packet(0,meta, (((uint8_t*)pReplicaStateMempool)+meta.start_offset),DIRTY_MAP_PER_CHUNK_SIZE);
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
-                                                if( (i+1) == PACKET_READ_SIZE*2) {
+                                                if(i == PACKET_READ_SIZE_LARGE) {
                                                         log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
                                                 }
                                         }
                                 }
-                                dirty_state_map->dirty_index =0;
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
-                                        //fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
-#endif
+                                dirty_state_map_nf->dirty_index =0;
                         }
                         //Either Send State update for each NF or batch with other NF State? ( IF batch multiple NFs, then move it out of for_loop )
                         //check if packets are created and need to be transmitted out;
@@ -425,7 +412,6 @@ static int rsync_nf_state_to_remote(void) {
                         }
                 }
         }
-
         return meta.trans_id;
         return 0;
 }
@@ -433,7 +419,7 @@ static int rsync_nf_state_to_remote(void) {
 static int rsync_tx_ts_state_from_remote(state_tx_meta_t *meta, uint8_t *pData, uint16_t data_len) {
 #if 0
         uint16_t i=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         uint8_t type   = rsync_req->meta.state_type & 0b11111111;
         uint8_t nf_id  = rsync_req->meta.nf_or_svc_id & 0b11111111;
         uint8_t tnx_id = rsync_req->meta.trans_id & 0b11111111;
@@ -461,10 +447,10 @@ static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *pData,  ui
         rte_memcpy(pDst, pData, MIN(data_len, DIRTY_MAP_PER_CHUNK_SIZE)); //should be MIN(pkt->data_len, DIRTY_MAP_PER_CHUNK_SIZE)
         return 0;
 }
-
-#define MAX_TRANS_COMMIT_WAIT_COUNTER   (5) //depends on RTT (seen to be around 350 micro seconds)
+#define REMOTE_SYNC_WAIT_INTERVAL   (100*1000)  // 100 micro seconds
+#define MAX_TRANS_COMMIT_WAIT_COUNTER   (5)     //depends on RTT (between 2 nodes, it is observed to be around 350 micro seconds)
 static int rsync_wait_for_commit_ack(uint8_t trans_id) {
-        struct timespec req = {0,100*1000}, res = {0,0};
+        struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         int wait_counter = 0; //hack till remote_node also sends
         do {
                 nanosleep(&req, &res);
@@ -512,8 +498,8 @@ static inline uint64_t tx_ts_map_tag_index_to_dirty_chunk_bit_index(uint16_t tx_
         return dirty_map_bitmask;
 }
 static inline void tx_ts_update_dirty_state_index(uint16_t tx_tbl_index) {
-        if(dirty_state_map) {
-                dirty_state_map->dirty_index |= tx_ts_map_tag_index_to_dirty_chunk_bit_index(tx_tbl_index);
+        if(dirty_state_map_tx_ts) {
+                dirty_state_map_tx_ts->dirty_index |= tx_ts_map_tag_index_to_dirty_chunk_bit_index(tx_tbl_index);
         }
         return;
 }
@@ -535,8 +521,8 @@ static inline void update_flow_tx_ts_table(uint64_t flow_index,  __attribute__((
 static inline int initialize_tx_ts_table(void) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
         if(onvm_mgr_tx_per_flow_ts_info) {
-                dirty_state_map = (dirty_mon_state_map_tbl_t*)onvm_mgr_tx_per_flow_ts_info;
-                tx_ts_table = (onvm_per_flow_ts_info_t*)(dirty_state_map+1);
+                dirty_state_map_tx_ts = (dirty_mon_state_map_tbl_t*)onvm_mgr_tx_per_flow_ts_info;
+                tx_ts_table = (onvm_per_flow_ts_info_t*)(dirty_state_map_tx_ts+1);
         }
 #endif
         return 0;
@@ -556,90 +542,60 @@ static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rt
                 for(; i< nb_pkts;i++)
                         onvm_pkt_drop(tx_pkts[i]);
         }
+
         {
                 volatile struct tx_stats *tx_stats = &(ports->tx_stats);
-                tx_stats->tx_drop[port_id] = sent_packets;
+                tx_stats->tx[port_id] = sent_packets;
                 tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
         }
         return sent_packets;
 }
 static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
         log_transaction_id(trans_id);
-#ifdef PROFILE_PACKET_PROCESSING_LATENCY
-        onvm_util_calc_chain_processing_latency(tx_pkts, nb_pkts);
-#endif
-        uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
-        if(unlikely(sent_packets < nb_pkts)) {
-                uint16_t i = sent_packets;
-                for(; i< nb_pkts;i++)
-                        onvm_pkt_drop(tx_pkts[i]);
-        }
-#ifdef ENABLE_PORT_TX_STATS_LOGS
-        {
-                volatile struct tx_stats *tx_stats = &(ports->tx_stats);
-                tx_stats->tx_drop[port_id] = sent_packets;
-                tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
-        }
-#endif
-        return sent_packets;
+        return send_packets_out(port_id, queue_id, tx_pkts, nb_pkts);
 }
 //Bypass Function to directly enqueue to Tx Port Ring and Flush to ETH Ports
 int transmit_tx_port_packets(void) {
-        uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_port_ring[j]);
                 //printf("\n %d Pkts in %d port\n", tx_count, j);
                 while(tx_count) {
-                        count = rte_ring_dequeue_burst(tx_port_ring[j], (void**)pkts, PACKET_READ_SIZE*2);
+                        count = rte_ring_dequeue_burst(tx_port_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
                                         sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1);
                                 }
                         } else {
+#if 1
                                 sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_0, pkts,count);
-#if 0
+#else
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
                                         sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1);
                                 }
 #endif
                         }
-                        //tx_count-=count;
                         if(tx_count > count) tx_count-=count;
                         else break;
                 }
         }
-#if 0
-        unsigned tx_count = rte_ring_count(tx_port_ring);
-        while(tx_count) {
-                count = rte_ring_dequeue_burst(tx_port_ring, (void**)pkts, PACKET_READ_SIZE*2);
-                for(i=0; i < count;i++) {
-                        uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
-                        if(likely(rte_eth_tx_burst(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1))) {
-                                ;
-                        } else {
-                                onvm_pkt_drop(pkts[i]);
-                        }
-                }
-        }
-#endif
-        //unsigned sent_count = rte_eth_tx_burst(port,0,tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
         return sent;
 }
 
 //Function to transmit/release the Tx packets (that were waiting for Tx state update completion)
 static int transmit_tx_tx_state_latch_rings(void) {
-        uint16_t i, j, count= PACKET_READ_SIZE*10, sent=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*10];
+        uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_tx_state_latch_ring[j]);
                 //printf("\n %d Pkts in tx_tx_state_latch_ring[%d] port\n", tx_count, j);
                 while(tx_count) {
-                        count = rte_ring_dequeue_burst(tx_tx_state_latch_ring[j], (void**)pkts, PACKET_READ_SIZE*2);
+                        count = rte_ring_dequeue_burst(tx_tx_state_latch_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
@@ -648,7 +604,6 @@ static int transmit_tx_tx_state_latch_rings(void) {
                         } else {
                                 sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_1, pkts,count);
                         }
-                        //tx_count-=count;
                         if(tx_count > count) tx_count-=count;
                         else break;
                 }
@@ -657,14 +612,14 @@ static int transmit_tx_tx_state_latch_rings(void) {
 }
 //Function to transmit/release the Tx packets (that were waiting for NF state update completion)
 static int transmit_tx_nf_state_latch_rings(void) {
-        uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
-        struct rte_mbuf *pkts[PACKET_READ_SIZE*2];
+        uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_nf_state_latch_ring[j]);
                 //printf("\n %d Pkts in tx_nf_state_latch[%d] port\n", tx_count, j);
                 while(tx_count) {
-                        count = rte_ring_dequeue_burst(tx_nf_state_latch_ring[j], (void**)pkts, PACKET_READ_SIZE*2);
+                        count = rte_ring_dequeue_burst(tx_nf_state_latch_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
@@ -673,14 +628,13 @@ static int transmit_tx_nf_state_latch_rings(void) {
                         } else {
                                 sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_1, pkts,count);
                         }
-                        //tx_count-=count;
                         if(tx_count > count) tx_count-=count;
                         else break;
                 }
         }
         return sent;
 }
-static inline int get_flow_entry_index(__attribute__((unused)) struct rte_mbuf *pkt, struct onvm_pkt_meta *meta) {
+static inline int get_flow_entry_index(__attribute__((unused)) struct rte_mbuf *pkt, __attribute__((unused)) struct onvm_pkt_meta *meta) {
 #ifdef ENABLE_FT_INDEX_IN_META
         return meta->ft_index;
 #else
@@ -706,28 +660,27 @@ static inline int get_flow_entry_index(__attribute__((unused)) struct rte_mbuf *
  */
 static int extract_and_parse_tx_port_packets(void) {
         int ret = 0;
-        uint16_t i, j, count= PACKET_READ_SIZE*2, sent=0;
-        uint64_t ts[PACKET_READ_SIZE*2];
+        uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0;
+        uint64_t ts[PACKET_READ_SIZE_LARGE];
         uint16_t out_pkts_nf_count, out_pkts_tx_count;
-        struct rte_mbuf *in_pkts[PACKET_READ_SIZE*2];
-        struct rte_mbuf *out_pkts_tx[PACKET_READ_SIZE*2];
-        struct rte_mbuf *out_pkts_nf[PACKET_READ_SIZE*2];
+        struct rte_mbuf *in_pkts[PACKET_READ_SIZE_LARGE];
+        struct rte_mbuf *out_pkts_tx[PACKET_READ_SIZE_LARGE];
+        struct rte_mbuf *out_pkts_nf[PACKET_READ_SIZE_LARGE];
         struct onvm_pkt_meta* meta;
-        //struct onvm_flow_entry *flow_entry;
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_port_ring[j]);
                 //printf("\n %d packets in tx_port_ring[%d]\n", tx_count, j);
                 while(tx_count) {
                         //retrieve batch of packets
-                        count = rte_ring_dequeue_burst(tx_port_ring[j], (void**)in_pkts, PACKET_READ_SIZE*2);
+                        count = rte_ring_dequeue_burst(tx_port_ring[j], (void**)in_pkts, PACKET_READ_SIZE_LARGE);
                         //extract timestamp for these batch of packets
                         onvm_util_get_marked_packet_timestamp((struct rte_mbuf**)in_pkts, ts, count);
                         out_pkts_tx_count = 0; out_pkts_nf_count = 0;
                         for(i=0; i < count;i++) {
-                                meta = onvm_get_pkt_meta((struct rte_mbuf*) in_pkts[i]);
+                                meta = onvm_get_pkt_meta((struct rte_mbuf *)in_pkts[i]);
                                 //uint8_t port = meta->destination;
-                                uint8_t dest = meta->reserved_word&0x01;
+                                uint8_t dest = meta->reserved_word&0x01; //Hack
                                 int flow_index = get_flow_entry_index(in_pkts[i], meta);
                                 if(flow_index >= 0) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
@@ -766,7 +719,7 @@ static int extract_and_parse_tx_port_packets(void) {
                                 }
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                                 rsync_stat.enq_count_tx_nf_state_latch_ring[j] += sent;
-                                rsync_stat.drop_count_tx_nf_state_latch_ring[j] += (out_pkts_tx_count -sent);
+                                rsync_stat.drop_count_tx_nf_state_latch_ring[j] += (out_pkts_nf_count -sent);
 #endif
                         }
                         if(tx_count > count) tx_count-=count;
@@ -780,7 +733,7 @@ static int extract_and_parse_tx_port_packets(void) {
 static inline int rsync_process_req_packet(__attribute__((unused)) state_transfer_packet_hdr_t *rsync_req, uint8_t in_port) {
 
         state_tx_meta_t meta_out = rsync_req->meta;
-        struct rte_mbuf *pkt;
+        struct rte_mbuf *pkt = NULL;
 
         bswap_rsync_hdr_data(&meta_out, 0);
         //printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
@@ -835,7 +788,6 @@ static inline int rsync_process_rsp_packet(__attribute__((unused)) transfer_ack_
 /******************************APIs********************************************/
 int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
         uint16_t i=0;
-        //struct ether_hdr *eth = NULL;
         transfer_ack_packet_hdr_t *rsycn_pkt = NULL;
         state_transfer_packet_hdr_t *rsync_req = NULL;
 
@@ -862,7 +814,7 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
                 }
         }
         //release all the packets and return
-        onvm_pkt_drop_batch(pkts,rx_count);
+        //onvm_pkt_drop_batch(pkts,rx_count);
         if(pkts) return rx_count;
         return 0;
 }
@@ -873,8 +825,8 @@ int rsync_start(__attribute__((unused)) void *arg) {
 
         //First Extract and Parse Tx Port Packets and update TS info in Tx Table
         int ret = extract_and_parse_tx_port_packets();
-        //ret = 0;    //TEST_HACK to bypass TS Table and NF Shared Memory packet transfer
         //printf("\n extract_and_parse_tx_port_packets() returned %d\n",ret);
+        //ret = 0; //TEST_HACK to bypass TS Table and NF Shared Memory packet transfer
 
         //Check and Initiate Remote Sync of Tx State
         if(ret & NEED_REMOTE_TS_TABLE_SYNC) {
@@ -884,14 +836,12 @@ int rsync_start(__attribute__((unused)) void *arg) {
                         trans_ids[tid++] = trans_id;
 #else
                         rsync_wait_for_commit_ack(trans_id);
+
+                        //Now release the packets from Tx State Latch Ring
+                        transmit_tx_tx_state_latch_rings();
+
 #endif
-
-
                 }
-#ifndef USE_BATCHED_RSYNC_TRANSACTIONS
-                //Now release the packets from Tx State Latch Ring
-                transmit_tx_tx_state_latch_rings();
-#endif
         }
 
         //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
@@ -906,22 +856,19 @@ int rsync_start(__attribute__((unused)) void *arg) {
                         trans_ids[tid++] = trans_id;
 #else
                         rsync_wait_for_commit_ack(trans_id);
+                        //Now release the packets from NF
+                        transmit_tx_nf_state_latch_rings();
 #endif
                 }
-#ifndef USE_BATCHED_RSYNC_TRANSACTIONS
-                //Now release the packets from NF
-                transmit_tx_nf_state_latch_rings();
-#endif
         }
+
 #ifdef USE_BATCHED_RSYNC_TRANSACTIONS
         //optimize by batching transactions.. transfer all transactions and wait or acks
-        {
-                rsync_wait_for_commit_acks(trans_ids,tid);
-                //Now release the packets from Tx State Latch Ring
-                transmit_tx_tx_state_latch_rings();
-                //Now release the packets from NF
-                transmit_tx_nf_state_latch_rings();
-        }
+        rsync_wait_for_commit_acks(trans_ids,tid);
+        //Now release the packets from Tx State Latch Ring
+        transmit_tx_tx_state_latch_rings();
+        //Now release the packets from NF
+        transmit_tx_nf_state_latch_rings();
 #endif
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
         return 0;
@@ -959,10 +906,13 @@ int
 rsync_main(__attribute__((unused)) void *arg) {
 
         if(NULL == pktmbuf_pool) {
+                /*
                 pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
                 if(NULL == pktmbuf_pool) {
                         return -1;
                 }
+                */
+                rte_exit(EXIT_FAILURE, "rsync_main:Failed to get PktMbufPool\n");
         }
 
         //Initalize the Timer for performing periodic NF State Snapshotting

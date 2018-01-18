@@ -608,7 +608,7 @@ static int setup_flowrule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta*
                 if(ports->num_ports > 1) meta->destination = (pkt->port == 0)? (1):(0);
                 else meta->destination = pkt->port;
                 meta->action = ONVM_NF_ACTION_OUT; //ONVM_NF_ACTION_DROP;
-                onvm_pkt_print(pkt);
+                //onvm_pkt_print(pkt);
                 return 0;
         }
         meta->src = 0;

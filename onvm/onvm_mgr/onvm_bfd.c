@@ -126,7 +126,7 @@ onvm_bfd_stop(void) {
 static void
 bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
-        //printf("In nf_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
+        //printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
         send_bfd_echo_packets();
         check_bdf_remote_status();
         return;

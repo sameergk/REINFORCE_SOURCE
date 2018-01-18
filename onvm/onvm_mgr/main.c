@@ -350,7 +350,7 @@ rx_thread_main(void *arg) {
                                 if (likely(num_clients)) {
                                         onvm_pkt_process_rx_batch(rx, pkts, rx_count);
                                 } else {
-                                        (void)onv_pkt_send_to_special_nf0(rx, pkts, rx_count);
+                                        (void)onv_pkt_send_to_special_nf0(rx, pkts, rx_count); //onvm_pkt_drop_batch(pkts, rx_count);
                                 }
                         }
                 }

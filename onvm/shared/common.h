@@ -316,7 +316,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 #define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.
-//#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
+////#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
 #ifndef RESL_UPDATE_MODE_PER_PACKET
 #define RESL_UPDATE_MODE_PER_BATCH      //update mode Shadow Ring, Replica state, per flow TS for batch of packets
 #endif
@@ -400,9 +400,9 @@ typedef struct onvm_per_flow_ts_info {
 
 //Note the NUM_OF_QUEUES in PORT seem to be only 16; so ensure the queue value with MAX_NFS ( but unforunately the init_port() doesnt fail.
 #ifdef ENABLE_BFD
-#define BFD_TX_PORT_QUEUE_ID    ((MAX_NFS/2)+1)
+#define BFD_TX_PORT_QUEUE_ID        ((MAX_NFS/2)+1)
 #else
-#define BFD_TX_PORT_QUEUE_ID    (MAX_NFS/2)
+#define BFD_TX_PORT_QUEUE_ID    (0)//(MAX_NFS/2)
 #endif
 
 #ifdef ENABLE_REPLICA_STATE_UPDATE
