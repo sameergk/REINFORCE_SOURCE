@@ -120,13 +120,15 @@
 //const uint32_t BaseMinTxInterval = 1000000L;  // The base "slow" Tx interval.
 #define BaseMinTxInterval (1000000L)
 
-#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1RTT
+#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1.5 RTT
 
 #define BFDEchoInterval_us      (BFD_CHECKPOINT_PERIOD_IN_US)
 #define BFDMinRxInterval_us     (100)
 #define BFDMinTxInterval_us     (100)
-#define BFDEchoMissMultiplier   (3)
-#define BFD_TIMEOUT_INTERVAL    (BFDEchoInterval_us*BFDEchoMissMultiplier)
+#define BFDEchoMissMultiplier   (5) //change from 3 to 5 for more robust detections.
+#define BFDTimeoutValue_us      (BFDEchoInterval_us*BFDEchoMissMultiplier)
+#define BFDTimeoutErr_oft_us    (BFDEchoInterval_us/2)
+#define BFD_TIMEOUT_INTERVAL    (BFDTimeoutValue_us + BFDTimeoutErr_oft_us)
 // State codes
 typedef enum BFD_StateValue
 {
@@ -233,7 +235,7 @@ typedef struct BFDAuthData
 typedef struct BfdPacket
 {
   BfdPacketHeader header;
-  BFDAuthData auth;
+  //BFDAuthData auth;
 }BfdPacket;
 #pragma pack(pop)
 

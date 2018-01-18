@@ -359,6 +359,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define TX_RSYNC_NF_LATCH_RING_SIZE     (8*1024)
 
 #define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions
+//#define BYPASS_WAIT_ON_TRANSACTIONS     //to bypass wait on transactions and assume send=success; (Do not enable!)
 #else
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif

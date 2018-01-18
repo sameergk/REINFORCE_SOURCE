@@ -35,7 +35,7 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * speed_tester.c - create pkts and loop through NFs.
+ * monitor.c - an example using onvm. Print a message each p package received
  ********************************************************************/
 
 #include <unistd.h>
@@ -52,31 +52,45 @@
 #include <rte_common.h>
 #include <rte_mbuf.h>
 #include <rte_ip.h>
-#include <rte_mempool.h>
-#include <rte_cycles.h>
-#include <rte_udp.h>
 
 #include "onvm_nflib.h"
 #include "onvm_pkt_helper.h"
+#include "onvm_flow_dir.h"
 
-#define NF_TAG "speed"
 
-#define NUM_PKTS 128
-#define PKTMBUF_POOL_NAME "MProc_pktmbuf_pool"
+
+#define NF_TAG "basic_monitor"
 
 /* Struct that contains information about this NF */
 struct onvm_nf_info *nf_info;
 
 /* number of package between each print */
-static uint32_t print_delay = 10000000;
-static uint16_t destination;
+static uint32_t print_delay = 1000000;
+
+typedef struct monitor_state_info_table {
+        uint16_t ft_index;
+        uint16_t tag_counter;
+        uint32_t pkt_counter;
+}monitor_state_info_table_t;
+monitor_state_info_table_t *mon_state_tbl = NULL;
+
+#if 0
+typedef struct dirty_mon_state_map_tbl {
+        uint64_t dirty_index;   //Bit index to every 1K LSB=0-1K, MSB=63-64K
+}dirty_mon_state_map_tbl_t;
+dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
+#endif
+
+#ifdef ENABLE_NFV_RESL
+#define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(monitor_state_info_table_t))
+#endif
 
 /*
  * Print a usage message
  */
 static void
 usage(const char *progname) {
-        printf("Usage: %s [EAL args] -- [NF_LIB args] -- -d <destination> -p <print_delay>\n\n", progname);
+        printf("Usage: %s [EAL args] -- [NF_LIB args] -- -p <print_delay>\n\n", progname);
 }
 
 /*
@@ -84,22 +98,17 @@ usage(const char *progname) {
  */
 static int
 parse_app_args(int argc, char *argv[], const char *progname) {
-        int c, dst_flag = 0;
+        int c;
 
-        while ((c = getopt (argc, argv, "d:p:")) != -1) {
+        while ((c = getopt (argc, argv, "p:")) != -1) {
                 switch (c) {
-                case 'd':
-                        destination = strtoul(optarg, NULL, 10);
-                        dst_flag = 1;
-                        break;
                 case 'p':
                         print_delay = strtoul(optarg, NULL, 10);
+                        RTE_LOG(INFO, APP, "print_delay = %d\n", print_delay);
                         break;
                 case '?':
                         usage(progname);
-                        if (optopt == 'd')
-                                RTE_LOG(INFO, APP, "Option -%c requires an argument.\n", optopt);
-                        else if (optopt == 'p')
+                        if (optopt == 'p')
                                 RTE_LOG(INFO, APP, "Option -%c requires an argument.\n", optopt);
                         else if (isprint(optopt))
                                 RTE_LOG(INFO, APP, "Unknown option `-%c'.\n", optopt);
@@ -110,14 +119,7 @@ parse_app_args(int argc, char *argv[], const char *progname) {
                         usage(progname);
                         return -1;
                 }
-
         }
-
-        if (!dst_flag) {
-                RTE_LOG(INFO, APP, "Speed tester NF requires a destination NF with the -d flag.\n");
-                return -1;
-        }
-
         return optind;
 }
 
@@ -129,52 +131,82 @@ parse_app_args(int argc, char *argv[], const char *progname) {
  */
 static void
 do_stats_display(struct rte_mbuf* pkt) {
-        static uint64_t last_cycles;
-        static uint64_t cur_pkts = 0;
-        static uint64_t last_pkts = 0;
+//	return ;
         const char clr[] = { 27, '[', '2', 'J', '\0' };
         const char topLeft[] = { 27, '[', '1', ';', '1', 'H', '\0' };
-        (void)pkt;
+        static int pkt_process = 0;
+        struct ipv4_hdr* ip;
 
-        uint64_t cur_cycles = rte_get_tsc_cycles();
-        cur_pkts += print_delay;
+        pkt_process += print_delay;
 
         /* Clear screen and move to top left */
         printf("%s%s", clr, topLeft);
 
-        printf("Total packets: %9"PRIu64" \n", cur_pkts);
-        printf("TX pkts per second: %9"PRIu64" \n", (cur_pkts - last_pkts)
-                * rte_get_timer_hz() / (cur_cycles - last_cycles));
-        printf("Packets per group: %d\n", NUM_PKTS);
-
-        last_pkts = cur_pkts;
-        last_cycles = cur_cycles;
-
+        printf("PACKETS\n");
+        printf("-----\n");
+        printf("Port : %d\n", pkt->port);
+        printf("Size : %d\n", pkt->pkt_len);
+        printf("Hash : %u\n", pkt->hash.rss);
+        printf("N°   : %d\n", pkt_process);
+#ifdef ENABLE_NFV_RESL
+        printf("MAX State: %lu\n", MAX_STATE_ELEMENTS);
+#endif
         printf("\n\n");
-}
 
+        ip = onvm_pkt_ipv4_hdr(pkt);
+        if (ip != NULL) {
+                onvm_pkt_print(pkt);
+        } else {
+                printf("No IP4 header found [%d]\n", pkt_process);
+        }
+}
+#ifdef ENABLE_NFV_RESL
+static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
+//return 0;
+        if(nf_info->nf_state_mempool) {
+                if(mon_state_tbl  == NULL) {
+                        dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
+                        mon_state_tbl = (monitor_state_info_table_t*)(dirty_state_map+1);
+                        //mon_state_tbl[0].ft_index = 0;
+                        mon_state_tbl[0].tag_counter+=1;
+                }
+                if(mon_state_tbl) {
+                        if(meta && pkt) {
+                                struct onvm_flow_entry *flow_entry = NULL;
+                                onvm_flow_dir_get_pkt(pkt, &flow_entry);
+                                if(flow_entry) {
+                                        mon_state_tbl[flow_entry->entry_index].ft_index = meta->src;
+                                        mon_state_tbl[flow_entry->entry_index].pkt_counter +=1;
+                                }
+                        }
+                        mon_state_tbl[0].pkt_counter+=1;
+                }
+        }
+        return 0;
+}
+#endif //#ifdef ENABLE_NFV_RESL
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
-        if (counter++ == print_delay) {
+        if (++counter == print_delay) {
                 do_stats_display(pkt);
                 counter = 0;
         }
 
-        if(pkt->port == 3) {
-                /* one of our fake pkts to forward */
-                meta->destination = destination;
-                meta->action = ONVM_NF_ACTION_TONF;
+        meta->action = ONVM_NF_ACTION_OUT;
+        meta->destination = pkt->port;
+
+
+        if (onvm_pkt_mac_addr_swap(pkt, 0) != 0) {
+                printf("ERROR: MAC failed to swap!\n");
         }
-        else {
-                /* Drop real incoming packets */
-                meta->action = ONVM_NF_ACTION_DROP;
-                //Loob back to same node
-                meta->destination = pkt->port;
-                meta->action = ONVM_NF_ACTION_OUT;
-        }
+
+#ifdef ENABLE_NFV_RESL
+        save_packet_state(pkt,meta);
+#endif //#ifdef ENABLE_NFV_RESL
         return 0;
 }
+#define NUM_PKTS 128
 struct rte_mempool *pktmbuf_pool_g;
 static struct rte_mbuf* create_ipv4_udp_packet(void) {
         //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
@@ -199,10 +231,6 @@ static struct rte_mbuf* create_ipv4_udp_packet(void) {
         memset(iphdr,0, sizeof(struct ipv4_hdr));
         iphdr->src_addr = IPv4(10,0,0,3);
         iphdr->dst_addr = IPv4(10,10,1,4);
-        iphdr->version_ihl     = (0x40|0x05);
-        iphdr->type_of_service = 0;
-        iphdr->fragment_offset = 0;
-        iphdr->time_to_live    = 64;
 
         /* set ipv4 header fields here */
         struct udp_hdr *uhdr = (struct udp_hdr *)(&iphdr[1]);
@@ -214,50 +242,18 @@ static struct rte_mbuf* create_ipv4_udp_packet(void) {
         //set packet properties
         size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) +sizeof(struct udp_hdr);
         pkt->data_len = pkt_size+10;
-        pkt->pkt_len = MAX(pkt_size+10,pkt->pkt_len);
+        pkt->pkt_len = pkt_size+10;
+
         return pkt;
 }
-static int callback_fp(void) {
+static void send_initial_pkts(void) {
         struct rte_mbuf* pkts[NUM_PKTS];
         int i;
-        printf("Callback: creating %d packets to send to %d\n", NUM_PKTS, destination);
-        for (i=0; i < NUM_PKTS; i++) {
-                struct onvm_pkt_meta* pmeta;
-                pkts[i] = create_ipv4_udp_packet();//rte_pktmbuf_alloc(pktmbuf_pool_g);
-                pmeta = onvm_get_pkt_meta(pkts[i]);
-                pmeta->destination = destination;
-                pmeta->action = ONVM_NF_ACTION_TONF;
-                pkts[i]->port = 3;
-                pkts[i]->hash.rss = i+1;
-
-                pmeta->destination = 0;
-                pmeta->action = ONVM_NF_ACTION_OUT;
-
-                onvm_nflib_return_pkt(pkts[i]);
-        }
-        return 0;
-}
-int main(int argc, char *argv[]) {
-        int arg_offset;
-
-        const char *progname = argv[0];
-
-        if ((arg_offset = onvm_nflib_init(argc, argv, NF_TAG)) < 0)
-                return -1;
-        argc -= arg_offset;
-        argv += arg_offset;
-
-        if (parse_app_args(argc, argv, progname) < 0)
-                rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
-
-        struct rte_mbuf* pkts[NUM_PKTS];
-        int i;
-
         pktmbuf_pool_g = rte_mempool_lookup(PKTMBUF_POOL_NAME);
         if(pktmbuf_pool_g == NULL) {
                 rte_exit(EXIT_FAILURE, "Cannot find mbuf pool!\n");
         }
-        printf("Creating %d packets to send to %d\n", NUM_PKTS, destination);
+        printf("Creating %d packets to send to %d\n", NUM_PKTS, 0);
         for (i=0; i < NUM_PKTS; i++) {
                 struct onvm_pkt_meta* pmeta;
                 //pkts[i] = rte_pktmbuf_alloc(pktmbuf_pool_g);
@@ -273,9 +269,24 @@ int main(int argc, char *argv[]) {
 
                 onvm_nflib_return_pkt(pkts[i]);
         }
+        return;
+}
+int main(int argc, char *argv[]) {
+        int arg_offset;
 
-        //onvm_nflib_run(nf_info, &packet_handler);
-        onvm_nflib_run_callback(nf_info, &packet_handler, callback_fp);
+        const char *progname = argv[0];
+
+        if ((arg_offset = onvm_nflib_init(argc, argv, NF_TAG)) < 0)
+                return -1;
+        argc -= arg_offset;
+        argv += arg_offset;
+
+        if (parse_app_args(argc, argv, progname) < 0)
+                rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
+
+        send_initial_pkts();
+
+        onvm_nflib_run(nf_info, &packet_handler);
         printf("If we reach here, program is ending");
         return 0;
 }

@@ -427,8 +427,8 @@ int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, 
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
         return onv_pkt_send_on_alt_port(rx,pkts,rx_count);
 #else
-        onvm_pkt_drop_batch(pkts, rx_count);
-        return 0;
+        //onvm_pkt_drop_batch(pkts, rx_count);
+        //return 0;
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
 
         //if(NULL == nf0_cl) nf0_cl = &clients[0];
@@ -532,7 +532,7 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
                                         onv_pkt_send_on_alt_port(NULL,&pkts[i],1);
 #else
-                                        onvm_pkt_drop_batch(pkts[i], 1);
+                                        onvm_pkt_drop_batch(&pkts[i], 1);
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
                                 }
                                 break;

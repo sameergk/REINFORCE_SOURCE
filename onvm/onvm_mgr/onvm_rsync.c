@@ -130,6 +130,11 @@ extern uint32_t nf_mgr_id;
 rsync_stats_t rsync_stat;
 
 #define PACKET_READ_SIZE_LARGE  (PACKET_READ_SIZE * 2)
+
+#ifdef __DEBUG_LOGS__
+#define ENABLE_EXTRA_RSYNC_PRINT_MSGS
+#endif
+
 /***********************Internal Functions************************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
 static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
@@ -165,7 +170,7 @@ static uint8_t log_transaction_id(uint8_t tid) {
         return (trans_queue[tid] = tid);
 }
 static uint8_t clear_transaction_id (uint8_t tid) {
-        return (trans_queue[tid]^= tid);
+        return (trans_queue[tid]=0); //return (trans_queue[tid]^= tid);
 }
 /***********************DPDK TIMER FUNCTIONS**********************************/
 static void
@@ -202,10 +207,12 @@ static void bswap_rsync_hdr_data(state_tx_meta_t *meta, int to_be) {
                 //uint8_t *pdata = rsync_req->data;
         }
 }
-//static
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+static
 inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt);
-//static
+static
 inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt) {
+
         printf("TYPE: %" PRIu8 "\n", rsync_pkt->meta.state_type & 0b11111111);
         printf("NF_ID: %" PRIu8 "\n", rsync_pkt->meta.nf_or_svc_id & 0b11111111);
         printf("TRAN_ID: %" PRIu8 "\n", rsync_pkt->meta.trans_id & 0b11111111);
@@ -214,6 +221,7 @@ inline int rsync_print_rsp_packet(transfer_ack_packet_hdr_t *rsync_pkt) {
         printf("Reserved: %" PRIu32 "\n", rte_be_to_cpu_32(rsync_pkt->meta.reserved));
         return rsync_pkt->meta.state_type;
 }
+#endif
 static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t meta, uint8_t *pData, uint32_t data_len) {
         struct rte_mbuf *out_pkt = NULL;
         //struct onvm_pkt_meta *pmeta = NULL;
@@ -437,6 +445,7 @@ static int rsync_tx_ts_state_from_remote(state_tx_meta_t *meta, uint8_t *pData, 
 static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *pData,  uint16_t data_len) {
         void *pReplicaStateMempool = NULL;
         if (likely(STATE_TYPE_NF_MEMPOOL == meta->state_type)) {
+                //ideally sync should happen only on the standby NF ID; Sender could be any of them, recepient should always be standby
                 pReplicaStateMempool = clients[get_associated_active_or_standby_nf_id(meta->nf_or_svc_id)].nf_state_mempool;
         }else if(STATE_TYPE_SVC_MEMPOOL == meta->state_type) {
                 pReplicaStateMempool = services_state_pool[meta->nf_or_svc_id];
@@ -447,9 +456,25 @@ static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *pData,  ui
         rte_memcpy(pDst, pData, MIN(data_len, DIRTY_MAP_PER_CHUNK_SIZE)); //should be MIN(pkt->data_len, DIRTY_MAP_PER_CHUNK_SIZE)
         return 0;
 }
-#define REMOTE_SYNC_WAIT_INTERVAL   (100*1000)  // 100 micro seconds
-#define MAX_TRANS_COMMIT_WAIT_COUNTER   (5)     //depends on RTT (between 2 nodes, it is observed to be around 350 micro seconds)
+/**
+ * Note: The Sync logic wait time greatly impacts the overall throughput and latency factors for all the NFs in the chain.
+ * Wait Time:   0(Bypass mode)          10ns            100ns           500ns       200us       500us
+ * Baseline:
+ * Monitor:     8.45Mpps(11-643us)      8.15Mpps        8.11Mpps        2.90Mpps    2.06Mpps    1.08Mpps
+ * VTAG:        8.9Mpps                 6.25Mpps        4.28Mpps        1.5Mpps     1.65Mpps!   0.95Mpps
+ * DPI:         4.10Mpps                4.10Mpps        3.57Mpps        1.11Mpps    1.51Mpps!   0.91Mpps
+ * With single NF, average packet latency is around 330us; Ideally expect around 20-30 but we are 10 times higher;
+ * Hence choose a value of around 200-500us as operational speed; i.e the time it takes to send the packets and get the ack back.
+ * If we choose to assume like FTMB, once packets are sent out they are committed (Output commit property); then we can use the BYPASS MODE and achieve full flexibility
+ * Note: The value we choose here and the rationale for choosing the BFD timer values need to be coherent.
+ */
+#define REMOTE_SYNC_WAIT_INTERVAL   (100*1000)  //(100*1000) 100 micro seconds
+#define MAX_TRANS_COMMIT_WAIT_COUNTER   (2)     //depends on RTT (between 2 nodes, it is observed to be around 350 micro seconds)
 static int rsync_wait_for_commit_ack(uint8_t trans_id) {
+#ifdef BYPASS_WAIT_ON_TRANSACTIONS
+        clear_transaction_id(trans_id);
+        return 0;
+#endif
         struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         int wait_counter = 0; //hack till remote_node also sends
         do {
@@ -460,6 +485,9 @@ static int rsync_wait_for_commit_ack(uint8_t trans_id) {
         return 0;
 }
 static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count) {
+#ifdef BYPASS_WAIT_ON_TRANSACTIONS
+        return 0;
+#endif
         uint8_t i; uint8_t wait_needed=0;
         //push the trans_ids to trans_queue
         for(i=0; i< count; i++) {
@@ -468,7 +496,7 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count) {
         //TEST_HACK to bypass wait_on_acks //return wait_needed;
 
         //poll/wait till trans_queue[ids[]] is cleared.
-        struct timespec req = {0,100}, res = {0,0};
+        struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         int wait_counter = 0; //hack till remote_node also sends
         do {
                 wait_needed= 0;
@@ -730,13 +758,15 @@ static int extract_and_parse_tx_port_packets(void) {
 }
 /***********************PACKET TRANSMIT FUNCTIONS******************************/
 /* PACKET RECEIVE FUNCTIONS */
-static inline int rsync_process_req_packet(__attribute__((unused)) state_transfer_packet_hdr_t *rsync_req, uint8_t in_port) {
+static inline int rsync_process_req_packet(__attribute__((unused)) state_transfer_packet_hdr_t *rsync_req, uint8_t in_port, uint16_t data_len) {
 
         state_tx_meta_t meta_out = rsync_req->meta;
         struct rte_mbuf *pkt = NULL;
 
         bswap_rsync_hdr_data(&meta_out, 0);
-        //printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+        printf("\n Received RSYNC Request Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", meta_out.trans_id, meta_out.state_type, meta_out.nf_or_svc_id, meta_out.start_offset);
+#endif
 
         //For Tx_TS State:  copy sent data from the start_offset to the mempool.
         //For NF_STATE_MEMORY: <Communicate to Standby NF, if none; then it must be instantiated first; then send message to NFLIB so that it can copy the state
@@ -745,23 +775,23 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         switch(meta_out.state_type) {
         case STATE_TYPE_TX_TS_TABLE:
                 //update TX_TS_TABLE and send Response to TID
-                rsync_tx_ts_state_from_remote(&meta_out, rsync_req->data, rte_be_to_cpu_16(pkt->data_len));
+                rsync_tx_ts_state_from_remote(&meta_out, rsync_req->data, MIN(data_len, MAX_STATE_SIZE_PER_PACKET));
                 break;
         case STATE_TYPE_NF_MEMPOOL:
                 //update NF_MEMPOOL_TABLE and send Response to TID
-                rsync_nf_state_from_remote(&meta_out, rsync_req->data, rte_be_to_cpu_16(pkt->data_len));
+                rsync_nf_state_from_remote(&meta_out, rsync_req->data, MIN(data_len, MAX_STATE_SIZE_PER_PACKET));
                 break;
         case STATE_TYPE_SVC_MEMPOOL:
                 //update SVC_MEMPOOL_TABLE and send Response to TID
-                rsync_nf_state_from_remote(&meta_out, rsync_req->data, rte_be_to_cpu_16(pkt->data_len));
+                rsync_nf_state_from_remote(&meta_out, rsync_req->data, MIN(data_len, MAX_STATE_SIZE_PER_PACKET));
                 break;
         default:
                 //unknown packet type;
                 return meta_out.state_type;
                 break;
         }
-
-        //send response packet
+        //rte_be_to_cpu_16(pkt->data_len)
+        //send response packet//printf("Prepare Response Message with state:%d\n", meta_out.state_type);
         meta_out.state_type = (meta_out.state_type<<STATE_REQ_TO_RSP_LSH);
         pkt = craft_state_update_packet(in_port,meta_out,NULL,0);
         if(pkt) {
@@ -777,8 +807,10 @@ static inline int rsync_process_rsp_packet(__attribute__((unused)) transfer_ack_
         uint8_t trans_id = rsync_rsp->meta.trans_id;
         if(trans_queue[trans_id]) {
                 trans_queue[trans_id] = 0;
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
                 //printf("\n Received RSYNC Response Packet with Transaction:[%d] for [Type:%d, SVC/NFID:%d, offset:[%d]] !\n", rsync_rsp->meta.trans_id, rsync_rsp->meta.state_type, rsync_rsp->meta.nf_or_svc_id, rsync_rsp->meta.start_offset);
                 printf("\n Received RSYNC Response:: Transaction:[%d] for [Type:%d, SVC/NFID:%d] got committed!\n", trans_id, rsync_rsp->meta.state_type, rsync_rsp->meta.nf_or_svc_id);
+#endif
         }
         //will it be better to copy to temp and byte swap then byteswap packet memory?
         //bswap_rsync_hdr_data(&rsync_rsp->meta, 0);
@@ -799,7 +831,9 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
         for(i=0; i < rx_count; i++) {
                 //eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
                 rsycn_pkt = (transfer_ack_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
-                //printf("Received RSYNC Message Type [%d]:\n",rsync_print_rsp_packet(rsycn_pkt));
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+                printf("Received RSYNC Message Type [%d]:\n",rsync_print_rsp_packet(rsycn_pkt));
+#endif
                 if(rsycn_pkt) {
                         if( STATE_TYPE_RSP_MASK & rsycn_pkt->meta.state_type) {
                                 //process the response packet: check for Tran ID and unblock 2 phase commit..
@@ -807,7 +841,7 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
                         }
                         else {
                                 rsync_req = (state_transfer_packet_hdr_t*)(rte_pktmbuf_mtod(pkts[i], uint8_t*) + sizeof(struct ether_hdr));
-                                rsync_process_req_packet(rsync_req, pkts[i]->port);
+                                rsync_process_req_packet(rsync_req, pkts[i]->port, rte_be_to_cpu_16(pkts[i]->data_len));
                                 //process rsync_req packet: check the nf_svd_id; extract data and update mempool memory of respective NFs
                                 //Once you receive last flag or flag with different Transaction ID then, Generate response packet for the (current) marked transaction.
                         }

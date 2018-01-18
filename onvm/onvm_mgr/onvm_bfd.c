@@ -127,8 +127,8 @@ static void
 bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
         //printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
-        send_bfd_echo_packets();
         check_bdf_remote_status();
+        send_bfd_echo_packets();
         return;
 }
 static inline int initialize_bfd_timers(void) {
@@ -243,7 +243,12 @@ static void send_bfd_echo_packets(void) {
         for(i=0; i< ports->num_ports; i++) {
                 if(Init == bfd_sess_info[i].local_state) {
                         bfd_sess_info[i].local_state = Up;
-                } else if (Down == bfd_sess_info[i].local_state || AdminDown == bfd_sess_info[i].local_state) continue;
+                }else if (Down == bfd_sess_info[i].local_state) {
+                        bfd_sess_info[i].local_state = Up; //bypass handshake protocol just start with run.
+                }else if (AdminDown == bfd_sess_info[i].local_state) continue;
+
+                //Avoid sending to the node that is explicitly marked as Down or Admin down
+                if (Down == bfd_sess_info[i].remote_state || AdminDown == bfd_sess_info[i].remote_state) continue;
 
                 pkt = create_bfd_packet();
                 if(pkt) {
@@ -262,7 +267,7 @@ static void check_bdf_remote_status(void) {
                 elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
                 if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
                         //Shift from Up to Down and notify Link Down Status
-                        printf("Port[%d]: BFD elapserd time:%lld exceeded Allowed Time_us:%d\n", i, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
+                        printf("Port[%d]: BFD elapsed time:%lld exceeded Allowed Time_us:%d\n", i, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
                         bfd_sess_info[i].remote_state = Down;
                         if(notifier_cb) {
                                 notifier_cb(i,BFD_STATUS_REMOTE_DOWN);
