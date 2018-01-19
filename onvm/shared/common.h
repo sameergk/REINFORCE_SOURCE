@@ -313,8 +313,8 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
-#define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
+#define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.
 #define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.
 ////#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
 #ifndef RESL_UPDATE_MODE_PER_PACKET
@@ -352,7 +352,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ONVM_NUM_RSYNC_THREADS ((int)1)
 #define ONVM_NUM_RSYNC_PORTS    (RTE_MAX_ETHPORTS)      //(3)     //2 + 1 for rest
 #define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
-#define TX_RSYNC_TX_PORT_RING_SIZE      RTE_MP_TX_DESC_DEFAULT
+#define TX_RSYNC_TX_PORT_RING_SIZE      CLIENT_QUEUE_RINGSIZE   //RTE_MP_TX_DESC_DEFAULT
 #define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"
 #define TX_RSYNC_TX_LATCH_RING_SIZE     (8*1024)
 #define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"

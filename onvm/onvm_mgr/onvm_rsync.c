@@ -69,6 +69,8 @@
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+//10Mpps (normal rate); => for ~ 500us RTT, to maximize handle packets worth 1RTT = 10Mpps * 500us
+#define MAX_PACKETS_IN_A_ROUND      (5000)  //can be dynamically adjusted based on the Hysteresis of Rx port rates.
 
 struct rte_timer nf_status_checkpoint_timer;
 #define RSYNC_CHECK_INTERVAL_NS     (100*1000)
@@ -598,7 +600,7 @@ int transmit_tx_port_packets(void) {
                                         sent = send_packets_out(port,RSYNC_TX_PORT_QUEUE_ID_0, &pkts[i],1);
                                 }
                         } else {
-#if 1
+#if 0 // note modified to use single port; switch to 1 if use multiple port array tx_port_ring[]
                                 sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_0, pkts,count);
 #else
                                 for(i=0; i < count;i++) {
@@ -698,6 +700,7 @@ static int extract_and_parse_tx_port_packets(void) {
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_port_ring[j]);
+                unsigned max_count = 0;
                 //printf("\n %d packets in tx_port_ring[%d]\n", tx_count, j);
                 while(tx_count) {
                         //retrieve batch of packets
@@ -750,8 +753,15 @@ static int extract_and_parse_tx_port_packets(void) {
                                 rsync_stat.drop_count_tx_nf_state_latch_ring[j] += (out_pkts_nf_count -sent);
 #endif
                         }
-                        if(tx_count > count) tx_count-=count;
-                        else break;
+                        max_count+=count;
+                        if(tx_count > count){
+                                tx_count-=count;
+                        }
+                        else {
+                                //break;
+                                if(max_count >= MAX_PACKETS_IN_A_ROUND) break;
+                                tx_count = rte_ring_count(tx_port_ring[j]);
+                        }
                 }
         }
         return ret;

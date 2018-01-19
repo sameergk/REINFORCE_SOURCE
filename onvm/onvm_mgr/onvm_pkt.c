@@ -275,7 +275,7 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
-        uint16_t enq_port = ((port > ONVM_NUM_RSYNC_PORTS)?(ONVM_NUM_RSYNC_PORTS-1):(port));
+        uint16_t enq_port = port;//0; //((port > ONVM_NUM_RSYNC_PORTS)?(ONVM_NUM_RSYNC_PORTS-1):(port));
         sent = rte_ring_enqueue_burst(tx_port_ring[enq_port], (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
         //sent = rte_ring_enqueue_burst(tx_port_ring, (void **)tx->port_tx_buf[port].buffer, tx->port_tx_buf[port].count);
         if (unlikely(sent < tx->port_tx_buf[port].count)) {
@@ -475,7 +475,7 @@ onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onv
         if (flow_entry && flow_entry->sc) {
 
 #if defined(NF_BACKPRESSURE_APPROACH_2) || defined(ENABLE_NF_BASED_BKPR_MARKING)
-                // this information is needed only for NF based throttling apporach; packet drop approach is more in-line.
+                // this information is needed only for NF based throttling approach; packet drop approach is more in-line.
                 if(flow_entry->sc->nf_instance_id[meta->chain_index] != (uint8_t)cl->instance_id)
                         flow_entry->sc->nf_instance_id[meta->chain_index] = (uint8_t)cl->instance_id;
 #endif
