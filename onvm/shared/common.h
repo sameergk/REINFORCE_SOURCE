@@ -352,14 +352,16 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ONVM_NUM_RSYNC_THREADS ((int)1)
 #define ONVM_NUM_RSYNC_PORTS    (RTE_MAX_ETHPORTS)      //(3)     //2 + 1 for rest
 #define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
-#define TX_RSYNC_TX_PORT_RING_SIZE      CLIENT_QUEUE_RINGSIZE   //RTE_MP_TX_DESC_DEFAULT
+#define TX_RSYNC_TX_PORT_RING_SIZE      RTE_MP_TX_DESC_DEFAULT //(CLIENT_QUEUE_RINGSIZE) //RTE_MP_TX_DESC_DEFAULT
 #define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"
 #define TX_RSYNC_TX_LATCH_RING_SIZE     (8*1024)
 #define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"
 #define TX_RSYNC_NF_LATCH_RING_SIZE     (8*1024)
 
-#define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions
-//#define BYPASS_WAIT_ON_TRANSACTIONS     //to bypass wait on transactions and assume send=success; (Do not enable!)
+#define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions in a round;
+//#define BYPASS_WAIT_ON_TRANSACTIONS       //to bypass wait on transactions and assume send=success; (Do not enable!)
+#define ENABLE_OPPROTUNISTIC_MAX_POLL       //Enable to opportunistically maxout packets per transaction; induce more ppkt delay but gain throughput improvement.
+#define ENABLE_DOUBLE_BUFFERING_MODE        //Enable double buffering scheme such that we minimize the effective time on wait_for_trans_complete() and allow to send more (double) the transactions
 #else
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif

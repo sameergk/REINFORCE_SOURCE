@@ -282,11 +282,9 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
 
                 save_packet_state(vlan_ft_index, vlan_tag);
 
-                /* rte_vlan_strip(pkt);
-                //eth->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);  //strip function doesnt restore; hence must restore eth type explicitly,
+                rte_vlan_strip(pkt);
+                eth->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);  //strip function doesnt restore; hence must restore eth type explicitly,
                 //printf("\n After PKT_SIZE:0x%x, After NH [0x%x] !\n", pkt->pkt_len, rte_be_to_cpu_16(eth->ether_type));
-                 *
-                 */
         }
         else if (ETHER_TYPE_VLAN == rte_be_to_cpu_16(eth->ether_type)) {
                 /*

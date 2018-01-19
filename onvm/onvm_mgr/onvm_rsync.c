@@ -69,11 +69,11 @@
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
-//10Mpps (normal rate); => for ~ 500us RTT, to maximize handle packets worth 1RTT = 10Mpps * 500us
-#define MAX_PACKETS_IN_A_ROUND      (5000)  //can be dynamically adjusted based on the Hysteresis of Rx port rates.
+#define MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE    (5000)  //10Mpps (normal rate); => for ~ 500us RTT, to maximize handle packets worth 1RTT = 10Mpps * 500us
+#define MAX_PACKETS_IN_A_ROUND      MIN(MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE, TX_RSYNC_TX_LATCH_RING_SIZE)  //note: this value can be dynamically adjusted based on the Hysteresis of Rx port rates.
 
 struct rte_timer nf_status_checkpoint_timer;
-#define RSYNC_CHECK_INTERVAL_NS     (100*1000)
+#define RSYNC_CHECK_INTERVAL_NS     (100*1000)  // Every 100 micro seconds
 #define NF_CHECKPOINT_PERIOD_IN_US  (100)       // use high precision 100us; ensure that it is at least 1RTT
 
 #define NEED_REMOTE_TS_TABLE_SYNC   (0x01)
@@ -758,9 +758,15 @@ static int extract_and_parse_tx_port_packets(void) {
                                 tx_count-=count;
                         }
                         else {
-                                //break;
-                                if(max_count >= MAX_PACKETS_IN_A_ROUND) break;
+#ifdef ENABLE_OPPROTUNISTIC_MAX_POLL
+                                if(max_count >= MAX_PACKETS_IN_A_ROUND) {
+                                        break;
+                                }
                                 tx_count = rte_ring_count(tx_port_ring[j]);
+#else
+                                //naive scoreboarding approach- that esnures to process 1 lot of packets (as seen at start of processing)
+                                break;
+#endif
                         }
                 }
         }
