@@ -67,13 +67,22 @@ typedef struct rsync_stats {
         uint64_t enq_count_tx_nf_state_latch_ring[RTE_MAX_ETHPORTS];
         uint64_t drop_count_tx_nf_state_latch_ring[RTE_MAX_ETHPORTS];
 
+        //perhaps better to ignore the double buffer enqueue counters
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+        uint64_t enq_coun_tx_tx_state_latch_db_ring[RTE_MAX_ETHPORTS];
+        uint64_t drop_count_tx_tx_state_latch_db_ring[RTE_MAX_ETHPORTS];
+
+        uint64_t enq_count_tx_nf_state_latch_db_ring[RTE_MAX_ETHPORTS];
+        uint64_t drop_count_tx_nf_state_latch_db_ring[RTE_MAX_ETHPORTS];
+#endif
+
         uint64_t enq_count_tx_port_ring[RTE_MAX_ETHPORTS];
         uint64_t drop_count_tx_port_ring[RTE_MAX_ETHPORTS];
 
 }rsync_stats_t;
 extern rsync_stats_t rsync_stat;
 /********************************Interfaces***********************************/
-
+#define CHECK_IF_ANY_ONE_BIT_SET(a) (a && !(a & (a-1)))
 /********************************Interfaces***********************************/
 int rsync_main(__attribute__((unused)) void *arg);
 

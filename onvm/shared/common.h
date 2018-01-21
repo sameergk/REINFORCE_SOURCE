@@ -351,17 +351,30 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 #define ONVM_NUM_RSYNC_THREADS ((int)1)
 #define ONVM_NUM_RSYNC_PORTS    (RTE_MAX_ETHPORTS)      //(3)     //2 + 1 for rest
+#define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions in a round;
+//#define BYPASS_WAIT_ON_TRANSACTIONS       //to bypass wait on transactions and assume send=success; (Do not enable!)
+#define ENABLE_OPPROTUNISTIC_MAX_POLL       //Enable to opportunistically maxout packets per transaction; induce more ppkt delay but gain throughput improvement.
+#define ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE        //Enable double buffering scheme such that we minimize the effective time on wait_for_trans_complete() and allow to send more (double) the transactions
+
 #define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
-#define TX_RSYNC_TX_PORT_RING_SIZE      RTE_MP_TX_DESC_DEFAULT //(CLIENT_QUEUE_RINGSIZE) //RTE_MP_TX_DESC_DEFAULT
+#define TX_RSYNC_TX_PORT_RING_SIZE      (CLIENT_QUEUE_RINGSIZE*2) //(CLIENT_QUEUE_RINGSIZE*2) //(CLIENT_QUEUE_RINGSIZE) //RTE_MP_TX_DESC_DEFAULT
 #define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"
 #define TX_RSYNC_TX_LATCH_RING_SIZE     (8*1024)
 #define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"
 #define TX_RSYNC_NF_LATCH_RING_SIZE     (8*1024)
 
-#define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions in a round;
-//#define BYPASS_WAIT_ON_TRANSACTIONS       //to bypass wait on transactions and assume send=success; (Do not enable!)
-#define ENABLE_OPPROTUNISTIC_MAX_POLL       //Enable to opportunistically maxout packets per transaction; induce more ppkt delay but gain throughput improvement.
-#define ENABLE_DOUBLE_BUFFERING_MODE        //Enable double buffering scheme such that we minimize the effective time on wait_for_trans_complete() and allow to send more (double) the transactions
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#define _TX_RSYNC_TX_LATCH_DB_RING_NAME    "_TX_RSYNC_TX_%u_LATCH_DB" //"_TX_RSYNC_TX_LATCH"
+#define _TX_RSYNC_NF_LATCH_DB_RING_NAME    "_TX_RSYNC_NF_%u_LATCH_DB" //"_TX_RSYNC_NF_LATCH"
+#define TX_RSYNC_TX_LATCH_DB_RING_SIZE  (TX_RSYNC_TX_LATCH_RING_SIZE)
+#define TX_RSYNC_NF_LATCH_DB_RING_SIZE  (TX_RSYNC_NF_LATCH_RING_SIZE)
+//enable to internally check and clear transactions with elapsed timers ( > 2RTT)
+#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS
+//Double Buffering scheme must use Batched Transactions
+#ifndef USE_BATCHED_RSYNC_TRANSACTIONS
+#define USE_BATCHED_RSYNC_TRANSACTIONS
+#endif
+#endif
 #else
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif
@@ -876,6 +889,20 @@ get_rsync_tx_nf_state_latch_ring_name(unsigned id) {
         snprintf(buffer, sizeof(buffer) - 1, _TX_RSYNC_NF_LATCH_RING_NAME, id);
         return buffer;
 }
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+static inline const char *
+get_rsync_tx_tx_state_latch_db_ring_name(unsigned id) {
+        static char buffer[sizeof(_TX_RSYNC_TX_LATCH_DB_RING_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, _TX_RSYNC_TX_LATCH_DB_RING_NAME, id);
+        return buffer;
+}
+static inline const char *
+get_rsync_tx_nf_state_latch_db_ring_name(unsigned id) {
+        static char buffer[sizeof(_TX_RSYNC_NF_LATCH_DB_RING_NAME) + 2];
+        snprintf(buffer, sizeof(buffer) - 1, _TX_RSYNC_NF_LATCH_DB_RING_NAME, id);
+        return buffer;
+}
+#endif
 #endif
 
 static inline unsigned

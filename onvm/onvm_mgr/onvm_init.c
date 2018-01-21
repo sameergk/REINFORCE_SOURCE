@@ -80,12 +80,19 @@ void **services_state_pool;
 struct rte_mempool *per_flow_ts_pool;
 //Allocated Mempool that can be used to store the Tx Packets TS info
 void *onvm_mgr_tx_per_flow_ts_info;
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+void *onvm_mgr_tx_per_flow_ts_info_db;
+#endif
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 struct rte_ring *tx_port_ring[RTE_MAX_ETHPORTS];           //ring used by NFs and Other Tx threads to transmit out port packets
 struct rte_ring *tx_tx_state_latch_ring[RTE_MAX_ETHPORTS]; //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
 struct rte_ring *tx_nf_state_latch_ring[RTE_MAX_ETHPORTS]; //ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+struct rte_ring *tx_tx_state_latch_db_ring[RTE_MAX_ETHPORTS]; //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+struct rte_ring *tx_nf_state_latch_db_ring[RTE_MAX_ETHPORTS]; //ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#endif
 #endif
 
 uint16_t **services;
@@ -377,13 +384,18 @@ static int init_service_state_pool(void) {
 #endif
 #ifdef ENABLE_PER_FLOW_TS_STORE
 static int init_per_flow_ts_pool(void) {
-        per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, MAX_CLIENTS+1,
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS +2)
+#else
+#define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS +1)
+#endif
+        per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, PER_FLOW_TS_POOL_COUNT,
                         _PER_FLOW_TS_SIZE, _PER_FLOW_TS_CACHE,
                                 0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
 
                 if(NULL == per_flow_ts_pool) {
                         printf("Failed to Create mbuf service state pool '%s' with cache size...\n", _PER_FLOW_TS_MEMPOOL_NAME);
-                        per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, MAX_CLIENTS+1,
+                        per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, PER_FLOW_TS_POOL_COUNT,
                                         _PER_FLOW_TS_SIZE, 0,
                                 0, NULL, NULL, NULL, NULL, rte_socket_id(), NO_FLAGS);
                 }
@@ -401,7 +413,18 @@ static int init_rsync_tx_rings(void) {
                 const char * tx_p_name = get_rsync_tx_port_ring_name(i);
                 const char * tx_s_name = get_rsync_tx_tx_state_latch_ring_name(i);
                 const char * tx_n_name = get_rsync_tx_nf_state_latch_ring_name(i);
-
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+                const char * tx_s_name_db = get_rsync_tx_tx_state_latch_db_ring_name(i);
+                const char * tx_n_name_db = get_rsync_tx_nf_state_latch_db_ring_name(i);
+                //Double buffering: additional ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+                tx_tx_state_latch_db_ring[i] = rte_ring_create(tx_s_name_db, TX_RSYNC_TX_LATCH_DB_RING_SIZE,rte_socket_id(),RING_F_SP_ENQ|RING_F_SC_DEQ);
+                if (NULL == tx_tx_state_latch_db_ring[i])
+                        rte_exit(EXIT_FAILURE, "Cannot create Tx_tx_state_latch_db_ring Ring\n");
+                //Double buffering: additional ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+                tx_nf_state_latch_db_ring[i] = rte_ring_create(tx_n_name_db, TX_RSYNC_NF_LATCH_DB_RING_SIZE,rte_socket_id(),RING_F_SP_ENQ|RING_F_SC_DEQ);
+                if (NULL == tx_nf_state_latch_db_ring[i])
+                        rte_exit(EXIT_FAILURE, "Cannot create tx_nf_state_latch_db_ring Ring\n");
+#endif
                 //ring used by NFs and Other Tx threads to transmit out port packets
                 tx_port_ring[i] = rte_ring_create(tx_p_name, TX_RSYNC_TX_PORT_RING_SIZE,rte_socket_id(),RING_F_SC_DEQ);
                 if (NULL == tx_port_ring[i])
@@ -751,6 +774,11 @@ init_shm_rings(void) {
         if(rte_mempool_get(per_flow_ts_pool,&onvm_mgr_tx_per_flow_ts_info) < 0) {
                 rte_exit(EXIT_FAILURE, "Failed to get onvm_mgr per_flow_ts_info memory");
         }
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+        if(rte_mempool_get(per_flow_ts_pool,&onvm_mgr_tx_per_flow_ts_info_db) < 0) {
+                rte_exit(EXIT_FAILURE, "Failed to get onvm_mgr per_flow_ts_info_db memory");
+        }
+#endif
 #endif
         return 0;
 }

@@ -164,12 +164,19 @@ extern void **services_state_pool;
 #ifdef ENABLE_PER_FLOW_TS_STORE
 /* TS Info that can be accessed and updated by MGR Tx Threads and exported */
 extern void *onvm_mgr_tx_per_flow_ts_info;
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+extern void *onvm_mgr_tx_per_flow_ts_info_db;
+#endif
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 extern struct rte_ring *tx_port_ring[RTE_MAX_ETHPORTS];     //ONVM_NUM_RSYNC_PORTS      //ring used by NFs and Other Tx threads to transmit out port packets
 extern struct rte_ring *tx_tx_state_latch_ring[RTE_MAX_ETHPORTS];  //ONVM_NUM_RSYNC_PORTS //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
 extern struct rte_ring *tx_nf_state_latch_ring[RTE_MAX_ETHPORTS ]; //ONVM_NUM_RSYNC_PORTS//ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+extern struct rte_ring *tx_tx_state_latch_db_ring[RTE_MAX_ETHPORTS]; //additional Double buffer ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
+extern struct rte_ring *tx_nf_state_latch_db_ring[RTE_MAX_ETHPORTS]; //additional Double buffer ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.
+#endif
 #if 0
 extern struct rte_ring *tx_port_ring;           //ring used by NFs and Other Tx threads to transmit out port packets
 extern struct rte_ring *tx_tx_state_latch_ring; //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update

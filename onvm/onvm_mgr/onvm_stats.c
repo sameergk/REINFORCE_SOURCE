@@ -154,10 +154,13 @@ onvm_stats_cleanup(void) {
 void onvm_stats_display_rsync_tx_thread_stats(void);
 void onvm_stats_display_rsync_tx_thread_stats(void) {
         int j = 0;
-        fprintf(stats_out, "Remote Sync\n");
-        fprintf(stats_out,"-------\n");
+        fprintf(stats_out, "Remote Sync rings\n");
+        fprintf(stats_out,"-----------------\n");
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
-                fprintf(stats_out, "Idx:%d, Tx_port_Ring:%d, TX_Latch_Ring:%d, NF_Latch_Ring:%d\n", j, rte_ring_count(tx_port_ring[j]), rte_ring_count(tx_tx_state_latch_ring[j]), rte_ring_count(tx_nf_state_latch_ring[j]));
+                fprintf(stats_out, "Idx:%d, Tx_port_Ring:%d, TX_Latch_Ring:%d, NF_Latch_Ring:%d", j, rte_ring_count(tx_port_ring[j]), rte_ring_count(tx_tx_state_latch_ring[j]), rte_ring_count(tx_nf_state_latch_ring[j]));
+#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+                fprintf(stats_out, "DB: tx_ts_latch_ring:%d, nf_latch_ring:%d\n",rte_ring_count(tx_tx_state_latch_db_ring[j]), rte_ring_count(tx_nf_state_latch_db_ring[j]));
+#endif
         }
 }
 #endif
