@@ -59,18 +59,26 @@
 #define BFD_PKT_OFFSET (sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr))
 
 typedef struct bfd_session_status {
+        //Active or passive mode: currently all active
         uint8_t mode;
+
+        //State tacking and last known diagnostic messages from the peers
         BFD_StateValue local_state;
         BFD_StateValue remote_state;
         BFD_DiagStateValue local_diags;
         BFD_DiagStateValue remote_diags;
 
+        //Connection descriptors: local node and remote node
         uint64_t local_descr;
         uint64_t remote_descr;
 
+        //Negotiated interval for Tx/Tx communication: currently fixed and not using this field
         uint64_t tx_rx_interval;
+        //TS of last sent packet from local port
         uint64_t last_sent_pkt_ts;
+        //TS of last received packet from remote port
         uint64_t last_rcvd_pkt_ts;
+        //Counter to track missed packets. currently used to slow rate send; as single composite timeout is used.
         uint64_t pkt_missed_counter;
 
 }bfd_session_status_t;
@@ -247,8 +255,13 @@ static void send_bfd_echo_packets(void) {
                         bfd_sess_info[i].local_state = Up; //bypass handshake protocol just start with run.
                 }else if (AdminDown == bfd_sess_info[i].local_state) continue;
 
-                //Avoid sending to the node that is explicitly marked as Down or Admin down
-                if (Down == bfd_sess_info[i].remote_state || AdminDown == bfd_sess_info[i].remote_state) continue;
+                //Avoid sending to the node that is explicitly marked as Down i.e. Admin down
+                if ( AdminDown == bfd_sess_info[i].remote_state) continue;
+                //Else probe at much lower frequency
+                else if (Init == bfd_sess_info[i].remote_state || Down == bfd_sess_info[i].remote_state ) {
+                        if(BFD_SLOW_SEND_RATE_RATIO_COUNTER > bfd_sess_info[i].pkt_missed_counter++) continue;
+                        bfd_sess_info[i].pkt_missed_counter = 0;    //Further, every switch to up should clear this counter. or it is just fine if not reset.
+                }
 
                 pkt = create_bfd_packet();
                 if(pkt) {

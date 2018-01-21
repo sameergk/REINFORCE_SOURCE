@@ -58,6 +58,7 @@
 
 #include <rte_memory.h>
 #include <rte_mbuf.h>
+
 /*****************************Internal headers********************************/
 #if defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) &&                           \
     defined(_POSIX_MONOTONIC_CLOCK)
@@ -122,4 +123,10 @@ inline uint64_t onvm_util_get_elapsed_cpu_cycles_in_us(uint64_t start);
 inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16_t nb_pkts);
 inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint16_t nb_pkts);
 inline int onvm_util_get_marked_packet_timestamp(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
+
+//Add PCAP Dumper facility for replay
+inline int onvm_util_init_pacp_logger(int port, int mode);
+inline int onvm_util_clear_pcap_log(int port);
+inline int onvm_util_log_packets(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
+inline const char* onvm_util_close_and_get_pdump_file(__attribute__((unused)) int port);
 #endif  // _ONVM_COMM_UTILS_H_"

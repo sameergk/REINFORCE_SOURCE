@@ -72,7 +72,7 @@
 #define MAX_RSYNC_TRANSACTIONS (250)    //256 (sizeof(uint8_t)*CHAR_BIT)
 #define REMOTE_SYNC_WAIT_INTERVAL   (100*1000)  //(100*1000) 100 micro seconds
 #define MAX_TRANS_COMMIT_WAIT_COUNTER   (2)     //depends on RTT (between 2 nodes, it is observed to be around 350 micro seconds)
-#define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT (REMOTE_SYNC_WAIT_INTERVAL*MAX_TRANS_COMMIT_WAIT_COUNTER/1000)
+#define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT (REMOTE_SYNC_WAIT_INTERVAL*MAX_TRANS_COMMIT_WAIT_COUNTER/(1000*2))
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
 #endif
 
@@ -1313,8 +1313,11 @@ int rsync_start(__attribute__((unused)) void *arg) {
         return rsync_start_old(arg);
 
 #endif
+
+#ifdef ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE
         return rsync_start_simple_db(arg);
         //return rsync_start_only_db(arg);
+#endif
 
         static uint8_t trans_ids[2] = {0,0}, trans_ids_db[2] = {0,0}; //uint8_t trans_ids[2] = {0,0},tid=0;
         static uint8_t tid=0, to_db=0, tid_db=0;

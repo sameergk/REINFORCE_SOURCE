@@ -43,6 +43,8 @@ endif
 
 LDFLAGS += -L/usr/local/lib
 LDLIBS+= -lzmq
+LDFLAGS+= -L/usr/lib/x86_64-linux-gnu
+LDLIBS+= -lpcap
 #LDFLAGS += ./libzmq.a
 
 # Default target, can be overriden by command line or environment

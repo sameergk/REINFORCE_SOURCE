@@ -70,6 +70,8 @@ LDFLAGS += $(SRCDIR)/../shared/shared/$(RTE_TARGET)/onvm_shared.a
 
 LDFLAGS += -L/usr/local/lib
 LDLIBS+= -lzmq
+LDFLAGS+= -L/usr/lib/x86_64-linux-gnu
+LDLIBS+= -lpcap
 #LDFLAGS += ./libzmq.a
 
 EXTRA_LDLIBS += -lzookeeper_mt -lzooqueue

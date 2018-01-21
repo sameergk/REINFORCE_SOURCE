@@ -60,6 +60,9 @@ CFLAGS += -I$(SRCDIR)/../shared
 
 LDFLAGS += -L/usr/local/lib
 LDLIBS+= -lzmq
+#LDFLAGS+= -L/usr/lib/x86_64-linux-gnu
+#LDLIBS+= -lpcap-dev
+
 #LDFLAGS += ./libzmq.a
 
 #include $(RTE_SDK)/mk/rte.extobj.mk

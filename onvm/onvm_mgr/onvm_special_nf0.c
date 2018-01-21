@@ -51,6 +51,7 @@
 #include "onvm_pkt.h"
 #include "onvm_nf.h"
 #include "onvm_special_nf0.h"
+#include "shared/onvm_comm_utils.h"
 //#include "onvm_stats.h"
 #include "onvm_ft_install.h"
 //#include "shared/onvm_pkt_helper.h"
@@ -603,6 +604,9 @@ int start_special_nf0(void) {
                 onvm_special_nf_arp_responder_init();
                 init_onvm_ft_install();
 
+#ifdef ENABLE_PCAP_CAPTURE
+                onvm_util_init_pacp_logger(0,0);
+#endif
         }
 
         return onvm_nf_is_valid(nf0_cl);
