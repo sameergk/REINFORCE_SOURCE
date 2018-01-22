@@ -211,7 +211,7 @@ typedef struct BfdPacketHeader
   inline bool GetMultipoint() const { return (flags & 0x01);}
   inline void SetMultipoint(bool val) { flags = val ? flags | 0x01 : flags & ~0x01;}
   */
-}BfdPacketHeader;
+} __attribute__((__packed__)) BfdPacketHeader;
 #pragma pack(pop)
 
 /**

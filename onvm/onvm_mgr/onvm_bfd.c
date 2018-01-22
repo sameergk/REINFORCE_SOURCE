@@ -102,6 +102,11 @@ struct rte_mbuf* create_bfd_packet(void);
 int parse_bfd_packet(struct rte_mbuf* pkt);
 static void send_bfd_echo_packets(void);
 static void check_bdf_remote_status(void);
+
+struct rte_mbuf* create_bfd_packet_spcl(BfdPacketHeader *pkt_hdr);
+void send_bfd_echo_packets_spcl(BfdPacketHeader *pkt_hdr);
+int print_bfd_packet(BfdPacket *bfdp);
+//#define BFD_PROFILE_RTT
 /********************** Local Functions Definition ****************************/
 static void init_bfd_session_status(onvm_bfd_init_config_t *bfd_config) {
         uint8_t i = 0;
@@ -145,7 +150,6 @@ static inline int initialize_bfd_timers(void) {
                         rte_lcore_id(), &bfd_status_checkpoint_timer_cb, NULL);
         return 0;
 }
-
 /******************** BFD Packet Processing Functions *************************/
 static inline int bfd_send_packet_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf *tx_pkt) {
         uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, &tx_pkt, 1);
@@ -165,7 +169,17 @@ static void set_bfd_packet_template(uint32_t my_desc) {
         bfd_template.header.rxRequiredMinInt=rte_cpu_to_be_32(BFDMinRxInterval_us);
         bfd_template.header.rxRequiredMinEchoInt=rte_cpu_to_be_32(BFDEchoInterval_us);
 }
-
+int print_bfd_packet(BfdPacket *bfdp) {
+        printf("VersAndDiag: %" PRIu8 "\n", bfdp->header.versAndDiag & 0b11111111);
+        printf("FLAGS: %" PRIu8 "\n", bfdp->header.flags & 0b11111111);
+        printf("Length: %" PRIu8 "\n", bfdp->header.length & 0b11111111);
+        printf("myDisc: %" PRIu32 "\n", rte_be_to_cpu_32(bfdp->header.myDisc));
+        printf("YrDisc: %" PRIu32 "\n", rte_be_to_cpu_32(bfdp->header.yourDisc));
+        printf("txDesiredMinInt: %" PRIu32 "\n", rte_be_to_cpu_32(bfdp->header.txDesiredMinInt));
+        printf("rxRequiredMinInt: %" PRIu32 "\n", rte_be_to_cpu_32(bfdp->header.rxRequiredMinInt));
+        printf("rxRequiredMinEchoInt: %" PRIu32 "\n", rte_be_to_cpu_32(bfdp->header.rxRequiredMinEchoInt));
+        return bfdp->header.flags ;
+}
 static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp) {
         uint8_t port_id = pkt->port; //rem_desc & 0xFF;
         if(port_id < ports->num_ports) {
@@ -183,6 +197,19 @@ static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp)
                 //bfd_sess_info[port_id].remote_state = (BFD_StateValue)bfdp->header.flags;   //todo: parse flag to status
                 bfd_sess_info[port_id].remote_diags = (BFD_DiagStateValue)bfdp->header.versAndDiag; //todo: parse verse_and_diag to diag_status
                 bfd_sess_info[port_id].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
+
+#ifdef BFD_PROFILE_RTT
+                print_bfd_packet(bfdp);
+                if(bfdp->header.flags == 1) {
+                        send_bfd_echo_packets_spcl(&bfdp->header);
+                } else if(bfdp->header.flags == 2){
+                        //uint64_t s_time = (bfdp->header.myDisc | ((bfdp->header.yourDisc)<<32));
+                        uint64_t s_time = rte_be_to_cpu_32(bfdp->header.yourDisc);
+                        s_time <<=32;
+                        s_time |=rte_be_to_cpu_32(bfdp->header.myDisc);
+                        printf("Received Response Message: after a Delay of: %lld\n", (long long int) onvm_util_get_elapsed_cpu_cycles_in_us(s_time));
+                }
+#endif
         }
 }
 
@@ -215,12 +242,22 @@ struct rte_mbuf* create_bfd_packet(void) {
         uhdr->dgram_len = sizeof(BfdPacket);
 
         BfdPacket *bfdp = (BfdPacket *)(&uhdr[1]);
+        memset(bfdp,0,sizeof(BfdPacket));
         bfdp->header.flags = 0;
 
-        rte_memcpy(bfdp, &bfd_template, sizeof(BfdPacketHeader));
+        rte_memcpy(bfdp, &bfd_template, sizeof(BfdPacket));
+
+#ifdef BFD_PROFILE_RTT
+        uint64_t tm = onvm_util_get_current_cpu_cycles();
+        bfdp->header.myDisc = rte_cpu_to_be_32(tm & 0xFFFFFFFF);
+        bfdp->header.yourDisc     = rte_cpu_to_be_32(tm >> 32);
+        bfdp->header.flags       =1;
+#endif
+        //printf("Sending BFD PAcket with following Information\n");
+        //print_bfd_packet(bfdp);
 
         //set packet properties
-        size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) +sizeof(BfdPacket);
+        size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr) + sizeof(BfdPacket);
         pkt->data_len = pkt_size;
         pkt->pkt_len = pkt_size;
 
@@ -230,10 +267,9 @@ int parse_bfd_packet(struct rte_mbuf* pkt) {
         struct udp_hdr *uhdr;
         BfdPacket *bfdp = NULL;
 
-        uhdr = (struct udp_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr));
-        bfdp = (BfdPacket*)(rte_pktmbuf_mtod(pkt, uint8_t*) + BFD_PKT_OFFSET);
+        uhdr = (struct udp_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr));
+        //bfdp = (BfdPacket*)(rte_pktmbuf_mtod(pkt, uint8_t*) + BFD_PKT_OFFSET);
         bfdp = (BfdPacket *)(&uhdr[1]);
-
 
         if(unlikely((sizeof(BfdPacket) > rte_be_to_cpu_16(uhdr->dgram_len)))) {
                 printf("Size of BfdPacket[%d], size of UDP Header Data Len:%d\n", (int) sizeof(BfdPacket), (int) rte_be_to_cpu_16(uhdr->dgram_len));
@@ -345,4 +381,57 @@ int onvm_print_bfd_status(unsigned difftime, __attribute__((unused)) FILE *fp) {
                                 onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts));
         }
         return 0;
+}
+
+struct rte_mbuf* create_bfd_packet_spcl(BfdPacketHeader *pkt_hdr) {
+        //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
+
+        struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool);
+        if(NULL == pktmbuf_pool) {
+                return NULL;
+        }
+
+        /* craft eth header */
+        struct ether_hdr *ehdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
+        /* set ether_hdr fields here e.g. */
+        memset(ehdr,0, sizeof(struct ether_hdr));
+        //memset(&ehdr->s_addr,0, sizeof(ehdr->s_addr));
+        //memset(&ehdr->d_addr,0, sizeof(ehdr->d_addr));
+        //ehdr->ether_type = rte_bswap16(ETHER_TYPE_IPv4);
+        ehdr->ether_type = rte_bswap16(ETHER_TYPE_BFD);     //change to specific type for ease of packet handling.
+
+        /* craft ipv4 header */
+        struct ipv4_hdr *iphdr = (struct ipv4_hdr *)(&ehdr[1]);
+        memset(iphdr,0, sizeof(struct ipv4_hdr));
+
+        /* set ipv4 header fields here */
+        struct udp_hdr *uhdr = (struct udp_hdr *)(&iphdr[1]);
+        /* set udp header fields here, e.g. */
+        uhdr->src_port = rte_bswap16(3784);
+        uhdr->dst_port = rte_bswap16(3784);
+        uhdr->dgram_len = sizeof(BfdPacket);
+
+        BfdPacket *bfdp = (BfdPacket *)(&uhdr[1]);
+        bfdp->header.flags = 0;
+
+        rte_memcpy(bfdp, &bfd_template, sizeof(BfdPacketHeader));
+        bfdp->header.myDisc = pkt_hdr->myDisc;
+        bfdp->header.yourDisc = pkt_hdr->yourDisc;
+        bfdp->header.flags = 2;
+
+        //set packet properties
+        size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) +sizeof(BfdPacket);
+        pkt->data_len = pkt_size;
+        pkt->pkt_len = pkt_size;
+
+        return pkt;
+}
+void send_bfd_echo_packets_spcl(BfdPacketHeader *pkt_hdr) {
+        struct rte_mbuf *pkt = NULL;
+        pkt = create_bfd_packet_spcl(pkt_hdr);
+        if(pkt) {
+                bfd_send_packet_out(0, BFD_TX_PORT_QUEUE_ID, pkt);
+        }
+
+        return ;
 }
