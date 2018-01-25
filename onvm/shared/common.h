@@ -137,7 +137,7 @@
 /* Instance ID of the special NF */
 #define ONVM_SPECIAL_NF_INSTANCE_ID (0)
 
-#define ENABLE_PCAP_CAPTURE
+//#define ENABLE_PCAP_CAPTURE
 #endif //ONVM_ENABLE_SPEACILA_NF
 
 /** Sub features for INTERRUPT_SEMANTICS for NFs */

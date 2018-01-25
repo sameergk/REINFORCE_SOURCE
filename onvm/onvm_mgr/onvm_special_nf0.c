@@ -229,7 +229,8 @@ pcap_session_meta_t pcap_info = {
 inline int onvm_util_init_pacp_logger(__attribute__((unused)) int port, __attribute__((unused)) int mode) {
         if(pcap_info.pd) return EALREADY;
         //pcap_info.pd = pcap_open_dead(DLT_EN10MB, MAX_SNAPLEN);
-        pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_RAW, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
+        //pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_RAW, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
+        pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_EN10MB, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
         if(pcap_info.pd == NULL) return 2;
         pcap_info.pcap_dumper = pcap_dump_open(pcap_info.pd, (const char*)pcap_info.capture_file);
         if(NULL == pcap_info.pcap_dumper) return 3;

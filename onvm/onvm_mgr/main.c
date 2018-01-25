@@ -344,6 +344,9 @@ rx_thread_main(void *arg) {
 #ifdef ENABLE_PACKET_TIMESTAMPING
                                 onvm_util_mark_timestamp_on_RX_packets(pkts, rx_count);
 #endif
+#ifdef ENABLE_PCAP_CAPTURE
+                                onvm_util_log_packets(pkts,NULL,rx_count);
+#endif
 
                                 if(unlikely(i != pkts[0]->port)) { printf("\n got packet with Incorrect i=%d Port mapping! Pkt=%d, ",i, pkts[0]->port);}
                                 // If there is no running NF, we drop all the packets of the batch.
