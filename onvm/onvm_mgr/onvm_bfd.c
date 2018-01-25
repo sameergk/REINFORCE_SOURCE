@@ -80,6 +80,8 @@ typedef struct bfd_session_status {
         uint64_t last_rcvd_pkt_ts;
         //Counter to track missed packets. currently used to slow rate send; as single composite timeout is used.
         uint64_t pkt_missed_counter;
+        //Link Status change counter;
+        uint64_t bfd_status_change_counter;
 
 }bfd_session_status_t;
 
@@ -318,6 +320,7 @@ static void check_bdf_remote_status(void) {
                         //Shift from Up to Down and notify Link Down Status
                         printf("Port[%d]: BFD elapsed time:%lld exceeded Allowed Time_us:%d\n", i, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
                         bfd_sess_info[i].remote_state = Down;
+                        bfd_sess_info[i].bfd_status_change_counter++;
                         if(notifier_cb) {
                                 notifier_cb(i,BFD_STATUS_REMOTE_DOWN);
                         }
@@ -375,8 +378,8 @@ int onvm_print_bfd_status(unsigned difftime, __attribute__((unused)) FILE *fp) {
                         bfd_stat.tx_count, (bfd_stat.tx_count - prev_stat.tx_count)/difftime);
         prev_stat = bfd_stat;
         for(i=0; i< ports->num_ports; i++) {
-                fprintf(fp, "Port:%d Local status:%d, Remote Status:%d rx_us:%"PRIu64" tx_us:%"PRIu64"\n",
-                                i, bfd_sess_info[i].local_state,  bfd_sess_info[i].remote_state,
+                fprintf(fp, "Port:%d Local status:%d, Remote Status:%d  Change count:%"PRIu64" rx_us:%"PRIu64" tx_us:%"PRIu64"\n",
+                                i, bfd_sess_info[i].local_state,  bfd_sess_info[i].remote_state, bfd_sess_info[i].bfd_status_change_counter,
                                 onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_sent_pkt_ts),
                                 onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts));
         }

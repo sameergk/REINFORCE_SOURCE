@@ -184,11 +184,30 @@ launch_nf_clients() {
     echo "*** Exit ONVM_TEST completed!: $cmd, $? ****"
 }
 
+clean_build_examples() {
+NDIR=$(pwd)/examples
+cd $NDIR
 
-clean_build_all() {
-if  [ $clean_make -gt 1 ] ; then
-        return 0
-fi
+#for i in $(find . -maxdepth 1 -type d -exec basename {}\; ); do
+CWD=$(pwd)
+make clean
+make
+return
+
+# no need to recurse and perform make into each subdir 
+#for i in $(find . -maxdepth 1 -type d ); do
+#            echo $(basename ${i})
+#            cd $(basename $i)
+#            make clean
+#            #make
+#            if  [ $clean_make -eq 1 ] ; then
+#                make
+#            fi
+#            cd $CWD
+#        done
+}
+
+clean_build_onvm() {
 CDIR=$(pwd)
 ODIR=$(pwd)/onvm
         cd $ODIR
@@ -198,22 +217,15 @@ ODIR=$(pwd)/onvm
             make
         fi
         cd $CDIR
+}
 
-NDIR=$(pwd)/examples
-cd $NDIR
+clean_build_all() {
+if  [ $clean_make -gt 1 ] ; then
+        return 0
+fi
+clean_build_onvm
 
-#for i in $(find . -maxdepth 1 -type d -exec basename {}\; ); do
-CWD=$(pwd)
-for i in $(find . -maxdepth 1 -type d ); do
-            echo $(basename ${i})
-            cd $(basename $i)
-            make clean 
-            #make
-            if  [ $clean_make -eq 1 ] ; then
-                make
-            fi
-            cd $CWD
-        done
+clean_build_examples
 
 if  [ $clean_make -le 1 ] ; then
         cd $ODIR
@@ -221,14 +233,6 @@ if  [ $clean_make -le 1 ] ; then
         exit 0
 fi
 
-#CDIR=$(pwd)/examples
-#        for i in $(ls -R | grep :); do
-#            DIR=${i%:}                    # Strip ':'
-#            cd $DIR
-#            make clean
-#            make                            # Your command
-#            cd $CDIR
-#        done
 }
 
 start_work() {

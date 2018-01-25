@@ -124,9 +124,4 @@ inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16
 inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint16_t nb_pkts);
 inline int onvm_util_get_marked_packet_timestamp(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
 
-//Add PCAP Dumper facility for replay
-inline int onvm_util_init_pacp_logger(int port, int mode);
-inline int onvm_util_clear_pcap_log(int port);
-inline int onvm_util_log_packets(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
-inline const char* onvm_util_close_and_get_pdump_file(__attribute__((unused)) int port);
 #endif  // _ONVM_COMM_UTILS_H_"

@@ -184,6 +184,29 @@ static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         }
         return 0;
 }
+
+static int save_packet_state_new(__attribute__((unused)) struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
+//return 0;
+        if(mon_state_tbl) {
+                int16_t ft_index = -1;
+#ifdef ENABLE_FT_INDEX_IN_META
+                ft_index = (uint16_t) (meta->ft_index);
+#else
+                {
+                        struct onvm_flow_entry *flow_entry = NULL;
+                        onvm_flow_dir_get_pkt(pkt, &flow_entry);
+                        if(flow_entry)
+                                ft_index = flow_entry->entry_index;
+                }
+#endif
+                if(ft_index>=0) {
+                        mon_state_tbl[ft_index].ft_index = meta->src;
+                        mon_state_tbl[ft_index].pkt_counter +=1;
+                }
+                mon_state_tbl[0].pkt_counter+=1;
+        }
+        return 0;
+}
 #endif //#ifdef ENABLE_NFV_RESL
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
@@ -202,6 +225,7 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         }
 
 #ifdef ENABLE_NFV_RESL
+        return save_packet_state_new(pkt,meta);
         save_packet_state(pkt,meta);
 #endif //#ifdef ENABLE_NFV_RESL
         return 0;
@@ -220,7 +244,12 @@ int main(int argc, char *argv[]) {
 
         if (parse_app_args(argc, argv, progname) < 0)
                 rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
-
+#ifdef ENABLE_NFV_RESL
+        if(nf_info->nf_state_mempool) {
+                dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
+                mon_state_tbl = (monitor_state_info_table_t*)(dirty_state_map+1);
+        }
+#endif
         onvm_nflib_run(nf_info, &packet_handler);
         printf("If we reach here, program is ending");
         return 0;

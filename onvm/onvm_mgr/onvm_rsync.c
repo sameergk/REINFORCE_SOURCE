@@ -62,7 +62,11 @@
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 /* Estimate for determining the most preferred/ optimal Number of Packets that need to be considered for Tx Stats update. */
 #define MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE    (5000)  //10Mpps (normal rate); => for ~ 500us RTT, to maximize handle packets worth 1RTT = 10Mpps * 500us
-#define MAX_PACKETS_IN_A_ROUND      MIN(MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE, TX_RSYNC_TX_LATCH_RING_SIZE)  //note: this value can be dynamically adjusted based on the Hysteresis of Rx port rates.
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+#define MAX_PACKETS_IN_A_ROUND      (MIN(MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE, TX_RSYNC_TX_LATCH_RING_SIZE)/(ENABLE_RSYNC_MULTI_BUFFERING+1))  //note: this value can be dynamically adjusted based on the Hysteresis of Rx port rates.
+#else
+#define MAX_PACKETS_IN_A_ROUND      (MIN(MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE, TX_RSYNC_TX_LATCH_RING_SIZE)/2)  //note: this value can be dynamically adjusted based on the Hysteresis of Rx port rates.
+#endif
 //Batch size for Tx Update and NF State transfer:
 #define PACKET_READ_SIZE_LARGE  (PACKET_READ_SIZE * 2)
 //Return status indicators of the Tx port packet processing and requeue to Internal Rings
@@ -70,12 +74,10 @@
 #define CHECK_FOR_COMMIT_WITH_WAIT (0)
 #define CHECK_FOR_COMMIT_WITH_NO_WAIT (1)
 #define MAX_RSYNC_TRANSACTIONS (250)    //256 (sizeof(uint8_t)*CHAR_BIT)
-#define REMOTE_SYNC_WAIT_INTERVAL   (100*1000)  //(100*1000) 100 micro seconds
+#define REMOTE_SYNC_WAIT_INTERVAL   (1*100*1000)  //(100*1000) 100 micro seconds
 #define MAX_TRANS_COMMIT_WAIT_COUNTER   (2)     //depends on RTT (between 2 nodes, it is observed to be around 350 micro seconds)
-#define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT (REMOTE_SYNC_WAIT_INTERVAL*MAX_TRANS_COMMIT_WAIT_COUNTER/(1000))
-#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-#endif
-
+#define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT ((1*REMOTE_SYNC_WAIT_INTERVAL*MAX_TRANS_COMMIT_WAIT_COUNTER)/(1000))
+//#define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT (150)
 
 #ifdef __DEBUG_LOGS__
 #define ENABLE_EXTRA_RSYNC_PRINT_MSGS
@@ -96,16 +98,24 @@ struct rte_timer nf_status_checkpoint_timer;
 #ifdef ENABLE_PER_FLOW_TS_STORE
 static dirty_mon_state_map_tbl_t *dirty_state_map_tx_ts = NULL;
 static onvm_per_flow_ts_info_t   *tx_ts_table = NULL;
+
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+static dirty_mon_state_map_tbl_t *dirty_state_map_tx_ts_db[ENABLE_RSYNC_MULTI_BUFFERING];
+static onvm_per_flow_ts_info_t   *tx_ts_table_db[ENABLE_RSYNC_MULTI_BUFFERING];
+#else
 static dirty_mon_state_map_tbl_t *dirty_state_map_tx_ts_db = NULL;
 static onvm_per_flow_ts_info_t   *tx_ts_table_db = NULL;
 #endif
 #endif
 
+#endif
+
 //size of mempool = _PER_FLOW_TS_SIZE;
 #define DIRTY_MAP_PER_CHUNK_SIZE (_NF_STATE_SIZE/(sizeof(uint64_t)*CHAR_BIT))
 #define MAX_TX_TS_ENTRIES        ((_NF_STATE_SIZE -sizeof(dirty_mon_state_map_tbl_t))/(sizeof(uint64_t)*CHAR_BIT))
-#endif
+
+
 
 typedef struct remote_node_config {
         uint8_t mac_addr_bytes[ETHER_ADDR_LEN];
@@ -285,12 +295,16 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count, __a
                 nanosleep(&req, &res);
                 if((++wait_counter) > MAX_TRANS_COMMIT_WAIT_COUNTER) break;
         }while(wait_needed);
+#if 0
         //need notifier to clear the transactions
         //clear the transactions.
         for(i=0; i< count; i++) {
                 clear_transaction_id(trans_id_list[i]);
         }
         return 0;
+#else
+        return trans_id_list[0];
+#endif
 }
 /***********************DPDK TIMER FUNCTIONS**********************************/
 static void
@@ -409,7 +423,11 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
         dirty_mon_state_map_tbl_t *dtx = dirty_state_map_tx_ts;
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
         if(to_db) {
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                dtx = dirty_state_map_tx_ts_db[to_db-1];
+#else
                 dtx = dirty_state_map_tx_ts_db;
+#endif
         }
 #endif
         if(likely(dtx && dtx->dirty_index)) {
@@ -630,9 +648,15 @@ static inline uint64_t tx_ts_map_tag_index_to_dirty_chunk_bit_index(uint16_t tx_
 static inline void tx_ts_update_dirty_state_index(uint16_t tx_tbl_index, __attribute__((unused)) uint8_t to_db) {
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
         if(to_db) {
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                if(dirty_state_map_tx_ts_db[to_db-1]) {
+                        dirty_state_map_tx_ts_db[to_db-1]->dirty_index |= tx_ts_map_tag_index_to_dirty_chunk_bit_index(tx_tbl_index);
+                }
+#else
                 if(dirty_state_map_tx_ts_db) {
                         dirty_state_map_tx_ts_db->dirty_index |= tx_ts_map_tag_index_to_dirty_chunk_bit_index(tx_tbl_index);
                 }
+#endif
         } else
 #endif
         if(dirty_state_map_tx_ts) {
@@ -649,10 +673,17 @@ static inline void update_flow_tx_ts_table(uint64_t flow_index,  __attribute__((
         }
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
         if(to_db) {
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                if(tx_ts_table_db[to_db-1]) {
+                        tx_ts_table_db[to_db-1][flow_index].ts = ts;
+                        tx_ts_update_dirty_state_index(flow_index,to_db);
+                }
+#else
                 if(tx_ts_table_db) {
                         tx_ts_table_db[flow_index].ts = ts;
                         tx_ts_update_dirty_state_index(flow_index, to_db);
                 }
+#endif
         } else
 #endif
         if(tx_ts_table) {
@@ -670,10 +701,20 @@ static inline int initialize_tx_ts_table(void) {
                 tx_ts_table = (onvm_per_flow_ts_info_t*)(dirty_state_map_tx_ts+1);
         }
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+        int i = 0;
+        for(; i <ENABLE_RSYNC_MULTI_BUFFERING; ++i ) {
+                if(onvm_mgr_tx_per_flow_ts_info_db[i]) {
+                        dirty_state_map_tx_ts_db[i] = (dirty_mon_state_map_tbl_t*)onvm_mgr_tx_per_flow_ts_info_db[i];
+                        tx_ts_table_db[i] = (onvm_per_flow_ts_info_t*)(dirty_state_map_tx_ts+1);
+                }
+        }
+#else
         if(onvm_mgr_tx_per_flow_ts_info_db) {
                 dirty_state_map_tx_ts_db = (dirty_mon_state_map_tbl_t*)onvm_mgr_tx_per_flow_ts_info_db;
                 tx_ts_table_db = (onvm_per_flow_ts_info_t*)(dirty_state_map_tx_ts+1);
         }
+#endif
 #endif
 #endif
         return 0;
@@ -741,25 +782,27 @@ int transmit_tx_port_packets(void) {
 static int transmit_tx_tx_state_latch_rings( __attribute__((unused))uint8_t to_db) {
         uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0,tx_count = 0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
+        struct rte_ring *latch_ring;
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
 
-                tx_count = rte_ring_count(tx_tx_state_latch_ring[j]);
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
                 if(to_db){
-                        tx_count = rte_ring_count(tx_tx_state_latch_db_ring[j]);
-                }
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                        latch_ring = tx_tx_state_latch_db_ring[to_db-1][j];
+#else
+                        latch_ring = tx_tx_state_latch_db_ring[j];
 #endif
+                } else
+#endif
+                        latch_ring = tx_tx_state_latch_ring[j]; //tx_count = rte_ring_count(tx_tx_state_latch_ring[j]);
+
+                tx_count = rte_ring_count(latch_ring);
 
                 //printf("\n %d Pkts in tx_tx_state_latch_ring[%d] port\n", tx_count, j);
                 while(tx_count) {
 
-#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-                if(to_db){
-                        count = rte_ring_dequeue_burst(tx_tx_state_latch_db_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
-                } else
-#endif
-                        count = rte_ring_dequeue_burst(tx_tx_state_latch_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
+                        count = rte_ring_dequeue_burst(latch_ring, (void**)pkts, PACKET_READ_SIZE_LARGE);
 
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
@@ -779,23 +822,25 @@ static int transmit_tx_tx_state_latch_rings( __attribute__((unused))uint8_t to_d
 static int transmit_tx_nf_state_latch_rings( __attribute__((unused))uint8_t to_db) {
         uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0, tx_count = 0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
+        struct rte_ring *latch_ring;
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
                 if(to_db){
-                        tx_count = rte_ring_count(tx_nf_state_latch_db_ring[j]);
-                } else
-                tx_count = rte_ring_count(tx_nf_state_latch_ring[j]);
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                        latch_ring = tx_nf_state_latch_db_ring[to_db-1][j];
+#else
+                        latch_ring = tx_nf_state_latch_db_ring[j];
 #endif
+                } else
+#endif
+                        latch_ring = tx_nf_state_latch_ring[j];
+
+                tx_count = rte_ring_count(latch_ring);
 
                 //printf("\n %d Pkts in tx_nf_state_latch[%d] port\n", tx_count, j);
                 while(tx_count) {
-#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-                        if(to_db){
-                                count = rte_ring_dequeue_burst(tx_nf_state_latch_db_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
-                        } else
-#endif
-                                count = rte_ring_dequeue_burst(tx_nf_state_latch_ring[j], (void**)pkts, PACKET_READ_SIZE_LARGE);
+                        count = rte_ring_dequeue_burst(latch_ring, (void**)pkts, PACKET_READ_SIZE_LARGE);
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
@@ -843,17 +888,31 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
         struct rte_mbuf *out_pkts_tx[PACKET_READ_SIZE_LARGE];
         struct rte_mbuf *out_pkts_nf[PACKET_READ_SIZE_LARGE];
         struct onvm_pkt_meta* meta;
+        struct rte_ring *latch_ring_tx;
+        struct rte_ring *latch_ring_nf;
 
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_port_ring[j]);
                 unsigned max_count = 0;
                 unsigned rem_count = 0;
+
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
                 if(to_db){
-                        rem_count = rte_ring_free_count(tx_tx_state_latch_db_ring[j]);
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                        latch_ring_tx = tx_tx_state_latch_db_ring[to_db-1][j];
+                        latch_ring_nf = tx_nf_state_latch_db_ring[to_db-1][j];
+#else
+                        latch_ring_tx = tx_tx_state_latch_db_ring[j];
+                        latch_ring_nf = tx_nf_state_latch_db_ring[j];
+#endif
                 } else
 #endif
-                rem_count = rte_ring_free_count(tx_tx_state_latch_ring[j]);
+                {
+                        latch_ring_tx = tx_tx_state_latch_ring[j];
+                        latch_ring_nf = tx_nf_state_latch_ring[j];
+                }
+
+                rem_count = rte_ring_free_count(latch_ring_tx);
 
                 if(unlikely(0 == rem_count)) {
                         ret |= TX_TS_LATCH_BUFFER_FULL;
@@ -886,13 +945,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                                 }
                         }
                         if(likely(out_pkts_tx_count)){
-#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-                                if(to_db){
-                                        sent = rte_ring_enqueue_burst(tx_tx_state_latch_db_ring[j], (void**)out_pkts_tx,  out_pkts_tx_count);
-                                } else
-#endif
-                                sent = rte_ring_enqueue_burst(tx_tx_state_latch_ring[j], (void**)out_pkts_tx,  out_pkts_tx_count);
-
+                                sent = rte_ring_enqueue_burst(latch_ring_tx, (void**)out_pkts_tx,  out_pkts_tx_count);
                                 if (unlikely(sent < out_pkts_tx_count)) {
                                         uint8_t k = sent;
                                         for(;k<out_pkts_tx_count;k++) {
@@ -903,22 +956,23 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
 #ifdef ENABLE_PORT_TX_STATS_LOGS
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
                                 if(to_db){
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                                        rsync_stat.enq_coun_tx_tx_state_latch_db_ring[to_db-1][j] += sent;
+                                        rsync_stat.drop_count_tx_tx_state_latch_db_ring[to_db-1][j] += (out_pkts_tx_count -sent);
+#else
                                         rsync_stat.enq_coun_tx_tx_state_latch_db_ring[j] += sent;
                                         rsync_stat.drop_count_tx_tx_state_latch_db_ring[j] += (out_pkts_tx_count -sent);
+#endif
                                 } else
 #endif
                                 {
                                         rsync_stat.enq_coun_tx_tx_state_latch_ring[j] += sent;
                                         rsync_stat.drop_count_tx_tx_state_latch_ring[j] += (out_pkts_tx_count -sent);
                                 }
+#endif
                         }
                         if(unlikely(out_pkts_nf_count)){
-#ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-                                if(to_db){
-                                        sent = rte_ring_enqueue_burst(tx_nf_state_latch_db_ring[j], (void**)out_pkts_nf,  out_pkts_nf_count);
-                                } else
-#endif
-                                sent = rte_ring_enqueue_burst(tx_nf_state_latch_ring[j], (void**)out_pkts_nf,  out_pkts_nf_count);
+                                sent = rte_ring_enqueue_burst(latch_ring_nf, (void**)out_pkts_nf,  out_pkts_nf_count);
 
                                 if (unlikely(sent < out_pkts_nf_count)) {
                                         uint8_t k = sent;
@@ -930,8 +984,13 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
 #ifdef ENABLE_PORT_TX_STATS_LOGS
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
                                 if(to_db){
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                                        rsync_stat.enq_count_tx_nf_state_latch_db_ring[to_db-1][j] += sent;
+                                        rsync_stat.drop_count_tx_nf_state_latch_db_ring[to_db-1][j] += (out_pkts_nf_count -sent);
+#else
                                         rsync_stat.enq_count_tx_nf_state_latch_db_ring[j] += sent;
                                         rsync_stat.drop_count_tx_nf_state_latch_db_ring[j] += (out_pkts_nf_count -sent);
+#endif
                                 } else
 #endif
                                 {
@@ -1179,6 +1238,207 @@ int rsync_start_only_db(__attribute__((unused)) void *arg) {
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
         return 0;
 }
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+#if 0
+int rsync_start_simple_multi_db(__attribute__((unused)) void *arg);
+int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
+        static uint8_t db_mode = 0;
+        static uint8_t trans_ids[2] = {0,0},tid=0;
+        static uint8_t trans_ids_db[ENABLE_RSYNC_MULTI_BUFFERING][2] = {{0,0},},tid_db[ENABLE_RSYNC_MULTI_BUFFERING]={0,};
+        int ret = 0, trans_id =0, i=0;
+        //int use_db_mode=0;
+
+        if(tid){ //if((wait_mode & 1)) {
+                if(0 == rsync_wait_for_commit_acks(trans_ids,tid,CHECK_FOR_COMMIT_WITH_NO_WAIT)) {
+                        //Primary buffer transactions are complete; release buffers and start processing in primary buffer
+                        tid=0; trans_ids[0] = trans_ids[1]=0;
+                        //Now release the packets from Tx State Latch Ring
+                        transmit_tx_tx_state_latch_rings(0);
+                        //Now release the packets from NF
+                        transmit_tx_nf_state_latch_rings(0);
+                        db_mode=0;
+                        //use_db_mode=0;
+                } else {
+                        //transaction on primary buffer still pending;
+                        //use_db_mode=1;
+                        //db_mode=1;
+                }
+        } else {
+                db_mode=0;
+        }
+        for(i=0; i< ENABLE_RSYNC_MULTI_BUFFERING;++i) {
+                if(tid_db[i]){ //if((wait_mode & 2)) {
+                        if(0 == rsync_wait_for_commit_acks(trans_ids_db[i],tid_db[i],CHECK_FOR_COMMIT_WITH_NO_WAIT)) {
+                                //Primary buffer transactions are complete; release buffers and start processing in primary buffer
+                                tid_db[i]=0; trans_ids_db[i][0] = trans_ids_db[i][1]=0;
+                                //Now release the packets from Tx State Latch Ring
+                                transmit_tx_tx_state_latch_rings(i+1);
+                                //Now release the packets from NF
+                                transmit_tx_nf_state_latch_rings(i+1);
+
+                                //if(use_db_mode && (use_db_mode > (i+1))) use_db_mode=i+1;
+                                //if(db_mode && (db_mode > (i+1))) db_mode=i+1;
+
+                        } else {
+                                //use_db_mode+=1;db_mode+=1;
+                                //if(db_mode>ENABLE_RSYNC_MULTI_BUFFERING) return 0;
+                                //if(use_db_mode>ENABLE_RSYNC_MULTI_BUFFERING) return 0;
+                        }
+                } else {
+                        //if(db_mode && (db_mode > (i+1))) db_mode=i+1;
+                        //if(use_db_mode && (use_db_mode > (i+1))) use_db_mode=i+1;
+                        ////if(db_mode && ((i+1) < use_db_mode)) use_db_mode=i+1;
+                }
+        }
+
+
+        //check again for wait_mode
+        if(db_mode  && (db_mode>ENABLE_RSYNC_MULTI_BUFFERING)) { //if(tid && (0==db_mode)){ //if(tid && tid_db) { //if((wait_mode) && ((wait_mode & 3)== wait_mode)) {
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+                //cannot proceeed until trans is completed; so must wait;
+                printf("\n Cannot Proceed for db_mode:%d [%d:[%d,%d]]\n", db_mode, tid, trans_ids[0], trans_ids[1]);
+                printf("\n DB_TIDS:");
+                for(i=0;i<ENABLE_RSYNC_MULTI_BUFFERING;++i) {
+                        printf("%d:[%d[%d, %d]]\t ",i, tid_db[i],trans_ids_db[i][0], trans_ids_db[i][1]);
+                }printf("\n");
+#endif
+
+                return 0;
+        }
+        //if(db_mode == 2) printf("\n $$$$$$$$$$$$$$$$$$$$ Selecting db=2$$$$$$$$$$$$ \n");
+        //db_mode=use_db_mode;
+
+        //First Extract and Parse Tx Port Packets and update TS info in Tx Table
+        ret = extract_and_parse_tx_port_packets(db_mode);
+        //ret = 0; //TEST_HACK to bypass TS Table and NF Shared Memory packet transfer
+
+        //Check and Initiate Remote Sync of Tx State
+        if(ret & NEED_REMOTE_TS_TABLE_SYNC) {
+                trans_id = rsync_tx_ts_state_to_remote(db_mode);
+                if(trans_id >= 0) {
+                        if(db_mode) {
+                                trans_ids_db[db_mode-1][(tid_db[db_mode-1])++] = (uint8_t) trans_id;
+                        }
+                        else trans_ids[tid++] = (uint8_t)  trans_id;
+                }
+        }
+
+        //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
+        //How? -- there can be packets in fastchain and some in slow chain. How will you notify? -- rely on best effort (every 1ms) it will refresh.
+        //14.88Mpps => 14.88K (~15K, 1.25MB) for 1ms,  and 100ms => (~1500K packets, 125MB) data.
+
+        //check and Initiate remote NF Sync
+        if(ret & NEED_REMOTE_NF_STATE_SYNC) {
+                int trans_id = rsync_nf_state_to_remote();
+                if(trans_id>=0) {
+                        if(db_mode){
+                                trans_ids_db[db_mode-1][(tid_db[db_mode-1])++] = (uint8_t)  trans_id;
+                        }
+                        else {
+                                trans_ids[tid++] = (uint8_t)  trans_id;
+                        }
+                }
+        }
+        if(ret) {
+                ++db_mode;
+        }
+        //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier. -- this is okay to release? mostly no..;
+        return 0;
+}
+#else
+//use this version
+int rsync_start_simple_multi_db(__attribute__((unused)) void *arg);
+int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
+        static uint8_t trans_ids[2] = {0,0},tid=0;
+        static uint8_t trans_ids_db[ENABLE_RSYNC_MULTI_BUFFERING][2] = {{0,0},},tid_db[ENABLE_RSYNC_MULTI_BUFFERING]={0,};
+        int ret = 0, trans_id =0, i=0, buff_avail=-1;
+
+        if(tid){
+                if(0 == rsync_wait_for_commit_acks(trans_ids,tid,CHECK_FOR_COMMIT_WITH_NO_WAIT)) {
+                        //Primary buffer transactions are complete; release buffers and start processing in primary buffer
+                        tid=0; trans_ids[0] = trans_ids[1]=0;
+                        //Now release the packets from Tx State Latch Ring
+                        transmit_tx_tx_state_latch_rings(0);
+                        //Now release the packets from NF
+                        transmit_tx_nf_state_latch_rings(0);
+                        buff_avail=0;
+                        //use_db_mode=0;
+                } else {
+                        //transaction on primary buffer still pending;
+                        //buff_avail=-1;
+                }
+        } else {
+                buff_avail=0;
+        }
+
+        for(i=0; i< ENABLE_RSYNC_MULTI_BUFFERING;++i) {
+                if(tid_db[i]){ //if((wait_mode & 2)) {
+                        if(0 == rsync_wait_for_commit_acks(trans_ids_db[i],tid_db[i],CHECK_FOR_COMMIT_WITH_NO_WAIT)) {
+                                //Primary buffer transactions are complete; release buffers and start processing in primary buffer
+                                tid_db[i]=0; trans_ids_db[i][0] = trans_ids_db[i][1]=0;
+                                //Now release the packets from Tx State Latch Ring
+                                transmit_tx_tx_state_latch_rings((i+1));
+                                //Now release the packets from NF
+                                transmit_tx_nf_state_latch_rings((i+1));
+
+                                if(buff_avail < 0) {
+                                        buff_avail=i+1;
+                                }
+                        }
+                } else {
+                        if(buff_avail < 0) {
+                                buff_avail=i+1;
+                        }
+                }
+        }
+
+        if(buff_avail < 0) {
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+                printf("\n No buffers Available:%d \t [%d:[%d,%d]]\n",buff_avail, tid, trans_ids[0], trans_ids[1]);
+                printf("\n DB_TIDS:");
+                for(i=0;i<ENABLE_RSYNC_MULTI_BUFFERING;++i) {
+                        printf("%d:[%d[%d, %d]]\t ",i, tid_db[i],trans_ids_db[i][0], trans_ids_db[i][1]);
+                }printf("\n");
+#endif
+                return 0;
+        }
+
+        //First Extract and Parse Tx Port Packets and update TS info in Tx Table
+        ret = extract_and_parse_tx_port_packets(buff_avail);
+        //ret = 0; //TEST_HACK to bypass TS Table and NF Shared Memory packet transfer
+
+        //Check and Initiate Remote Sync of Tx State
+        if(ret & NEED_REMOTE_TS_TABLE_SYNC) {
+                trans_id = rsync_tx_ts_state_to_remote(buff_avail);
+                if(trans_id >= 0) {
+                        if(buff_avail) {
+                                trans_ids_db[buff_avail-1][(tid_db[buff_avail-1])++] = (uint8_t) trans_id;
+                        }
+                        else trans_ids[tid++] = (uint8_t)  trans_id;
+                }
+        }
+
+        //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
+        //How? -- there can be packets in fastchain and some in slow chain. How will you notify? -- rely on best effort (every 1ms) it will refresh.
+        //14.88Mpps => 14.88K (~15K, 1.25MB) for 1ms,  and 100ms => (~1500K packets, 125MB) data.
+
+        //check and Initiate remote NF Sync
+        if(ret & NEED_REMOTE_NF_STATE_SYNC) {
+                trans_id = rsync_nf_state_to_remote();
+                if(trans_id>=0) {
+                        if(buff_avail){
+                                trans_ids_db[buff_avail-1][(tid_db[buff_avail-1])++] = (uint8_t)  trans_id;
+                        }
+                        else {
+                                trans_ids[tid++] = (uint8_t)  trans_id;
+                        }
+                }
+        }
+        //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier. -- this is okay to release? mostly no..;
+        return 0;
+}
+#endif
+#endif
 /* Simple Double Buffering Scheme: Avoid wait on transaction completion. Instead,
  * Flip from the Primary buffer to Double Buffer and each time process 1 transaction.
  * If both the Primary and double buffer transactions are pending then we need to
@@ -1187,7 +1447,6 @@ int rsync_start_only_db(__attribute__((unused)) void *arg) {
 int rsync_start_simple_db(__attribute__((unused)) void *arg);
 int rsync_start_simple_db(__attribute__((unused)) void *arg) {
         static uint8_t db_mode = 0;
-        static uint8_t wait_mode = 0;
         static uint8_t trans_ids[2] = {0,0},tid=0;
         static uint8_t trans_ids_db[2] = {0,0},tid_db=0;
         int ret = 0, trans_id =0, use_db_mode=0;
@@ -1200,7 +1459,6 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
                         transmit_tx_tx_state_latch_rings(0);
                         //Now release the packets from NF
                         transmit_tx_nf_state_latch_rings(0);
-                        CLEAR_BIT(wait_mode, 1); //wait_mode ^= 0x01;
                         db_mode=0;
                 } else {
                         //transaction on primary buffer still pending;
@@ -1216,7 +1474,6 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
                         //Now release the packets from NF
                         transmit_tx_nf_state_latch_rings(1);
 
-                        CLEAR_BIT(wait_mode, 1); //wait_mode ^= 0x02;
                         db_mode=1;
                 } else {
                         if(use_db_mode) return 0;
@@ -1240,15 +1497,8 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
         if(ret & NEED_REMOTE_TS_TABLE_SYNC) {
                 trans_id = rsync_tx_ts_state_to_remote(db_mode);
                 if(trans_id >= 0) {
-#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
                         if(db_mode) trans_ids_db[tid_db++] = (uint8_t) trans_id;
                         else trans_ids[tid++] = (uint8_t)  trans_id;
-#else
-                        rsync_wait_for_commit_ack(trans_id, CHECK_FOR_COMMIT_WITH_WAIT);
-
-                        //Now release the packets from Tx State Latch Ring
-                        transmit_tx_tx_state_latch_rings(db_mode);
-#endif
                 }
         }
 
@@ -1260,42 +1510,10 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
                 int trans_id = rsync_nf_state_to_remote();
                 if(trans_id>=0) {
-#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
                         if(db_mode) trans_ids_db[tid_db++] = (uint8_t)  trans_id;
                         else trans_ids[tid++] = (uint8_t)  trans_id;
-#else
-                        rsync_wait_for_commit_ack(trans_id, CHECK_FOR_COMMIT_WITH_WAIT);
-                        //Now release the packets from NF
-                        transmit_tx_nf_state_latch_rings(db_mode);
-#endif
                 }
         }
-#if 0
-#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
-        //optimize by batching transactions.. transfer all transactions and wait or acks
-        int wait_ret = 0;
-        if(db_mode) {
-                wait_ret = rsync_wait_for_commit_acks(trans_ids_db,tid_db,CHECK_FOR_COMMIT_WITH_NO_WAIT);
-        }
-        else {
-                wait_ret = rsync_wait_for_commit_acks(trans_ids,tid,CHECK_FOR_COMMIT_WITH_NO_WAIT);
-        }
-        if(0 == wait_ret) {
-                //Now release the packets from Tx State Latch Ring
-                transmit_tx_tx_state_latch_rings(db_mode);
-                //Now release the packets from NF
-                transmit_tx_nf_state_latch_rings(db_mode);
-        } else {
-                if(db_mode) {
-                        SET_BIT(wait_mode, 2); //wait_mode |= 0x02;
-                }
-                else {
-                        SET_BIT(wait_mode, 1); //wait_mode |= 0x01;
-                        db_mode = 1;
-                }
-        }
-#endif
-#endif
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
         return 0;
 }
@@ -1309,6 +1527,7 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
  * achieve same or slightly improved throughput across the NFs.
  */
 int rsync_start(__attribute__((unused)) void *arg) {
+
 #ifndef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
         return rsync_start_old(arg);
 
@@ -1317,6 +1536,10 @@ int rsync_start(__attribute__((unused)) void *arg) {
 #ifdef ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE
         return rsync_start_simple_db(arg);
         //return rsync_start_only_db(arg);
+#endif
+
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+        return rsync_start_simple_multi_db(arg);
 #endif
 
         static uint8_t trans_ids[2] = {0,0}, trans_ids_db[2] = {0,0}; //uint8_t trans_ids[2] = {0,0},tid=0;
@@ -1434,12 +1657,24 @@ int onvm_print_rsync_stats(unsigned difftime, FILE *fout) {
                                 rsync_stat.enq_count_tx_nf_state_latch_ring[i], (rsync_stat.enq_count_tx_nf_state_latch_ring[i] -prev_state.enq_count_tx_nf_state_latch_ring[i])/difftime,
                                 rsync_stat.drop_count_tx_nf_state_latch_ring[i], (rsync_stat.drop_count_tx_nf_state_latch_ring[i] -prev_state.drop_count_tx_nf_state_latch_ring[i])/difftime);
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                uint8_t j=0;
+                for(;j<ENABLE_RSYNC_MULTI_BUFFERING;++j) {
+                        fprintf(fout, "Port:%d, DB:%d Total Tx State Latch Packets:%"PRIu64" (%"PRIu64" pps) DB Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,j,
+                                        rsync_stat.enq_coun_tx_tx_state_latch_db_ring[j][i], (rsync_stat.enq_coun_tx_tx_state_latch_db_ring[j][i] -prev_state.enq_coun_tx_tx_state_latch_db_ring[j][i])/difftime,
+                                        rsync_stat.drop_count_tx_tx_state_latch_db_ring[j][i], (rsync_stat.drop_count_tx_tx_state_latch_db_ring[j][i] -prev_state.drop_count_tx_tx_state_latch_db_ring[j][i])/difftime);
+                        fprintf(fout, "Port:%d,DB:%d Total NF State Latch Packets:%"PRIu64" (%"PRIu64" pps) Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,j,
+                                        rsync_stat.enq_count_tx_nf_state_latch_db_ring[j][i], (rsync_stat.enq_count_tx_nf_state_latch_db_ring[j][i] -prev_state.enq_count_tx_nf_state_latch_db_ring[j][i])/difftime,
+                                        rsync_stat.drop_count_tx_nf_state_latch_db_ring[j][i], (rsync_stat.drop_count_tx_nf_state_latch_db_ring[j][i] -prev_state.drop_count_tx_nf_state_latch_db_ring[j][i])/difftime);
+                }
+#else
                 fprintf(fout, "Port:%d, DB Total Tx State Latch Packets:%"PRIu64" (%"PRIu64" pps) DB Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
                                 rsync_stat.enq_coun_tx_tx_state_latch_db_ring[i], (rsync_stat.enq_coun_tx_tx_state_latch_db_ring[i] -prev_state.enq_coun_tx_tx_state_latch_db_ring[i])/difftime,
                                 rsync_stat.drop_count_tx_tx_state_latch_db_ring[i], (rsync_stat.drop_count_tx_tx_state_latch_db_ring[i] -prev_state.drop_count_tx_tx_state_latch_db_ring[i])/difftime);
                 fprintf(fout, "Port:%d, Total NF State Latch Packets:%"PRIu64" (%"PRIu64" pps) Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
                                 rsync_stat.enq_count_tx_nf_state_latch_db_ring[i], (rsync_stat.enq_count_tx_nf_state_latch_db_ring[i] -prev_state.enq_count_tx_nf_state_latch_db_ring[i])/difftime,
                                 rsync_stat.drop_count_tx_nf_state_latch_db_ring[i], (rsync_stat.drop_count_tx_nf_state_latch_db_ring[i] -prev_state.drop_count_tx_nf_state_latch_db_ring[i])/difftime);
+#endif
 #endif
         }
         prev_state = rsync_stat;

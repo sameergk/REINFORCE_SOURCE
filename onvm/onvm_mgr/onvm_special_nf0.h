@@ -101,4 +101,12 @@ int process_special_nf0_rx_packets(void);
  */
 int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, __attribute__((unused)) struct rte_mbuf *pkts[], __attribute__((unused)) uint16_t rx_count);
 
+//Add PCAP Dumper facility for replay
+#ifdef ENABLE_PCAP_CAPTURE
+inline int onvm_util_init_pacp_logger(int port, int mode);
+inline int onvm_util_clear_pcap_log(int port);
+inline int onvm_util_log_packets(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
+inline const char* onvm_util_close_and_get_pdump_file(__attribute__((unused)) int port);
+#endif
+
 #endif  // _ONVM_SPECIAL_NF0_H_

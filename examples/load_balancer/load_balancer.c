@@ -729,6 +729,8 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
         meta->action = ONVM_NF_ACTION_OUT;
 
+        meta->destination = pkt->port;  //hack added for performance testing with moongen
+
         if (++counter == print_delay) {
                 do_stats_display(pkt);
                 print_flow_info(flow_info);

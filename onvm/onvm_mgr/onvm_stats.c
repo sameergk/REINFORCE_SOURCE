@@ -159,7 +159,13 @@ void onvm_stats_display_rsync_tx_thread_stats(void) {
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 fprintf(stats_out, "Idx:%d, Tx_port_Ring:%d, TX_Latch_Ring:%d, NF_Latch_Ring:%d", j, rte_ring_count(tx_port_ring[j]), rte_ring_count(tx_tx_state_latch_ring[j]), rte_ring_count(tx_nf_state_latch_ring[j]));
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                int k = 0;
+                for(k=0; k < ENABLE_RSYNC_MULTI_BUFFERING; k++)
+                        fprintf(stats_out, "DB[%d]: tx_ts_latch_ring:%d, nf_latch_ring:%d\n",k,rte_ring_count(tx_tx_state_latch_db_ring[k][j]), rte_ring_count(tx_nf_state_latch_db_ring[k][j]));
+#else
                 fprintf(stats_out, "DB: tx_ts_latch_ring:%d, nf_latch_ring:%d\n",rte_ring_count(tx_tx_state_latch_db_ring[j]), rte_ring_count(tx_nf_state_latch_db_ring[j]));
+#endif
 #endif
         }
 }

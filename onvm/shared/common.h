@@ -137,7 +137,7 @@
 /* Instance ID of the special NF */
 #define ONVM_SPECIAL_NF_INSTANCE_ID (0)
 
-//#define ENABLE_PCAP_CAPTURE
+#define ENABLE_PCAP_CAPTURE
 #endif //ONVM_ENABLE_SPEACILA_NF
 
 /** Sub features for INTERRUPT_SEMANTICS for NFs */
@@ -371,7 +371,8 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define TX_RSYNC_TX_LATCH_DB_RING_SIZE  (TX_RSYNC_TX_LATCH_RING_SIZE)
 #define TX_RSYNC_NF_LATCH_DB_RING_SIZE  (TX_RSYNC_NF_LATCH_RING_SIZE)
 //#define ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE       //simple double buffer mode
-#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE        //more optimal/greedy double buffering mode
+//#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE        //more optimal/greedy double buffering mode
+#define ENABLE_RSYNC_MULTI_BUFFERING   (1)          //Multiple counter of buffers that can be exhausted before switching to primary buffer
 //enable to internally check and clear transactions with elapsed timers ( > 2RTT)
 #define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS
 //Double Buffering scheme must use Batched Transactions
