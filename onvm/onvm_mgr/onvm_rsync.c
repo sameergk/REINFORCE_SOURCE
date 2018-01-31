@@ -913,7 +913,6 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                 }
 
                 rem_count = rte_ring_free_count(latch_ring_tx);
-
                 if(unlikely(0 == rem_count)) {
                         ret |= TX_TS_LATCH_BUFFER_FULL;
                         //continue;
@@ -1124,8 +1123,9 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
  * We can use this scheme as baseline for Pico Replication comparison. or FTMB approach
  * that performs VM checkpointing with Output commit on logged packets == committing Tx Ts.
  */
-int rsync_start_old(__attribute__((unused)) void *arg);
-int rsync_start_old(__attribute__((unused)) void *arg) {
+#ifndef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+static int rsync_start_simple(__attribute__((unused)) void *arg);
+static int rsync_start_simple(__attribute__((unused)) void *arg) {
         //TEST_HACK to directly transfer out the packets
         //return transmit_tx_port_packets();
         uint8_t trans_ids[2] = {0,0},tid=0;
@@ -1179,6 +1179,7 @@ int rsync_start_old(__attribute__((unused)) void *arg) {
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
         return 0;
 }
+#endif
 /* Alternate variant: for correctness checking, which uses only the secondary/double buffers only
  * Instead of primary complete use the secondary/double buffer related resources.
  * Test purpose only, Do not use this for any use case.
@@ -1239,9 +1240,9 @@ int rsync_start_only_db(__attribute__((unused)) void *arg) {
         return 0;
 }
 #ifdef ENABLE_RSYNC_MULTI_BUFFERING
+static int rsync_start_simple_multi_db(__attribute__((unused)) void *arg);
 #if 0
-int rsync_start_simple_multi_db(__attribute__((unused)) void *arg);
-int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
+static int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
         static uint8_t db_mode = 0;
         static uint8_t trans_ids[2] = {0,0},tid=0;
         static uint8_t trans_ids_db[ENABLE_RSYNC_MULTI_BUFFERING][2] = {{0,0},},tid_db[ENABLE_RSYNC_MULTI_BUFFERING]={0,};
@@ -1346,9 +1347,8 @@ int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
         return 0;
 }
 #else
-//use this version
-int rsync_start_simple_multi_db(__attribute__((unused)) void *arg);
-int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
+//use this version of the function: more simple and less state.
+static int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
         static uint8_t trans_ids[2] = {0,0},tid=0;
         static uint8_t trans_ids_db[ENABLE_RSYNC_MULTI_BUFFERING][2] = {{0,0},},tid_db[ENABLE_RSYNC_MULTI_BUFFERING]={0,};
         int ret = 0, trans_id =0, i=0, buff_avail=-1;
@@ -1444,8 +1444,9 @@ int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
  * If both the Primary and double buffer transactions are pending then we need to
  * wait till one of them completes and then continue processing on available buffer.
  */
-int rsync_start_simple_db(__attribute__((unused)) void *arg);
-int rsync_start_simple_db(__attribute__((unused)) void *arg) {
+#ifdef ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE
+static int rsync_start_simple_db(__attribute__((unused)) void *arg);
+static int rsync_start_simple_db(__attribute__((unused)) void *arg) {
         static uint8_t db_mode = 0;
         static uint8_t trans_ids[2] = {0,0},tid=0;
         static uint8_t trans_ids_db[2] = {0,0},tid_db=0;
@@ -1517,7 +1518,7 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
         return 0;
 }
-
+#endif
 /* More efficient and complicated Double Buffering Scheme:
  * Use the primary buffer for active transaction and commit each time (ensures keeping latency sensitivity)
  * In the interim, use the double buffer as secondary to efficiently pre-process the packets and update Tx_Ts
@@ -1526,22 +1527,9 @@ int rsync_start_simple_db(__attribute__((unused)) void *arg) {
  * Thus ensure to lower latency than the standard double buffering scheme and potentially
  * achieve same or slightly improved throughput across the NFs.
  */
-int rsync_start(__attribute__((unused)) void *arg) {
-
-#ifndef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-        return rsync_start_old(arg);
-
-#endif
-
-#ifdef ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE
-        return rsync_start_simple_db(arg);
-        //return rsync_start_only_db(arg);
-#endif
-
-#ifdef ENABLE_RSYNC_MULTI_BUFFERING
-        return rsync_start_simple_multi_db(arg);
-#endif
-
+#ifdef ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE
+static int rsync_start_optimal_db(__attribute__((unused)) void *arg);
+static int rsync_start_optimal_db(__attribute__((unused)) void *arg) {
         static uint8_t trans_ids[2] = {0,0}, trans_ids_db[2] = {0,0}; //uint8_t trans_ids[2] = {0,0},tid=0;
         static uint8_t tid=0, to_db=0, tid_db=0;
         static int ret_db = 0;
@@ -1630,6 +1618,28 @@ int rsync_start(__attribute__((unused)) void *arg) {
         }
         //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
         return 0;
+}
+#endif
+int rsync_start(__attribute__((unused)) void *arg) {
+
+#ifndef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+        return rsync_start_simple(arg);
+
+#endif
+
+#ifdef ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE
+        return rsync_start_simple_db(arg);
+        //return rsync_start_only_db(arg);
+#endif
+
+#ifdef ENABLE_RSYNC_MULTI_BUFFERING
+        return rsync_start_simple_multi_db(arg);
+#endif
+
+#ifdef ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE
+        return rsync_start_optimal_db(arg);
+#endif
+        return (0);
 }
 
 int onvm_print_rsync_stats(unsigned difftime, FILE *fout) {

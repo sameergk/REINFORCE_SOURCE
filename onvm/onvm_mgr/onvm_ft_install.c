@@ -74,6 +74,7 @@ typedef struct onvm_ft_args {
         const char* base_ip_addr;           /* -b <IPv45Tuple Base Ip Address> */
         uint32_t max_ip_addrs;              /* -m <Maximum number of IP Addresses> */
         uint32_t max_ft_rules;              /* -M <Maximum number of FT entries> */
+        uint32_t rev_order;                 /* -o <Order of Service Chian for Flip key */
 }onvm_ft_args_t;
 //static const char *optString = ":s:r:b:m:M";
 
@@ -84,11 +85,13 @@ static onvm_ft_args_t globals = {
         .base_ip_addr   = "10.0.0.1",
         .max_ip_addrs   = 10,
         .max_ft_rules   = MAX_FLOW_TABLE_ENTRIES,
+        .rev_order      =0,         /* 0 = same order A->B->C => A-B->C; 1 = A->B->C => C-B->A */
 };
 
 /* Service Chain Related entries */
 #define MAX_SERVICE_CHAINS 32
 int schains[MAX_SERVICE_CHAINS][ONVM_MAX_CHAIN_LENGTH];
+int alt_port[MAX_SERVICE_CHAINS];          //designate alternate backup port to be used to route traffic in case of failure on primary port
 int max_service_chains=0;
 struct onvm_ft_ipv4_5tuple ipv4_5tRules[MAX_FLOW_TABLE_ENTRIES];
 uint32_t max_ft_entries=0;
@@ -162,7 +165,6 @@ parse_service_chains(int schains[][ONVM_MAX_CHAIN_LENGTH]) {
                                 }
                                 slen = 0;
                                 added+=1;
-
                         }
                         if (line[i] != '\0' && line[i] != ',') {
                                 svc[slen++] = line[i];
@@ -335,10 +337,10 @@ setup_service_chain_for_flow_entry(struct onvm_service_chain *sc, int sc_index, 
         return sc_index; //chain_len
 }
 static int
-setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int sc_index);
+setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int sc_index, int rev_order);
 
 static int
-setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int sc_index) {
+setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int sc_index, int rev_order) {
         int ret = 0;
         if (NULL == fk_in) {
                 ret = -1;
@@ -406,7 +408,7 @@ setup_schain_and_flow_entry_for_flip_key(struct onvm_ft_ipv4_5tuple *fk_in, int 
                 rte_exit(EXIT_FAILURE, "onvm_sc_create() Failed!!");
         }
 
-        sc_index = setup_service_chain_for_flow_entry(flow_entry->sc, sc_index,1);
+        sc_index = setup_service_chain_for_flow_entry(flow_entry->sc, sc_index,rev_order);
 
         /* Setup the properties of Flow Entry */
         flow_entry->idle_timeout = 0; //OFP_FLOW_PERMANENT;
@@ -498,7 +500,7 @@ add_flow_key_to_sc_flow_table(struct onvm_ft_ipv4_5tuple *ft)
         }
 
         int sc_index = setup_service_chain_for_flow_entry(flow_entry->sc, -1,0);
-        sc_index = setup_schain_and_flow_entry_for_flip_key(fk, sc_index);
+        sc_index = setup_schain_and_flow_entry_for_flip_key(fk, sc_index,globals.rev_order);
 
         /* Setup the properties of Flow Entry */
         flow_entry->idle_timeout = 0; //OFP_FLOW_PERMANENT;
@@ -656,7 +658,7 @@ static int setup_flowrule_for_packet(struct rte_mbuf *pkt, struct onvm_pkt_meta*
 
                 if(ipv4_pkt) {
                         //set the same schain for flow_entry with flipped ipv4 % Tuple rule
-                        sc_index = setup_schain_and_flow_entry_for_flip_key(&fk, sc_index);
+                        sc_index = setup_schain_and_flow_entry_for_flip_key(&fk, sc_index,globals.rev_order);
                 } else {
 #ifdef DEBUG_0
                         printf("Skipped adding Flip rule \n");

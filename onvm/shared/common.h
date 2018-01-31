@@ -55,6 +55,12 @@
 //check on each node by executing command  $"getconf LEVEL1_DCACHE_LINESIZE" or cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
 #define ONVM_CACHE_LINE_SIZE (64)
 
+//choose the ONVM operation mode: High Throughput=Large buffers=more Latency; LOW_LATENCY=Small Buffers=Low Throughput.
+#define ENABLE_HIGH_THROUGHPUT_MODE
+#ifndef ENABLE_HIGH_THROUGHPUT_MODE
+#define ENABLE_LOW_LATENCY_MODE
+#endif
+
 #ifndef MIN
 #define MIN(a,b) ((a) < (b)? (a):(b))
 #endif
@@ -71,9 +77,20 @@
 #define MAX_CLIENTS_PER_SERVICE (8)     // max number of NFs per service.
 
 // NIC (Rx, Tx) and NF (Rx and Tx) Ring buffer sizes
+#ifdef ENABLE_HIGH_THROUGHPUT_MODE
 #define RTE_MP_RX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define RTE_MP_TX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define CLIENT_QUEUE_RINGSIZE  (4096)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#elif defined(ENABLE_LOW_LATENCY_MODE)
+#define RTE_MP_RX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define RTE_MP_TX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define CLIENT_QUEUE_RINGSIZE  (512)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#else
+#define RTE_MP_RX_DESC_DEFAULT (256)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define RTE_MP_TX_DESC_DEFAULT (256)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define CLIENT_QUEUE_RINGSIZE  (1024)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#endif
+
 #define ONVM_PACKETS_BATCH_SIZE (32)    // Batch size for Rx/Tx Queue and NFs
 #define NF_MSG_QUEUE_SIZE   (128)       // NFMGR-->NF and vice-versa Messages count
 
@@ -156,7 +173,10 @@
 #define ENABLE_CGROUPS_FEATURE          // (Preferred Usage: Enabled)
 
 /* Enable NFV Resiliency Feature Flag */
-#define ENABLE_NFV_RESL                 // (Preferred Usage: Enabled)
+#define ENABLE_NFV_RESL               // (Preferred Usage: Enabled)
+
+/* Enable FLow Table Entry Index in the Pkts Meta Field */
+#define ENABLE_FT_INDEX_IN_META         // (Preferred Usage: Enabled)
 
 /** Feature to Enable NFs Yield and Wake Counters */
 #define ENABLE_NF_WAKE_NOTIFICATION_COUNTER
@@ -312,7 +332,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
-#define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
+////#define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
@@ -361,18 +381,18 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
 #define TX_RSYNC_TX_PORT_RING_SIZE      (CLIENT_QUEUE_RINGSIZE*2) //(CLIENT_QUEUE_RINGSIZE*2) //(CLIENT_QUEUE_RINGSIZE) //RTE_MP_TX_DESC_DEFAULT
 #define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"
-#define TX_RSYNC_TX_LATCH_RING_SIZE     (8*1024)
+#define TX_RSYNC_TX_LATCH_RING_SIZE     (CLIENT_QUEUE_RINGSIZE*2)   //(8*1024)
 #define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"
-#define TX_RSYNC_NF_LATCH_RING_SIZE     (8*1024)
+#define TX_RSYNC_NF_LATCH_RING_SIZE     (CLIENT_QUEUE_RINGSIZE*2)   //(8*1024)
 
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
 #define _TX_RSYNC_TX_LATCH_DB_RING_NAME    "_TX_RSYNC_TX_%u_LATCH_DB" //"_TX_RSYNC_TX_LATCH"
 #define _TX_RSYNC_NF_LATCH_DB_RING_NAME    "_TX_RSYNC_NF_%u_LATCH_DB" //"_TX_RSYNC_NF_LATCH"
 #define TX_RSYNC_TX_LATCH_DB_RING_SIZE  (TX_RSYNC_TX_LATCH_RING_SIZE)
 #define TX_RSYNC_NF_LATCH_DB_RING_SIZE  (TX_RSYNC_NF_LATCH_RING_SIZE)
-//#define ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE       //simple double buffer mode
-//#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE        //more optimal/greedy double buffering mode
-#define ENABLE_RSYNC_MULTI_BUFFERING   (1)          //Multiple counter of buffers that can be exhausted before switching to primary buffer
+//#define ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE   //Approach 1: Simple double buffer mode
+//#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE  //Approach 2: More optimal/greedy double buffering mode
+#define ENABLE_RSYNC_MULTI_BUFFERING   (1)      //Approach 3: Multiple counter of buffers that can be exhausted before switching to primary buffer
 //enable to internally check and clear transactions with elapsed timers ( > 2RTT)
 #define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS
 //Double Buffering scheme must use Batched Transactions
@@ -395,7 +415,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 
 #ifdef ENABLE_PER_SERVICE_MEMPOOL
 #define _SERVICE_STATE_MEMPOOL_NAME "SVC_STATE_MEMPOOL"
-#define _SERVICE_STATE_SIZE      (4*1024*1024) //(16*1024)  //reduced from 64K to 16K for now.
+#define _SERVICE_STATE_SIZE      (4*1024*1024) //(16*1024)  //4MB <for DPI case>.
 #define _SERVICE_STATE_CACHE     (8)
 #endif
 
@@ -403,6 +423,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define _PER_FLOW_TS_MEMPOOL_NAME "PF_TS_MEMPOOL"
 #define _PER_FLOW_TS_SIZE      (16*1024)  //reduced from 64K to 16K for now.
 #define _PER_FLOW_TS_CACHE     (8)
+#define _PER_FLOW_TS_CACHE_MAX_ENTRIES      ((_PER_FLOW_TS_SIZE)/sizeof(uint64_t))
 #endif
 
 

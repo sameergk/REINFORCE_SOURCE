@@ -64,6 +64,7 @@ struct onvm_nf_info *nf_info;
 /* number of package between each print */
 static uint32_t print_delay = 5000000;
 
+extern struct port_info *ports;
 /*
  * Print a usage message
  */
@@ -145,12 +146,16 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 do_stats_display(pkt);
                 counter = 0;
         }
-
-        if (pkt->port == 0) {
-                meta->destination = 1;
-        }
-        else {
-                meta->destination = 0;
+        if(likely(NULL != ports)) {
+                if(likely(ports->num_ports > 1)) meta->destination = (pkt->port == 0)? (1):(0);
+                else meta->destination = (pkt->port);
+        } else {
+                if (pkt->port == 0) {
+                        meta->destination = 1;
+                }
+                else {
+                        meta->destination = 0;
+                }
         }
         meta->action = ONVM_NF_ACTION_OUT;
         return 0;

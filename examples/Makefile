@@ -39,7 +39,8 @@ $(error "Please define RTE_SDK environment variable")
 endif
 
 # To add new examples, append the directory name to this variable
-examples = bridge basic_monitor simple_forward speed_tester flow_table test_flow_dir
+examples = bridge basic_monitor simple_forward speed_tester flow_table test_flow_dir vlan_tagger load_balancer chain_nf ndpi_stats
+examples+=  basic_monitor_chain vlan_tagger_chain load_balancer_chain ndpi_stats_chain vlan_tagger_no_res
 clean_examples=$(addprefix clean_,$(examples))
 
 .PHONY: $(examples) $(clean_examples)

@@ -742,9 +742,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         printf("WAIT_TIME(INIT-->START-->Init_end): %li ns\n", ttl_elapsed);
 #endif
         // Get the FlowTable Entries Exported to the NF.
-        //#if defined(ENABLE_NFV_RESL)
         onvm_flow_dir_nf_init();
-        //#endif //#if defined(ENABLE_NFV_RESL)
 
         RTE_LOG(INFO, APP, "Finished Process Init.\n");
         return retval_final;
