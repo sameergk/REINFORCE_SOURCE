@@ -124,6 +124,9 @@ struct thread_info {
         */
        struct packet_buf *nf_rx_buf;
        struct packet_buf *port_tx_buf;
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+       struct packet_buf *port_tx_direct_buf;   //use this buffer to directly output bypassing the rsync if enabled!
+#endif
 };
 
 

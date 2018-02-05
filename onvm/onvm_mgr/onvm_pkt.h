@@ -183,6 +183,8 @@ onvm_pkt_flush_nf_queue(struct thread_info *thread, uint16_t client);
  */
 inline void
 onvm_pkt_enqueue_port(struct thread_info *tx, uint16_t port, struct rte_mbuf *buf);
+inline void
+onvm_pkt_enqueue_port_v2(struct thread_info *tx, uint16_t port, struct rte_mbuf *buf, struct onvm_pkt_meta *meta, struct onvm_flow_entry *flow_entry);
 
 
 /*

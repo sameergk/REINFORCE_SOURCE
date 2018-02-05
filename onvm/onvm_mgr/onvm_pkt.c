@@ -120,7 +120,11 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
                         break;
                 case ONVM_NF_ACTION_OUT:
                         (meta->chain_index)++;
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+                        onvm_pkt_enqueue_port_v2(rx, meta->destination, pkts[i],meta,flow_entry);
+#else
                         onvm_pkt_enqueue_port(rx, meta->destination, pkts[i]);
+#endif
                         break;
                 }
         }
@@ -169,7 +173,11 @@ onvm_pkt_process_tx_batch(struct thread_info *tx, struct rte_mbuf *pkts[], uint1
                         cl->stats.act_out++;
 #endif
                         (meta->chain_index)++;
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+                        onvm_pkt_enqueue_port_v2(tx, meta->destination, pkts[i],meta,flow_entry);
+#else
                         onvm_pkt_enqueue_port(tx, meta->destination, pkts[i]);
+#endif
                         break;
                 default:
                         printf("onvm_pkt_process_tx_batch(): ERROR invalid action: this shouldn't happen.\n");
@@ -265,6 +273,34 @@ onvm_pkt_flush_port_queue(struct thread_info *tx, uint16_t port) {
 
         if (unlikely(tx == NULL))
                 return;
+
+/**** START OF BYPASS ISOLATION ***/
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+                if(tx->port_tx_direct_buf[port].count) {
+#ifdef PROFILE_PACKET_PROCESSING_LATENCY
+        onvm_util_calc_chain_processing_latency(tx->port_tx_direct_buf[port].buffer, tx->port_tx_direct_buf[port].count);
+#endif
+                        volatile struct tx_stats *tx_stat = &(ports->tx_stats);
+                        sent = rte_eth_tx_burst(port,
+                                        tx->queue_id,
+                                        tx->port_tx_direct_buf[port].buffer,
+                                        tx->port_tx_direct_buf[port].count);
+                        if (unlikely(sent < tx->port_tx_direct_buf[port].count)) {
+                                for (i = sent; i < tx->port_tx_direct_buf[port].count; i++) {
+                                        onvm_pkt_drop(tx->port_tx_direct_buf[port].buffer[i]);
+                                }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                                tx_stat->tx_drop[port] += (tx->port_tx_direct_buf[port].count - sent);
+#endif
+                        }
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                       tx_stat->tx[port] += sent;
+#endif
+                       tx->port_tx_direct_buf[port].count=0;
+                }
+#endif
+/*****END OF BYPASS ISLOATION *****/
+
 
         if (unlikely(tx->port_tx_buf[port].count == 0))
                 return;
@@ -390,6 +426,31 @@ onvm_pkt_enqueue_port(struct thread_info *tx, uint16_t port, struct rte_mbuf *bu
         }
 }
 
+inline void
+onvm_pkt_enqueue_port_v2(struct thread_info *tx, uint16_t port, struct rte_mbuf *buf, __attribute__((unused)) struct onvm_pkt_meta *meta, __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
+
+        if (tx == NULL || buf == NULL)
+                return;
+
+        if(unlikely(port >= ports->num_ports))
+                return;
+        //uint8_t bypass = 0;
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+        uint8_t bypass = meta->reserved_word&0x02;
+        if(bypass) {
+                tx->port_tx_direct_buf[port].buffer[tx->port_tx_direct_buf[port].count++] = buf;
+                if (tx->port_tx_direct_buf[port].count == PACKET_READ_SIZE) {
+                        onvm_pkt_flush_port_queue(tx, port);
+                }
+                return;
+        }
+#endif
+
+        tx->port_tx_buf[port].buffer[tx->port_tx_buf[port].count++] = buf;
+        if (tx->port_tx_buf[port].count == PACKET_READ_SIZE) {
+                onvm_pkt_flush_port_queue(tx, port);
+        }
+}
 
 inline void
 onvm_pkt_enqueue_nf(struct thread_info *thread, struct rte_mbuf *pkt, struct onvm_pkt_meta *meta, __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
@@ -573,7 +634,11 @@ onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt, __att
                         cl->stats.act_out++;
 #endif
                         (meta->chain_index)++;
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+                        onvm_pkt_enqueue_port_v2(tx, meta->destination, pkt,meta,flow_entry);
+#else
                         onvm_pkt_enqueue_port(tx, meta->destination, pkt);
+#endif
                         break;
                 default:
                         break;

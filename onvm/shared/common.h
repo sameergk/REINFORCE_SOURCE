@@ -338,7 +338,8 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 #define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.
 #define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.
-////#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
+#define ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
+//#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
 #ifndef RESL_UPDATE_MODE_PER_PACKET
 #define RESL_UPDATE_MODE_PER_BATCH      //update mode Shadow Ring, Replica state, per flow TS for batch of packets
 #endif
@@ -392,7 +393,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define TX_RSYNC_NF_LATCH_DB_RING_SIZE  (TX_RSYNC_NF_LATCH_RING_SIZE)
 //#define ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE   //Approach 1: Simple double buffer mode
 //#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE  //Approach 2: More optimal/greedy double buffering mode
-#define ENABLE_RSYNC_MULTI_BUFFERING   (1)      //Approach 3: Multiple counter of buffers that can be exhausted before switching to primary buffer
+#define ENABLE_RSYNC_MULTI_BUFFERING   (2)      //Approach 3: Multiple counter of buffers that can be exhausted before switching to primary buffer
 //enable to internally check and clear transactions with elapsed timers ( > 2RTT)
 #define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS
 //Double Buffering scheme must use Batched Transactions
@@ -536,9 +537,12 @@ struct onvm_pkt_meta {
         uint8_t chain_index;    /*index of the current step in the service chain*/
 #ifdef ENABLE_FT_INDEX_IN_META
         uint16_t ft_index;       /* Index of the FT if the packet is mapped in SDN Flow Table */
-        uint16_t reserved_word; /* reserved word */
 #endif
+        uint16_t reserved_word; /* reserved word */
+        //reserved word usage: 0x01==Need NF RSYNC; 0x02=BYPASS RSYNC on TX;
 };//__attribute__((__aligned__(ONVM_CACHE_LINE_SIZE)));
+
+
 static inline struct onvm_pkt_meta* onvm_get_pkt_meta(struct rte_mbuf* pkt) {
         return (struct onvm_pkt_meta*)&pkt->udata64;
 }

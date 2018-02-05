@@ -440,6 +440,9 @@ static inline int create_rx_threads(unsigned *pcur_lcore, unsigned rx_lcores) {
                 rx->queue_id = i;
                 rx->port_tx_buf = NULL;
                 rx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+                rx->port_tx_direct_buf = NULL;   //use this buffer to directly output bypassing the rsync if enabled!
+#endif
                 *pcur_lcore = rte_get_next_lcore(*pcur_lcore, 1, 1);
                 if (rte_eal_remote_launch(rx_thread_main, (void *)rx, *pcur_lcore) == -EBUSY) {
                         RTE_LOG(ERR, APP, "Core %d is already busy, can't use for RX queue id %d\n", *pcur_lcore, rx->queue_id);
@@ -457,6 +460,9 @@ static inline int create_tx_threads(unsigned *pcur_lcore, unsigned tx_lcores, un
                 tx->queue_id = i;
                 tx->port_tx_buf = calloc(RTE_MAX_ETHPORTS, sizeof(struct packet_buf));
                 tx->nf_rx_buf = calloc(MAX_CLIENTS, sizeof(struct packet_buf));
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+                tx->port_tx_direct_buf = calloc(RTE_MAX_ETHPORTS, sizeof(struct packet_buf));   //use this buffer to directly output bypassing the rsync if enabled!
+#endif
 
                 tx->first_cl = RTE_MIN(i * clients_per_tx, num_clients);       //(inclusive) read from NF[0] to NF[clients_per_tx-1]
                 tx->last_cl = RTE_MIN((i+1) * clients_per_tx, num_clients);
