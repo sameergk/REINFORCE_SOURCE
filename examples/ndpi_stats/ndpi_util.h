@@ -30,7 +30,7 @@
 #define __NDPI_UTIL_H__
 
 #include <pcap.h>
-//#define ENABLE_NFV_RESL
+#define ENABLE_NFV_RESL
 
 #define MAX_NUM_READER_THREADS     16
 #define IDLE_SCAN_PERIOD           10 /* msec (use TICK_RESOLUTION = 1000) */

@@ -598,8 +598,11 @@ onvm_nf_service_to_nf_map(uint16_t service_id, __attribute__((unused)) struct rt
         // I think, it would be simpler to maintain primary and secondary as two separate lists.
         return services[service_id][0];
 
-        //uint16_t unique_nfs = 0;
-        //uint16_t nf_index = 0;
+        //Added this piece of code for Isolation test: so that two chains pick two diffrent NFs ( also need 2 rules i.e. two same NFs with 2 services)
+        static uint16_t used=0;
+        uint16_t instance_index = used % num_nfs_available; used++;
+        uint16_t instance_id = services[service_id][instance_index];
+        return instance_id;
         //for(; nf_index < num_nfs_available; nf_index++) {
         //
         //}

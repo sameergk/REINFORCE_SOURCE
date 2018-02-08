@@ -436,7 +436,7 @@ onvm_pkt_enqueue_port_v2(struct thread_info *tx, uint16_t port, struct rte_mbuf 
                 return;
         //uint8_t bypass = 0;
 #ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
-        uint8_t bypass = meta->reserved_word&0x02;
+        uint8_t bypass = meta->reserved_word&0x02; // buf->port;
         if(bypass) {
                 tx->port_tx_direct_buf[port].buffer[tx->port_tx_direct_buf[port].count++] = buf;
                 if (tx->port_tx_direct_buf[port].count == PACKET_READ_SIZE) {

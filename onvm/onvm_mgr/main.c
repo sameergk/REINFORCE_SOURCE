@@ -235,7 +235,10 @@ initialize_master_timers(void) {
 }
 #endif //ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
 /*******************************Worker threads********************************/
+#define MAIN_THREAD_POLL
+#ifndef MAIN_THREAD_POLL
 #define MAIN_THREAD_SLEEP_INTERVAL_NS  (1000)
+#endif
 /*
  * Stats thread periodically prints per-port and per-NF stats.
  */
@@ -256,13 +259,17 @@ master_thread_main(void) {
 
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
                 if(initialize_master_timers() == 0) {
+#ifndef MAIN_THREAD_POLL
                         struct timespec req = {0,MAIN_THREAD_SLEEP_INTERVAL_NS}, res = {0,0};
+#endif
                         do {
                                 rte_timer_manage();
 #ifdef ONVM_ENABLE_SPEACILA_NF
                                 (void)process_special_nf0_rx_packets();
 #endif
+#ifndef MAIN_THREAD_POLL
                                 nanosleep(&req, &res);
+#endif
                         } while(main_keep_running);
                         //while (nanosleep(&req, &res) == 0) { //while (usleep(USLEEP_INTERVAL_IN_US) == 0) { // while(1) {}
                 } else
@@ -347,7 +354,13 @@ rx_thread_main(void *arg) {
 #ifdef ENABLE_PCAP_CAPTURE
                                 onvm_util_log_packets(pkts,NULL,rx_count);
 #endif
-
+#ifdef MIMIC_PICO_REP
+                                if(rx_halt) {
+                                        onvm_pkt_drop_batch(pkts, rx_count);
+                                        //printf("\n Dropping batch of packets!\n");
+                                        continue;
+                                }
+#endif
                                 if(unlikely(i != pkts[0]->port)) { printf("\n got packet with Incorrect i=%d Port mapping! Pkt=%d, ",i, pkts[0]->port);}
                                 // If there is no running NF, we drop all the packets of the batch.
                                 if (likely(num_clients)) {

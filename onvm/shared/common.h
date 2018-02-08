@@ -71,7 +71,7 @@
 
 #define ARBITER_PERIOD_IN_US (100)      // 250 or 100 micro seconds
 //#define USE_SINGLE_NIC_PORT           // NEEDED FOR VXLAN?
-#define MAX_CLIENTS (16)                // total number of NFs allowed
+#define MAX_CLIENTS (32)                // total number of NFs allowed
 #define MAX_NFS (MAX_CLIENTS)           // --do-- for new stats merger;
 #define MAX_SERVICES (16)               // total number of unique services allowed
 #define MAX_CLIENTS_PER_SERVICE (8)     // max number of NFs per service.
@@ -336,8 +336,8 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
-#define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.
-#define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.
+#define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
+#define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
 #define ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
 //#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
 #ifndef RESL_UPDATE_MODE_PER_PACKET
@@ -395,7 +395,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 //#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE  //Approach 2: More optimal/greedy double buffering mode
 #define ENABLE_RSYNC_MULTI_BUFFERING   (2)      //Approach 3: Multiple counter of buffers that can be exhausted before switching to primary buffer
 //enable to internally check and clear transactions with elapsed timers ( > 2RTT)
-#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS
+#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS    //Note: Must enable all the time
 //Double Buffering scheme must use Batched Transactions
 #ifndef USE_BATCHED_RSYNC_TRANSACTIONS
 #define USE_BATCHED_RSYNC_TRANSACTIONS
@@ -405,6 +405,10 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif
 
+/* Feature to enable PICO Replication mode of operation: Cut Rx while State update
+ * Note: Additionally disable DOuble Buffering and operate in single Buffer mode
+ * */
+//#define MIMIC_PICO_REP
 
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)

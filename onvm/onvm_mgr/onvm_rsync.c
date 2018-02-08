@@ -59,6 +59,10 @@
 #include <rte_ether.h>
 #include <rte_arp.h>
 
+#ifdef MIMIC_PICO_REP
+uint8_t rx_halt = 0;
+#endif
+
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 /* Estimate for determining the most preferred/ optimal Number of Packets that need to be considered for Tx Stats update. */
 #define MAX_PACKETS_IN_AVG_RTT_AT_HIGH_ARRV_RATE    (5000)  //10Mpps (normal rate); => for ~ 500us RTT, to maximize handle packets worth 1RTT = 10Mpps * 500us
@@ -197,6 +201,7 @@ static int get_transaction_id(void) {
         static uint8_t last_trans_id = 1;
         //return ((++trans_id)%MAX_RSYNC_TRANSACTIONS);
         uint8_t i = last_trans_id%MAX_RSYNC_TRANSACTIONS,j=0;
+//RECHECK:
         for(j=0; j< MAX_RSYNC_TRANSACTIONS; j++) {
                 if(i && trans_queue[i] == 0) {
                         last_trans_id = i+1;
@@ -205,6 +210,7 @@ static int get_transaction_id(void) {
                 i++;
                 i%=MAX_RSYNC_TRANSACTIONS;
         }
+        //goto RECHECK;
         return -1;
 }
 static uint8_t log_transaction_id(uint8_t tid) {
@@ -258,10 +264,16 @@ static int rsync_wait_for_commit_ack(uint8_t trans_id, __attribute__((unused)) u
         int wait_counter = 0; //hack till remote_node also sends
         struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         do {
+#ifdef MIMIC_PICO_REP
+                rx_halt=1;
+#endif
                 nanosleep(&req, &res);
                 if((++wait_counter) > MAX_TRANS_COMMIT_WAIT_COUNTER) break;
         }while(trans_queue[trans_id]);
         clear_transaction_id(trans_id);
+#ifdef MIMIC_PICO_REP
+                rx_halt=0;
+#endif
         return 0;
 }
 
@@ -295,7 +307,8 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count, __a
                 nanosleep(&req, &res);
                 if((++wait_counter) > MAX_TRANS_COMMIT_WAIT_COUNTER) break;
         }while(wait_needed);
-#if 0
+#ifdef MIMIC_PICO_REP
+        rx_halt=0;
         //need notifier to clear the transactions
         //clear the transactions.
         for(i=0; i< count; i++) {
@@ -1128,7 +1141,9 @@ static int rsync_start_simple(__attribute__((unused)) void *arg);
 static int rsync_start_simple(__attribute__((unused)) void *arg) {
         //TEST_HACK to directly transfer out the packets
         //return transmit_tx_port_packets();
+#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
         uint8_t trans_ids[2] = {0,0},tid=0;
+#endif
 
         //First Extract and Parse Tx Port Packets and update TS info in Tx Table
         int ret = extract_and_parse_tx_port_packets(0);
@@ -1188,7 +1203,9 @@ int rsync_start_only_db(__attribute__((unused)) void *arg);
 int rsync_start_only_db(__attribute__((unused)) void *arg) {
         //TEST_HACK to directly transfer out the packets
         //return transmit_tx_port_packets();
+#ifdef USE_BATCHED_RSYNC_TRANSACTIONS
         uint8_t trans_ids[2] = {0,0},tid=0;
+#endif
 
         //First Extract and Parse Tx Port Packets and update TS info in Tx Table
         int ret = extract_and_parse_tx_port_packets(1);
