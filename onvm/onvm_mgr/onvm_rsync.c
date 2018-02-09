@@ -197,6 +197,18 @@ static inline int initialize_rsync_timers(void);
 /***********************Internal Functions************************************/
 
 /***********************TRANSACTION FUNCTIONS**********************************/
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+static int print_trans_status(void) {
+
+        int i = 0;
+        printf("\n Transaction List:[");
+        for(i=0; i < MAX_RSYNC_TRANSACTIONS; i++) {
+                printf("%d\t ", trans_queue[i]);
+        }
+        printf("]\n");
+        return 0;
+}
+#endif
 static int get_transaction_id(void) {
         static uint8_t last_trans_id = 1;
         //return ((++trans_id)%MAX_RSYNC_TRANSACTIONS);
@@ -215,11 +227,23 @@ static int get_transaction_id(void) {
 }
 static uint8_t log_transaction_id(uint8_t tid) {
         onvm_util_get_cur_time(&trans_ts[tid]);
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+        trans_queue[tid] = 1;
+        printf("On Transaction LOG for [%d]\n", tid);
+        print_trans_status();
+#else
         return (trans_queue[tid] = 1);
+#endif
 }
 static uint8_t clear_transaction_id (uint8_t tid) {
         trans_ts[tid].t.tv_nsec = trans_ts[tid].t.tv_sec=0;
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+        printf("On Transaction Clear for [%d]\n", tid);
+        trans_queue[tid]=0;
+        print_trans_status();
+#else
         return (trans_queue[tid]=0); //return (trans_queue[tid]^= tid);
+#endif
 }
 
 static uint8_t check_and_clear_elapsed_transactions(void) {
@@ -288,6 +312,8 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count, __a
                 for(i=0; i< count; i++) {
                         if(trans_queue[trans_id_list[i]]) {
                                 return trans_id_list[i];
+                        } else {
+                                trans_id_list[i]=0;
                         }
                 }
                 return 0;
@@ -295,18 +321,28 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count, __a
 #endif
 
         uint8_t wait_needed=0;//TEST_HACK to bypass wait_on_acks //return wait_needed;
-
         //poll/wait till trans_queue[ids[]] is cleared.
         int wait_counter = 0; //hack till remote_node also sends
         struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         do {
+#ifdef MIMIC_PICO_REP
+                rx_halt=1;
+#endif
                 wait_needed= 0;
                 for(i=0; i< count; i++) {
-                        if(trans_queue[trans_id_list[i]]) wait_needed = 1;
+                        if(trans_queue[trans_id_list[i]]) {
+                                wait_needed = 1;
+                        } else {
+                                trans_id_list[i]=0;
+                        }
+                }
+                if(!wait_needed) {
+                        return 0; break;
                 }
                 nanosleep(&req, &res);
                 if((++wait_counter) > MAX_TRANS_COMMIT_WAIT_COUNTER) break;
         }while(wait_needed);
+
 #ifdef MIMIC_PICO_REP
         rx_halt=0;
         //need notifier to clear the transactions

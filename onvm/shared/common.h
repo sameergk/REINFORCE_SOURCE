@@ -395,7 +395,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 //#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE  //Approach 2: More optimal/greedy double buffering mode
 #define ENABLE_RSYNC_MULTI_BUFFERING   (2)      //Approach 3: Multiple counter of buffers that can be exhausted before switching to primary buffer
 //enable to internally check and clear transactions with elapsed timers ( > 2RTT)
-#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS    //Note: Must enable all the time
+//#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS    //Note: Must enable all the time
 //Double Buffering scheme must use Batched Transactions
 #ifndef USE_BATCHED_RSYNC_TRANSACTIONS
 #define USE_BATCHED_RSYNC_TRANSACTIONS
