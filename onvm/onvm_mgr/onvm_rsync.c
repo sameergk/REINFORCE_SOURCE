@@ -468,8 +468,7 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
                 dtx->dirty_index =0;
                 //check if packets are created and need to be transmitted out;
                 if(i) {
-                        uint8_t out_port = 0;
-                        log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                        log_transaction_and_send_packets_out(meta.trans_id, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                         rsync_stat.tx_state_sync_pkt_counter +=i;
 #endif
@@ -485,7 +484,6 @@ static int rsync_nf_state_to_remote(void) {
         //Note: Size of NF_STATE_SIZE=64K and total_chunks=64 => size_per_chunk=1K -- can fit in 1 packet But
         //      size of SVC_STATE_SIZE=4MB and total_chunks=64 => size_per_chunk=64K -- so, each service each chunk requires 64 sends. -- must optimize -- DPI is an exception..
 
-        uint8_t out_port = 0;
         uint16_t i=0;
         uint8_t active_services[MAX_SERVICES] = {0};
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
@@ -535,7 +533,7 @@ static int rsync_nf_state_to_remote(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if( i == PACKET_READ_SIZE_LARGE) {
-                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                                                         rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
 #endif
@@ -549,7 +547,7 @@ static int rsync_nf_state_to_remote(void) {
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                                 rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
 #endif
@@ -593,7 +591,7 @@ static int rsync_nf_state_to_remote(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if(i == PACKET_READ_SIZE_LARGE) {
-                                                        log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
                                                 }
                                         }
@@ -604,7 +602,7 @@ static int rsync_nf_state_to_remote(void) {
                         //check if packets are created and need to be transmitted out;
                         if(i) {
                                 //printf("\n $$$$ Sending [%d] packets for NF Instdance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
+                                send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
                                 i=0;
                         }
                 }

@@ -106,6 +106,7 @@ int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, 
 inline int onvm_util_init_pacp_logger(int port, int mode);
 inline int onvm_util_clear_pcap_log(int port);
 inline int onvm_util_log_packets(struct rte_mbuf **pkts, uint64_t *ts_info, uint16_t nb_pkts);
+inline int onvm_util_replay_all_packets(uint8_t port, uint64_t max_duration_us);
 inline const char* onvm_util_close_and_get_pdump_file(__attribute__((unused)) int port);
 #endif
 

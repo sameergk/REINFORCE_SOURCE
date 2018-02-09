@@ -193,95 +193,7 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
 }
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
 /******************************************************************************/
-#ifdef ENABLE_PCAP_CAPTURE
-/*********************** PCAP DUMP FEATURE ************************************/
-#include <pcap/pcap.h>
-const uint16_t MAX_SNAPLEN = (uint16_t) -1;
-#define PCAP_FILE_NAME  "pcap_capture.pcap"
 
-typedef struct pcap_session_meta {
-        char capture_file[64];
-        size_t max_capture_size;
-        uint32_t max_packet_count;
-        uint32_t reset_log_period_in_ms;
-
-        pcap_t *pd;
-        pcap_dumper_t *pcap_dumper;
-        uint8_t is_active;
-        size_t captured_size;
-        uint32_t captured_packet_count;
-        onvm_time_t capture_start_time;
-        onvm_time_t capture_end_time;
-
-}pcap_session_meta_t;
-//pcap_port_info[RTE_MAX_PORTS] -- can ideally extend to distinct files per port.
-pcap_session_meta_t pcap_info = {
-                .capture_file = {'p','c','a','p','_','c','a','p','t','u','r','e','.','p','c','a','p','\0'},
-                .max_capture_size = 1*1024*1024*1024,
-                .max_packet_count = 10*1000*1000,
-                .pd = NULL,
-                .pcap_dumper = NULL,
-                .captured_size =0,
-                .captured_packet_count=0,
-                .is_active=0
-};
-
-inline int onvm_util_init_pacp_logger(__attribute__((unused)) int port, __attribute__((unused)) int mode) {
-        if(pcap_info.pd) return EALREADY;
-        //pcap_info.pd = pcap_open_dead(DLT_EN10MB, MAX_SNAPLEN);
-        //pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_RAW, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
-        pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_EN10MB, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
-        if(pcap_info.pd == NULL) return 2;
-        pcap_info.pcap_dumper = pcap_dump_open(pcap_info.pd, (const char*)pcap_info.capture_file);
-        if(NULL == pcap_info.pcap_dumper) return 3;
-        pcap_info.is_active=1;
-        return 0;
-}
-inline int onvm_util_clear_pcap_log(__attribute__((unused)) int port) {
-        return 0;
-}
-inline int onvm_util_log_packets(struct rte_mbuf **pkts, __attribute__((unused)) uint64_t *ts_info, uint16_t nb_pkts) {
-        unsigned i, cap_size=0;
-        u_char *packet;
-        struct pcap_pkthdr pkt_hdr;
-        if( 0 == pcap_info.captured_packet_count) {
-                onvm_util_get_cur_time(&pcap_info.capture_start_time);
-        } else {
-                if(pcap_info.captured_packet_count >= pcap_info.max_packet_count) return -1;
-                if(pcap_info.captured_size >= pcap_info.max_capture_size) return -2;
-        }
-        gettimeofday(&pkt_hdr.ts, NULL);
-        for (i = 0; i < nb_pkts; i++) {
-                //ts_info[i];
-                //pkt_hdr.ts.tv_sec = pkts[i]->ol_flags/1000000000;             // (pkts[i]->ol_flags = uint64_t (now.t.tv_sec * 1000000000 + now.t.tv_sec);
-                //pkt_hdr.ts.tv_usec= ((pkts[i]->ol_flags -pkt_hdr.ts.tv_sec)*1000 ;
-                pkt_hdr.caplen = rte_pktmbuf_data_len(pkts[i]);
-                pkt_hdr.len = rte_pktmbuf_data_len(pkts[i]);
-                packet = rte_pktmbuf_mtod(pkts[i], u_char * );
-                pcap_dump((u_char *) pcap_info.pcap_dumper, &pkt_hdr, packet);
-                cap_size += pkt_hdr.len;
-        }
-        pcap_info.captured_packet_count += nb_pkts;
-        pcap_info.captured_size +=cap_size;
-
-        return 0;
-}
-
-inline const char* onvm_util_close_and_get_pdump_file(__attribute__((unused)) int port) {
-        if(pcap_info.is_active == 0)return NULL;
-
-        else if(pcap_info.is_active==1) {
-                pcap_dump_close(pcap_info.pcap_dumper);
-                pcap_close(pcap_info.pd);
-                pcap_info.is_active=2;
-        }
-
-        if(pcap_info.captured_packet_count) return (const char*) pcap_info.capture_file;
-        return NULL;
-}
-/*********************** PCAP DUMP FEATURE ************************************/
-#endif //ENABLE_PCAP_CAPTURE
-/******************************************************************************/
 /*********************** ARP RESPONSE HELPER FUNCTIONS ************************/
 /* Creates an mbuf ARP reply pkt- fields are set according to info passed in.
  * For RFC about ARP, see https://tools.ietf.org/html/rfc826
@@ -492,7 +404,188 @@ static int onvm_special_nf_arp_responder_init(void) {
         return 0;
 }
 /*********************** ARP RESPONSE HELPER FUNCTIONS ************************/
+#ifdef ENABLE_PCAP_CAPTURE
+/*********************** PCAP DUMP FEATURE ************************************/
+#include <pcap/pcap.h>
+const uint16_t MAX_SNAPLEN = (uint16_t) -1;
+#define PCAP_FILE_NAME  "pcap_capture.pcap"
 
+typedef struct pcap_session_meta {
+        char capture_file[64];
+        uint64_t max_capture_size;
+        uint64_t max_packet_count;
+        uint32_t reset_log_period_in_ms;
+        uint8_t capture_port;
+        pcap_t *pd;
+        pcap_dumper_t *pcap_dumper;
+        uint8_t is_active;
+        uint64_t captured_size;
+        uint32_t captured_packet_count;
+        onvm_time_t capture_start_time;
+        onvm_time_t capture_end_time;
+
+}pcap_session_meta_t;
+//pcap_port_info[RTE_MAX_PORTS] -- can ideally extend to distinct files per port.
+pcap_session_meta_t pcap_info = {
+                .capture_file = {'p','c','a','p','_','c','a','p','t','u','r','e','.','p','c','a','p','\0'},
+                .max_capture_size = (uint64_t)1024*1024*1024*1/4,
+                .max_packet_count = 1000*1000*1000,
+                .capture_port = 0,
+                .pd = NULL,
+                .pcap_dumper = NULL,
+                .captured_size =0,
+                .captured_packet_count=0,
+                .is_active=0
+};
+typedef enum pcap_log_status_type {
+        pcap_log_status_unused=0,
+        pcap_log_status_active_logging=1,
+        pcap_log_status_active_logging_stopped=2,
+        pcap_log_status_replay_on=3,
+        pcap_log_status_replay_finished=4,
+}pcap_log_status_type_e;
+inline int onvm_util_init_pacp_logger(__attribute__((unused)) int port, __attribute__((unused)) int mode) {
+        if(pcap_info.pd) return EALREADY;
+        //pcap_info.pd = pcap_open_dead(DLT_EN10MB, MAX_SNAPLEN);
+        //pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_RAW, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
+        pcap_info.pd = pcap_open_dead_with_tstamp_precision(DLT_EN10MB, MAX_SNAPLEN, PCAP_TSTAMP_PRECISION_NANO);
+        if(pcap_info.pd == NULL) return 2;
+        pcap_info.pcap_dumper = pcap_dump_open(pcap_info.pd, (const char*)pcap_info.capture_file);
+        if(NULL == pcap_info.pcap_dumper) return 3;
+
+        pcap_info.captured_packet_count=0;
+        pcap_info.captured_size=0;
+        pcap_info.is_active=pcap_log_status_active_logging;
+        pcap_info.capture_port=port;
+
+        return 0;
+}
+inline int onvm_util_clear_pcap_log(__attribute__((unused)) int port) {
+        //onvm_util_close_and_get_pdump_file(port);
+        //return onvm_util_init_pacp_logger(port, 0);
+        pcap_dump_close(pcap_info.pcap_dumper);
+        pcap_info.pcap_dumper = pcap_dump_open(pcap_info.pd, (const char*)pcap_info.capture_file);
+        pcap_info.captured_packet_count=0;
+        pcap_info.captured_size=0;
+        pcap_info.is_active=pcap_log_status_active_logging;
+        pcap_info.capture_port=port;
+        return 0;
+}
+inline int onvm_util_log_packets(struct rte_mbuf **pkts, __attribute__((unused)) uint64_t *ts_info, uint16_t nb_pkts) {
+        unsigned i, cap_size=0;
+        u_char *packet;
+        struct pcap_pkthdr pkt_hdr;
+        if( 0 == pcap_info.captured_packet_count) {
+                onvm_util_get_cur_time(&pcap_info.capture_start_time);
+        } else {
+                if(pcap_info.captured_packet_count >= pcap_info.max_packet_count) return -1;
+                if(pcap_info.captured_size >= pcap_info.max_capture_size) return -2;
+                if(pcap_info.captured_packet_count >= pcap_info.max_packet_count || pcap_info.captured_size >= pcap_info.max_capture_size) {
+                        onvm_util_clear_pcap_log(pcap_info.capture_port);
+                        onvm_util_get_cur_time(&pcap_info.capture_start_time);
+                }
+        }
+        gettimeofday(&pkt_hdr.ts, NULL);
+        for (i = 0; i < nb_pkts; i++) {
+                //ts_info[i];
+                //pkt_hdr.ts.tv_sec = pkts[i]->ol_flags/1000000000;             // (pkts[i]->ol_flags = uint64_t (now.t.tv_sec * 1000000000 + now.t.tv_sec);
+                //pkt_hdr.ts.tv_usec= ((pkts[i]->ol_flags -pkt_hdr.ts.tv_sec)*1000 ;
+                pkt_hdr.caplen = rte_pktmbuf_data_len(pkts[i]);
+                pkt_hdr.len = rte_pktmbuf_data_len(pkts[i]);
+                packet = rte_pktmbuf_mtod(pkts[i], u_char * );
+                pcap_dump((u_char *) pcap_info.pcap_dumper, &pkt_hdr, packet);
+                cap_size += pkt_hdr.len;
+        }
+        pcap_info.captured_packet_count += nb_pkts;
+        pcap_info.captured_size +=cap_size;
+
+        return 0;
+}
+
+inline const char* onvm_util_close_and_get_pdump_file(__attribute__((unused)) int port) {
+        if(pcap_info.is_active == pcap_log_status_unused)return NULL;
+
+        else if(pcap_info.is_active==pcap_log_status_active_logging) {
+                pcap_dump_close(pcap_info.pcap_dumper);
+                pcap_close(pcap_info.pd);pcap_info.pd=NULL;
+                pcap_info.is_active=pcap_log_status_active_logging_stopped;
+        }
+
+        if(pcap_info.captured_packet_count) return (const char*) pcap_info.capture_file;
+        return NULL;
+}
+
+static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duration_us);
+inline int onvm_util_replay_all_packets(uint8_t port, uint64_t max_duration_us) {
+        onvm_util_close_and_get_pdump_file(port);
+
+#ifdef USE_FREAD_MODE
+        return onvm_util_file_pcap_replay(port,max_duration_us);
+#else
+        return onvm_util_plain_pcap_replay(port,max_duration_us);
+#endif
+
+}
+static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duration_us) {
+        int ret = 0;
+        uint16_t rp_count;
+        struct rte_mbuf *pkts[PACKET_READ_SIZE];
+        struct pcap_pkthdr *hdr;
+        //struct timeval now;
+        //struct ipv4_hdr * ip_h;
+        void * pkt;
+        char err_buf[256];
+        int continue_replay=1;
+        uint64_t replay_pkt_count=0;
+
+        pcap_info.pd = pcap_open_offline(pcap_info.capture_file, err_buf);
+        if(pcap_info.pd == NULL) {
+                printf("\n Unable to open PCAP Capture File=%s\n", pcap_info.capture_file);
+                return 2;
+        }
+        pcap_info.is_active=pcap_log_status_replay_on;
+        do {
+                ret = pcap_next_ex(pcap_info.pd, &hdr, (const u_char**)&pkt);
+                if(ret <=0) {
+                        continue_replay = 0;
+                        break;
+                }
+                pkts[rp_count] = rte_pktmbuf_alloc(state_info->pktmbuf_pool);
+                if(NULL == pkts[rp_count]) {
+                        break;
+                }
+                pkts[rp_count]->data_len = pkts[rp_count]->pkt_len = hdr->caplen;
+                rte_memcpy ( (char*) pkts[rp_count]->buf_addr + pkts[rp_count]->data_off, pkt, hdr->caplen);
+                rp_count++;
+                if(rp_count == PACKET_READ_SIZE) {
+                        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
+                        if (enq_status) {
+                                onvm_pkt_drop_batch(pkts,rp_count);
+                                nf0_cl->stats.rx_drop += rp_count;
+                        }
+                        replay_pkt_count+=rp_count;
+                        rp_count=0;
+                }
+                //Add check for elapsed time and break appropriately
+        }while(continue_replay);
+        if(rp_count == PACKET_READ_SIZE) {
+                int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
+                if (enq_status) {
+                        onvm_pkt_drop_batch(pkts,rp_count);
+                        nf0_cl->stats.rx_drop += rp_count;
+                }
+                replay_pkt_count+=rp_count;
+                rp_count=0;
+        }
+        printf("\n [%lld] Replay packets sent on port [%d] within [%lld]!\n", (long long)replay_pkt_count, port, (long long)max_duration_us);
+        pcap_close(pcap_info.pd);
+        pcap_info.is_active=pcap_log_status_replay_finished;
+
+        return ret;
+}
+/*********************** PCAP DUMP FEATURE ************************************/
+#endif //ENABLE_PCAP_CAPTURE
+/******************************************************************************/
 /*******************************File Interface functions********************************/
 int onv_pkt_send_to_special_nf0(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count) {
 

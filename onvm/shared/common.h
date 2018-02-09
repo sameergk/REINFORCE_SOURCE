@@ -457,6 +457,7 @@ typedef struct onvm_per_flow_ts_info {
 #define RSYNC_TX_PORT_QUEUE_ID_0    (BFD_TX_PORT_QUEUE_ID+1)
 //for internal thread
 #define RSYNC_TX_PORT_QUEUE_ID_1    (RSYNC_TX_PORT_QUEUE_ID_0+1)
+#define RSYNC_TX_OUT_PORT       (0)
 #endif
 
 // END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
