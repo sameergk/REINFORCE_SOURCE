@@ -43,9 +43,6 @@
 
 #include <rte_mbuf.h>
 #include <rte_ether.h>
-#ifdef RTE_LIBRTE_PDUMP
-#include <rte_pdump.h>
-#endif
 
 #include <stdint.h>
 #include "onvm_sort.h"
@@ -71,7 +68,7 @@
 
 #define ARBITER_PERIOD_IN_US (100)      // 250 or 100 micro seconds
 //#define USE_SINGLE_NIC_PORT           // NEEDED FOR VXLAN?
-#define MAX_CLIENTS (32)                // total number of NFs allowed
+#define MAX_CLIENTS (16)                // total number of NFs allowed
 #define MAX_NFS (MAX_CLIENTS)           // --do-- for new stats merger;
 #define MAX_SERVICES (16)               // total number of unique services allowed
 #define MAX_CLIENTS_PER_SERVICE (8)     // max number of NFs per service.
@@ -142,6 +139,10 @@
 /** Enable Packet Dumper **/
 //#define RTE_LIBRTE_PDUMP
 
+#ifdef RTE_LIBRTE_PDUMP
+#include <rte_pdump.h>
+#endif
+
 /** Sub features for ENABLE_PACKET_TIMESTAMPING  */
 #ifdef ENABLE_PACKET_TIMESTAMPING
 #define PROFILE_PACKET_PROCESSING_LATENCY
@@ -154,7 +155,15 @@
 /* Instance ID of the special NF */
 #define ONVM_SPECIAL_NF_INSTANCE_ID (0)
 
-//#define ENABLE_PCAP_CAPTURE
+#define ENABLE_PCAP_CAPTURE
+
+#ifdef ENABLE_PCAP_CAPTURE
+//#define ENABLE_PCAP_CAPTURE_ON_INPUT
+#ifndef ENABLE_PCAP_CAPTURE_ON_INPUT
+#define ENABLE_PCAP_CAPTURE_ON_OUTPUT
+#endif
+#endif
+
 #endif //ONVM_ENABLE_SPEACILA_NF
 
 /** Sub features for INTERRUPT_SEMANTICS for NFs */
@@ -393,9 +402,9 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define TX_RSYNC_NF_LATCH_DB_RING_SIZE  (TX_RSYNC_NF_LATCH_RING_SIZE)
 //#define ENABLE_SIMPLE_DOUBLE_BUFFERING_MODE   //Approach 1: Simple double buffer mode
 //#define ENABLE_OPTIMAL_DOUBLE_BUFFERING_MODE  //Approach 2: More optimal/greedy double buffering mode
-#define ENABLE_RSYNC_MULTI_BUFFERING   (2)      //Approach 3: Multiple counter of buffers that can be exhausted before switching to primary buffer
+#define ENABLE_RSYNC_MULTI_BUFFERING   (2)      //Approach 3: Multiple counter (value) of buffers that can be exhausted before switching to primary buffer
 //enable to internally check and clear transactions with elapsed timers ( > 2RTT)
-//#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS    //Note: Must enable all the time
+#define TX_RSYNC_AUTOCLEAR_ELAPSED_TRANSACTIONS_TIMERS    //Note: Must enable all the time
 //Double Buffering scheme must use Batched Transactions
 #ifndef USE_BATCHED_RSYNC_TRANSACTIONS
 #define USE_BATCHED_RSYNC_TRANSACTIONS

@@ -89,6 +89,7 @@ typedef struct rsync_stats {
 
 }rsync_stats_t;
 extern rsync_stats_t rsync_stat;
+extern uint8_t replay_mode;
 /********************************Interfaces***********************************/
 #define CHECK_IF_ANY_ONE_BIT_SET(a) (a && !(a & (a-1)))
 /********************************Interfaces***********************************/

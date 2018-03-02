@@ -133,6 +133,8 @@ static remote_node_config_t rsync_node_info = {
 #define STATE_TYPE_TX_TS_TABLE  (0x01)
 #define STATE_TYPE_NF_MEMPOOL   (0x02)
 #define STATE_TYPE_SVC_MEMPOOL  (0x04)
+#define MSG_START_OF_REPLAY     (0x08)
+#define MSG_END_OF_REPLAY       (0x09)
 #define STATE_REQ_TO_RSP_LSH    (4)
 #define STATE_TYPE_TX_TS_ACK    (STATE_TYPE_TX_TS_TABLE << STATE_REQ_TO_RSP_LSH)    //(0x10)
 #define STATE_TYPE_NF_MEM_ACK   STATE_TYPE_NF_MEMPOOL << STATE_REQ_TO_RSP_LSH)      //(0x20)
@@ -164,6 +166,9 @@ extern uint32_t nf_mgr_id;
 
 //To maintain the statistics for rsync activity
 rsync_stats_t rsync_stat;
+
+//To distinguish replay and no-replay modes: 0=NORMAL_MODE, 1=REPLAY_MODE
+uint8_t replay_mode;
 
 //Track ongoing transactions and associated timers
 static volatile uint8_t trans_queue[MAX_RSYNC_TRANSACTIONS];
@@ -772,10 +777,15 @@ static inline int initialize_tx_ts_table(void) {
 /***********************PACKET TRANSMIT FUNCTIONS******************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
 
+#ifdef ENABLE_PCAP_CAPTURE_ON_OUTPUT
+        onvm_util_log_packets(port_id,tx_pkts,NULL,nb_pkts);
+#endif
+
 #ifdef PROFILE_PACKET_PROCESSING_LATENCY
         onvm_util_calc_chain_processing_latency(tx_pkts, nb_pkts);
 #endif
         uint16_t sent_packets = rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
+
         if(unlikely(sent_packets < nb_pkts)) {
                 uint16_t i = sent_packets;
                 for(; i< nb_pkts;i++)

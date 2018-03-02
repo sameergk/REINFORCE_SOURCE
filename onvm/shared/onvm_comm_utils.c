@@ -168,7 +168,9 @@ inline uint64_t onvm_util_get_elapsed_cpu_cycles_in_us(uint64_t start) {
 #if (USE_TS_TYPE == TS_TYPE_LOGICAL)
 uint64_t gPkts=0;
 #endif
-
+#if (USE_TS_TYPE == TS_TYPE_SYS_CLOCK)
+#define USE_DISTINCT_FIELDS
+#endif
 inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16_t nb_pkts) {
         unsigned i;
 #if (USE_TS_TYPE == TS_TYPE_LOGICAL)
@@ -185,8 +187,8 @@ inline int onvm_util_mark_timestamp_on_RX_packets(struct rte_mbuf **pkts, uint16
                 pkts[i]->ol_flags = now;
 #else
                 //uint64_t ns = req->tv_sec * 1000000000 + req->tv_nsec;
-                pkts[i]->ol_flags = uint64_t (now.t.tv_sec * 1000000000 + now.t.tv_sec);
-#if 0
+                pkts[i]->ol_flags = (uint64_t) (now.t.tv_sec * 1000000000 + now.t.tv_sec);
+#if USE_DISTINCT_FILEDS
                 pkts[i]->ol_flags = now.t.tv_nsec;
                 pkts[i]->tx_offload = now.t.tv_sec;
 #endif
@@ -205,7 +207,8 @@ inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint1
 #elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
         uint64_t now = onvm_util_get_current_cpu_cycles();
 #else
-        onvm_time_t stop, start;
+        //onvm_time_t stop, start;
+        onvm_time_t stop;
         onvm_util_get_cur_time(&stop);
         uint64_t now = stop.t.tv_sec * 1000000000 + stop.t.tv_nsec;
         //single U64 precision (tv_nsec) is not good; often results in wrong values
@@ -221,13 +224,14 @@ inline int onvm_util_calc_chain_processing_latency(struct rte_mbuf **pkts, uint1
 #elif (USE_TS_TYPE == TS_TYPE_CPU_CYCLES)
                 cycles += now - pkts[i]->ol_flags;
 #else
-                cycles += now - pkts[i]->ol_flags;
-#if 0
+                //cycles += now - pkts[i]->ol_flags;
+#if USE_DISTINCT_FIELDS
                 start.t.tv_sec = pkts[i]->tx_offload;
                 start.t.tv_nsec = pkts[i]->ol_flags;
-
                 cycles += ((stop.t.tv_sec - start.t.tv_sec) * 1000000000
                         + (stop.t.tv_nsec - start.t.tv_nsec));
+#else
+                cycles += now - pkts[i]->ol_flags;
 #endif
 #endif
                 pkts[i]->tx_offload=pkts[i]->ol_flags=0;

@@ -351,8 +351,8 @@ rx_thread_main(void *arg) {
 #ifdef ENABLE_PACKET_TIMESTAMPING
                                 onvm_util_mark_timestamp_on_RX_packets(pkts, rx_count);
 #endif
-#ifdef ENABLE_PCAP_CAPTURE
-                                onvm_util_log_packets(pkts,NULL,rx_count);
+#ifdef ENABLE_PCAP_CAPTURE_ON_INPUT
+                                onvm_util_log_packets(ports->id[i],pkts,NULL,rx_count);
 #endif
 #ifdef MIMIC_PICO_REP
                                 if(rx_halt) {
