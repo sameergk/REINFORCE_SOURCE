@@ -717,21 +717,27 @@ static inline void tx_ts_update_dirty_state_index(uint16_t tx_tbl_index, __attri
         return;
 }
 #endif
-static inline void update_flow_tx_ts_table(uint64_t flow_index,  __attribute__((unused)) uint64_t ts, __attribute__((unused)) uint8_t to_db) { // __attribute__((unused)) struct onvm_pkt_meta* meta,  __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
+static inline int update_flow_tx_ts_table(uint64_t flow_index,  __attribute__((unused)) uint64_t ts, __attribute__((unused)) uint8_t to_db) { // __attribute__((unused)) struct onvm_pkt_meta* meta,  __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
         if(unlikely(flow_index >=MAX_TX_TS_ENTRIES)){
                 printf("\n Incorrect Index:%lld\n", (long long)flow_index);
-                return;
+                return 0;
         }
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
         if(to_db) {
 #ifdef ENABLE_RSYNC_MULTI_BUFFERING
                 if(tx_ts_table_db[to_db-1]) {
+                        if(unlikely(replay_mode)){  //only in replay mode; check if TS is less than already synced value; in that case; do not update but request to drop the packet
+                                if(unlikely(ts <= tx_ts_table_db[to_db-1][flow_index].ts)) return 1;
+                        }
                         tx_ts_table_db[to_db-1][flow_index].ts = ts;
                         tx_ts_update_dirty_state_index(flow_index,to_db);
                 }
 #else
                 if(tx_ts_table_db) {
+                        if(unlikely(replay_mode)){  //only in replay mode; check if TS is less than already synced value; in that case; do not update but request to drop the packet
+                                if(unlikely(ts <= tx_ts_table[flow_index].ts)) return 1;
+                        }
                         tx_ts_table_db[flow_index].ts = ts;
                         tx_ts_update_dirty_state_index(flow_index, to_db);
                 }
@@ -739,11 +745,14 @@ static inline void update_flow_tx_ts_table(uint64_t flow_index,  __attribute__((
         } else
 #endif
         if(tx_ts_table) {
+                if(unlikely(replay_mode)){  //only in replay mode; check if TS is less than already synced value; in that case; do not update but request to drop the packet
+                        if(unlikely(ts <= tx_ts_table[flow_index].ts)) return 1;
+                }
                 tx_ts_table[flow_index].ts = ts;
                 tx_ts_update_dirty_state_index(flow_index, to_db);
         }
 #endif
-        return;
+        return 0;
 }
 
 static inline int initialize_tx_ts_table(void) {
@@ -940,10 +949,12 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
         int ret = 0;
         uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0;
         uint64_t ts[PACKET_READ_SIZE_LARGE];
-        uint16_t out_pkts_nf_count, out_pkts_tx_count;
+        uint16_t out_pkts_nf_count, out_pkts_tx_count, out_pkts_dr_count;
+        uint8_t tx_ret_sts;
         struct rte_mbuf *in_pkts[PACKET_READ_SIZE_LARGE];
         struct rte_mbuf *out_pkts_tx[PACKET_READ_SIZE_LARGE];
         struct rte_mbuf *out_pkts_nf[PACKET_READ_SIZE_LARGE];
+        struct rte_mbuf *out_pkts_drop[PACKET_READ_SIZE_LARGE];
         struct onvm_pkt_meta* meta;
         struct rte_ring *latch_ring_tx;
         struct rte_ring *latch_ring_nf;
@@ -980,7 +991,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                         count = rte_ring_dequeue_burst(tx_port_ring[j], (void**)in_pkts, PACKET_READ_SIZE_LARGE);    //MIN(rem_count,PACKET_READ_SIZE_LARGE)
                         //extract timestamp for these batch of packets
                         onvm_util_get_marked_packet_timestamp((struct rte_mbuf**)in_pkts, ts, count);
-                        out_pkts_tx_count = 0; out_pkts_nf_count = 0;
+                        out_pkts_tx_count = 0; out_pkts_nf_count = 0;out_pkts_dr_count=0;
                         for(i=0; i < count;i++) {
                                 meta = onvm_get_pkt_meta((struct rte_mbuf *)in_pkts[i]);
                                 //uint8_t port = meta->destination;
@@ -988,7 +999,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                                 int flow_index = get_flow_entry_index(in_pkts[i], meta);
                                 if(flow_index >= 0) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
-                                update_flow_tx_ts_table(flow_index, ts[i],to_db);
+                                tx_ret_sts = update_flow_tx_ts_table(flow_index, ts[i],to_db);
                                 ret |=NEED_REMOTE_TS_TABLE_SYNC;
 #endif
                                 }
@@ -997,7 +1008,16 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                                         out_pkts_nf[out_pkts_nf_count++] = in_pkts[i];
                                         ret |=NEED_REMOTE_NF_STATE_SYNC;
                                 } else {
-                                        out_pkts_tx[out_pkts_tx_count++] = in_pkts[i];
+                                        if(unlikely(tx_ret_sts)) {
+                                                out_pkts_drop[out_pkts_dr_count++]=in_pkts[i];
+                                        }
+                                        else out_pkts_tx[out_pkts_tx_count++] = in_pkts[i];
+                                }
+                        }
+                        if(unlikely(out_pkts_dr_count)){
+                                uint8_t k = sent;
+                                for(;k<out_pkts_dr_count;k++) {
+                                        onvm_pkt_drop(out_pkts_drop[k]);
                                 }
                         }
                         if(likely(out_pkts_tx_count)){
@@ -1102,6 +1122,14 @@ static inline int rsync_process_req_packet(__attribute__((unused)) state_transfe
         case STATE_TYPE_SVC_MEMPOOL:
                 //update SVC_MEMPOOL_TABLE and send Response to TID
                 rsync_nf_state_from_remote(&meta_out, rsync_req->data, MIN(data_len, MAX_STATE_SIZE_PER_PACKET));
+                break;
+        case MSG_START_OF_REPLAY:
+                if(!replay_mode)replay_mode=1;
+                return meta_out.state_type;
+                break;
+        case MSG_END_OF_REPLAY:
+                if(replay_mode) replay_mode=0;
+                return meta_out.state_type;
                 break;
         default:
                 //unknown packet type;
