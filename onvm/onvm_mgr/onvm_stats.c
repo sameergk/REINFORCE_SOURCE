@@ -481,9 +481,9 @@ onvm_stats_display_clients(__attribute__((unused)) unsigned difftime) {
 #endif //NF_BACKPRESSURE_APPROACH_2
 
 
-        #ifdef USE_CGROUPS_PER_NF_INSTANCE
+#ifdef USE_CGROUPS_PER_NF_INSTANCE
                 fprintf(stats_out,"NF_Core_Id [%d], NF_comp cost=[%d], NF_CPU_SHARE=[%d]\n", clients[i].info->core_id, clients[i].info->comp_cost, clients[i].info->cpu_share);
-        #endif //USE_CGROUPS_PER_NF_INSTANCE
+#endif //USE_CGROUPS_PER_NF_INSTANCE
                 fprintf(stats_out,"\n");
 
                 /* Only print this information out if we haven't already printed it to the console above */
@@ -507,6 +507,9 @@ onvm_stats_display_clients(__attribute__((unused)) unsigned difftime) {
                        free(nf_label);
                        nf_label = NULL;
                 }
+#ifdef  __DEBUG_NDSYNC_LOGS__
+                fprintf(stats_out,"(ND_SYNC Notification Delay): Min: %li\t Max:%li\t Avg: %li \n", clients[i].info->min_nd, clients[i].info->max_nd, clients[i].info->avg_nd);
+#endif
         }
 
         fprintf(stats_out,"\n");

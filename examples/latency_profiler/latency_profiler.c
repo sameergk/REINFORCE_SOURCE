@@ -1131,6 +1131,7 @@ int main()
         test_signal_latency();
         #endif
         test_memcpy_latency();
+        test_sched_yield();
         #endif
        
 #if 0

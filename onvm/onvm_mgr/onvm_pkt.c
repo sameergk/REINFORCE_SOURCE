@@ -89,6 +89,7 @@ onvm_pkt_process_rx_batch(struct thread_info *rx, struct rte_mbuf *pkts[], uint1
                 meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
                 meta->src = 0;
                 meta->chain_index = 0;
+                meta->reserved_word=0;
 
                 get_flow_entry(pkts[i], &flow_entry);
                 if (likely(flow_entry && flow_entry->sc )) {
@@ -436,7 +437,7 @@ onvm_pkt_enqueue_port_v2(struct thread_info *tx, uint16_t port, struct rte_mbuf 
                 return;
         //uint8_t bypass = 0;
 #ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
-        uint8_t bypass = meta->reserved_word&0x02; // buf->port;
+        uint8_t bypass = meta->reserved_word&NF_BYPASS_RSYNC; // buf->port;
         if(bypass) {
                 tx->port_tx_direct_buf[port].buffer[tx->port_tx_direct_buf[port].count++] = buf;
                 if (tx->port_tx_direct_buf[port].count == PACKET_READ_SIZE) {

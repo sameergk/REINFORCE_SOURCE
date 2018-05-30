@@ -112,6 +112,15 @@ onvm_nf_is_paused(struct client *cl);
 inline int
 onvm_nf_is_processing(struct client *cl);
 
+/* Interface checking if a given nf is "Running but (not-processing packets) blocked on external event!".
+ *
+ * Input  : a pointer to the nf
+ * Output : a boolean answer
+ *
+ */
+inline int
+onvm_nf_is_waiting_on_NDSYNC(struct client *cl);
+
 /*
  * Interface checking if a given nf is "valid", meaning if it's running.
  *

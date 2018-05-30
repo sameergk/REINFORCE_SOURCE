@@ -50,6 +50,12 @@
 #include "onvm_nflib_internal.h"
 #include "onvm_nflib.h"
 
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+#ifdef  __DEBUG_NDSYNC_LOGS__
+onvm_interval_timer_t nd_ts;
+int64_t max_nd, min_nd, avg_nd, delta_nd;
+#endif
+#endif
 /*********************************************************************/
 /*            NF LIB Feature flags specific functions                */
 /*********************************************************************/
@@ -254,7 +260,7 @@ static inline void end_ppkt_processing_cost(uint64_t start_tsc) {
 #ifdef ENABLE_NFV_RESL
 static inline void
 onvm_nflib_wait_till_notification(void) {
-        printf("\n Client [%d] is paused and waiting for SYNC Signal\n", nf_info->instance_id);
+        //printf("\n Client [%d] is paused and waiting for SYNC Signal\n", nf_info->instance_id);
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         onvm_util_get_start_time(&ts);
 #endif
@@ -262,19 +268,19 @@ onvm_nflib_wait_till_notification(void) {
                 onvm_nf_yeild(nf_info,YEILD_DUE_TO_EXPLICIT_REQ);
                 /* Next Check for any Messages/Notifications */
                 onvm_nflib_dequeue_messages();
-        }while(nf_info->status == NF_PAUSED);
+        }while((NF_PAUSED == (nf_info->status & NF_PAUSED))||(NF_WT_ND_SYNC_BIT == (nf_info->status & NF_WT_ND_SYNC_BIT)) );
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        printf("SIGNAL_TIME(PAUSE-->RESUME): %li ns\n", onvm_util_get_elapsed_time(&ts));
+        //printf("SIGNAL_TIME(PAUSE-->RESUME): %li ns\n", onvm_util_get_elapsed_time(&ts));
 #endif
-        printf("\n Client [%d] completed wait on SYNC Signal \n", nf_info->instance_id);
+        //printf("\n Client [%d] completed wait on SYNC Signal \n", nf_info->instance_id);
 }
 #endif //ENABLE_NFV_RESL
 
 static inline void onvm_nflib_check_and_wait_if_interrupted(void);
 static inline void onvm_nflib_check_and_wait_if_interrupted(void) {
 #if defined (INTERRUPT_SEM) && ((defined(NF_BACKPRESSURE_APPROACH_2) || defined(USE_ARBITER_NF_EXEC_PERIOD)) || defined(ENABLE_NFV_RESL))
-        if(unlikely(NF_PAUSED == nf_info->status)) {
+        if(unlikely(NF_PAUSED == (nf_info->status & NF_PAUSED))) {
                 printf("\n Explicit Pause request from ONVM_MGR\n ");
                 onvm_nflib_wait_till_notification();
                 printf("\n Explicit Pause Completed by NF\n");
@@ -410,9 +416,9 @@ static inline int onvm_nflib_fetch_packets( void **pkts, unsigned max_packets) {
         return max_packets;
 }
 static
-inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size);
+inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size, __attribute__((unused)) unsigned non_det_evt, __attribute__((unused)) uint64_t ts_info);
 static
-inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size) {
+inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batch_size, __attribute__((unused)) unsigned non_det_evt, __attribute__((unused)) uint64_t ts_info) {
         int ret = 0;
         /* Perform Post batch processing actions */
         /** Atomic Operations:
@@ -420,6 +426,39 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
          * Update TS of last processed packet.
          * Clear the Processed Batch of Rx packets.
          */
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        if(unlikely(non_det_evt)){
+                if(unlikely(nf_info->bNDSycn)) {//if(unlikely(bNDSync)) {
+                        //explicitly move to pause state and wait till notified.
+                        nf_info->status = NF_PAUSED|NF_WT_ND_SYNC_BIT;
+#ifdef  __DEBUG_NDSYNC_LOGS__
+                        //printf("\n Client [%d] is halting due to second ND at: [%li] while first [%li] is not committed! waiting for SYNC Signal\n", nf_info->instance_id,ts_info, nf_info->bLastPktId);
+                        onvm_util_get_start_time(&nd_ts);
+                        //printf("RUN-->ND_SYNC): %i ns\n", 1);
+#endif
+                        //wait_till_the NDSync is not signalled to be committed
+                        onvm_nflib_wait_till_notification();
+#ifdef  __DEBUG_NDSYNC_LOGS__
+                       // printf("\n\n\n\n\n\n\n\n$$$$$$$$$$$$WAIT_TIME(ND_SYNC): %li ns $$$$$$$$$$$$$\n\n\n\n\n\n\n", (delta_nd=onvm_util_get_elapsed_time(&nd_ts)));
+                        if(min_nd==0 || delta_nd < min_nd) min_nd= delta_nd;
+                        if(delta_nd > max_nd)max_nd=delta_nd;
+                        if(avg_nd) avg_nd = (avg_nd+delta_nd)/2;
+                        else avg_nd= delta_nd;
+                        //printf("\n\n In wait_till_Notitfication: WAIT_TIME_STATS(ND_SYNC):\n Cur=%li\n Min= %li\n Max: %li \n Avg: %li \n", delta_nd, min_nd, max_nd, avg_nd);
+                        nf_info->min_nd=min_nd; nf_info->max_nd=max_nd; nf_info->avg_nd=avg_nd;
+#endif
+                } else {
+#ifdef  __DEBUG_NDSYNC_LOGS__
+                        //printf("\n Client [%d] got first ND SYNC event at: %li! \n", nf_info->instance_id, ts_info);
+                        onvm_util_get_start_time(&nd_ts);
+#endif
+                }
+                nf_info->bNDSycn=1; //bNDSync = 1;    //set the NDSync to True again
+                nf_info->bLastPktId=ts_info;
+
+        }
+        //printf("\n %d", non_det_evt);
+#endif
 #ifdef REPLICA_STATE_UPDATE_MODE_PER_BATCH
         synchronize_replica_nf_state_memory();
 #endif
@@ -477,7 +516,8 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
         uint16_t i=0;
         uint16_t tx_batch_size = 0;
         void *pktsTX[NF_PKT_BATCH_SIZE];
-
+        uint8_t bCurND=0;
+        uint64_t bCurNDPktId=0;
 
 #ifdef INTERRUPT_SEM
         // To account NFs computation cost (sampled over SAMPLING_RATE packets)
@@ -489,6 +529,13 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
                 start_ppkt_processing_cost(&start_tsc);
 #endif
                 ret = (*handler)((struct rte_mbuf*) pkts[i], onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]));
+
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+                if(unlikely(onvm_get_pkt_meta((struct rte_mbuf*) pkts[i])->reserved_word&NF_NEED_ND_SYNC)) {
+                        bCurND=1;
+                        bCurNDPktId = ((struct rte_mbuf*)pkts[i])->ol_flags;
+                }
+#endif
 
 #if defined(TEST_MEMCPY_MODE_PER_PACKET)
                 do_memcopy(nf_info->nf_state_mempool);
@@ -532,7 +579,7 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
 
         /* Perform Post batch processing actions */
         if(likely(tx_batch_size)) {
-                return onvm_nflib_post_process_packets_batch(pktsTX, tx_batch_size);
+                return onvm_nflib_post_process_packets_batch(pktsTX, tx_batch_size, bCurND, bCurNDPktId);
         }
         return ret;
 }
@@ -768,9 +815,10 @@ void notify_for_ecb(void) {
 int
 onvm_nflib_handle_msg(struct onvm_nf_msg *msg) {
         switch(msg->msg_type) {
+        printf("\n Received MESSAGE [%d]\n!!", msg->msg_type);
         case MSG_STOP:
                 keep_running = 0;
-                if(NF_PAUSED == nf_info->status) {
+                if(NF_PAUSED == (nf_info->status & NF_PAUSED)) {
                         nf_info->status = NF_RUNNING;
 #ifdef INTERRUPT_SEM
                         onvm_nflib_implicit_wakeup(); //TODO: change this ecb call; split ecb call to two funcs. sounds stupid but necessary as cache update of flag_p takes time; otherwise results in sleep-wkup cycles
@@ -782,18 +830,33 @@ onvm_nflib_handle_msg(struct onvm_nf_msg *msg) {
                 notify_for_ecb();
                 break;
         case MSG_PAUSE:
-                if(NF_PAUSED != nf_info->status) {
+                if(NF_PAUSED != (nf_info->status & NF_PAUSED)) {
                         RTE_LOG(INFO, APP, "NF Status changed to Pause!...\n");
-                        nf_info->status = NF_PAUSED;
+                        nf_info->status |= NF_PAUSED;   //change == to |=
                 }
                 RTE_LOG(INFO, APP, "NF Pausing!...\n");
                 break;
         case MSG_RESUME: //MSG_RUN
-                nf_info->status = NF_RUNNING;
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+                if(unlikely(nf_info->bNDSycn)) { //if(unlikely(bNDSync)) {
+                        //printf("\n Received NDSYNC_CLEAR AND RESUME MESSAGE\n!!");
+                        nf_info->bNDSycn=0; //bNDSync=0;
+#ifdef  __DEBUG_NDSYNC_LOGS__
+                        delta_nd=onvm_util_get_elapsed_time(&nd_ts);
+                        if(min_nd==0 || delta_nd < min_nd) min_nd= delta_nd;
+                        if(delta_nd > max_nd)max_nd=delta_nd;
+                        if(avg_nd) avg_nd = (avg_nd+delta_nd)/2;
+                        else avg_nd= delta_nd;
+                        //printf("\n\n IN RESUME NOTIFICATION:: WAIT_TIME_STATS(ND_SYNC):\n Cur=%li\n Min= %li\n Max: %li \n Avg: %li \n", delta_nd, min_nd, max_nd, avg_nd);
+                        nf_info->min_nd=min_nd; nf_info->max_nd=max_nd; nf_info->avg_nd=avg_nd;
+#endif
+                }
+#endif
+                nf_info->status = NF_RUNNING;   //set = RUNNING; works for both NF_PAUSED and NF_WT_ND_SYNC_BIT cases!
 #ifdef INTERRUPT_SEM
                         onvm_nflib_implicit_wakeup(); //TODO: change this ecb call; split ecb call to two funcs. sounds stupid but necessary as cache update of flag_p takes time; otherwise results in sleep-wkup cycles
 #endif
-                RTE_LOG(INFO, APP, "Resuming NF...\n");
+                RTE_LOG(DEBUG, APP, "Resuming NF...\n");
                 break;
         case MSG_NOOP:
         default:

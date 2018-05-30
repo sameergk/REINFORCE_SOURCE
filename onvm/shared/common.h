@@ -79,9 +79,9 @@
 #define RTE_MP_TX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define CLIENT_QUEUE_RINGSIZE  (4096)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
 #elif defined(ENABLE_LOW_LATENCY_MODE)
-#define RTE_MP_RX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
-#define RTE_MP_TX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
-#define CLIENT_QUEUE_RINGSIZE  (512)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#define RTE_MP_RX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512) //128
+#define RTE_MP_TX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512) //128
+#define CLIENT_QUEUE_RINGSIZE  (512)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //512
 #else
 #define RTE_MP_RX_DESC_DEFAULT (256)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define RTE_MP_TX_DESC_DEFAULT (256)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
@@ -143,11 +143,28 @@
 #include <rte_pdump.h>
 #endif
 
+/******************************************************************************/
+// SUB FEATURES FOR DEBUG PRINT AND  MSG CONTROL
+/******************************************************************************/
+#ifdef __DEBUG_LOGS__
+//#define __DEBUG_NFMGR_NF_LOGS__
+//#define __DEBUG_NFMGR_WK_LOGS__
+//#define __DEBUG_NFMGR_RSYNC_LOGS__
+//#define __DEBUG_NDSYNC_LOGS__
+#endif
+
+
+/******************************************************************************/
+// SUB FEATURES FOR ENABLE_PACKET_TIMESTAMPING
+/******************************************************************************/
 /** Sub features for ENABLE_PACKET_TIMESTAMPING  */
 #ifdef ENABLE_PACKET_TIMESTAMPING
 #define PROFILE_PACKET_PROCESSING_LATENCY
 #endif
 
+/******************************************************************************/
+// SUB FEATURES FOR ONVM_ENABLE_SPEACILA_NF
+/******************************************************************************/
 /** Sub defines and features of SPECIAL NF */
 #ifdef ONVM_ENABLE_SPEACILA_NF
 /* SERVICE ID of the special NF */
@@ -155,8 +172,11 @@
 /* Instance ID of the special NF */
 #define ONVM_SPECIAL_NF_INSTANCE_ID (0)
 
-#define ENABLE_PCAP_CAPTURE
-
+/** Enable feature to capture and store packets with pcap-lib */
+//#define ENABLE_PCAP_CAPTURE
+/******************************************************************************/
+// SUB FEATURES FOR ENABLE_PCAP_CAPTURE (Currently only within Special NF)
+/******************************************************************************/
 #ifdef ENABLE_PCAP_CAPTURE
 //#define ENABLE_PCAP_CAPTURE_ON_INPUT
 #ifndef ENABLE_PCAP_CAPTURE_ON_INPUT
@@ -166,6 +186,9 @@
 
 #endif //ONVM_ENABLE_SPEACILA_NF
 
+/******************************************************************************/
+// SUB FEATURES FOR INTERRUPT_SEM
+/******************************************************************************/
 /** Sub features for INTERRUPT_SEMANTICS for NFs */
 #ifdef INTERRUPT_SEM
 
@@ -341,13 +364,13 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
-////#define ENABLE_FT_INDEX_IN_META     // Enable setting up the FT Index in packet meta
 #define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 #define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
 #define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
 #define ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
+#define ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT  //enable NF to pause (wait) if it has 1 outstanding ND to be synced and encounters second ND event in the interim.
 //#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
 #ifndef RESL_UPDATE_MODE_PER_PACKET
 #define RESL_UPDATE_MODE_PER_BATCH      //update mode Shadow Ring, Replica state, per flow TS for batch of packets
@@ -362,6 +385,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #endif
 
 #ifdef ENABLE_PER_FLOW_TS_STORE
+#define ENABLE_PER_FLOW_TXTS_MAP_ENTRY
 //#define ENABLE_NFLIB_PER_FLOW_TS_STORE    //enable TS update for each NF
 #ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
 #ifdef RESL_UPDATE_MODE_PER_PACKET
@@ -555,7 +579,8 @@ struct onvm_pkt_meta {
         uint16_t reserved_word; /* reserved word */
         //reserved word usage: 0x01==Need NF RSYNC; 0x02=BYPASS RSYNC on TX;
 };//__attribute__((__aligned__(ONVM_CACHE_LINE_SIZE)));
-
+#define NF_NEED_ND_SYNC (0x01)
+#define NF_BYPASS_RSYNC (0x02)
 
 static inline struct onvm_pkt_meta* onvm_get_pkt_meta(struct rte_mbuf* pkt) {
         return (struct onvm_pkt_meta*)&pkt->udata64;
@@ -729,7 +754,8 @@ struct port_info {
 struct onvm_nf_info {
         uint16_t instance_id;
         uint16_t service_id;
-        uint8_t status;
+        //volatile
+        uint8_t status;    //moved to status to ensure status read is not cached and is updated across different cores; but seeing no major difference in sync refresh time.
         const char *tag;
         pid_t pid;
 
@@ -767,6 +793,15 @@ struct onvm_nf_info {
 #ifdef ENABLE_ECN_CE
         histogram_v2_t ht2_q;
 #endif
+
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        volatile uint8_t bNDSycn;
+        uint64_t bLastPktId;
+#ifdef  __DEBUG_NDSYNC_LOGS__
+        int64_t max_nd, min_nd, avg_nd, delta_nd;
+#endif
+#endif
+
 };
 
 /*
@@ -842,11 +877,13 @@ struct onvm_service_chain {
 #define NF_STARTING         (0x01)              // When a NF is in the startup process and already has an id
 #define NF_WAITING_FOR_RUN  (0x02)              // When NF asserts itself to run and ready to process packets ; requests manager to be considered for delivering packets.
 #define NF_RUNNING          (0x03)              // Running normally
-#define NF_PAUSED_BIT       (0x04)              // Value 4 = Third Bit indicating Paused Status
+#define NF_PAUSED_BIT       (0x04)              // Value 4 => Third Bit indicating Paused Status
+#define NF_WT_ND_SYNC_BIT   (0x08)              // Value=8 => 4th bit is set indicating paused with special status of wiat on ND Sync If NF is Waiting for ND SYNC ( Paused with speacial case of wait)
 #define NF_PAUSED  (NF_PAUSED_BIT|NF_RUNNING)   // NF is not receiving packets, but may in the future
-#define NF_STOPPED          (0x08)              // NF has stopped and in the shutdown process
-#define NF_ID_CONFLICT      (0x10)              // NF is trying to declare an ID already in use
-#define NF_NO_IDS           (0X20)              // There are no available IDs for this NF
+#define NF_WT_ND_SYNC  (NF_PAUSED_BIT|NF_WT_ND_SYNC_BIT)   // NF is paused and waiting till ND SYNC is not complete
+#define NF_STOPPED          (0x10)              // NF has stopped and in the shutdown process
+#define NF_ID_CONFLICT      (0x20)              // NF is trying to declare an ID already in use
+#define NF_NO_IDS           (0X40)              // There are no available IDs for this NF
 #define NF_NO_ID -1
 
 /*

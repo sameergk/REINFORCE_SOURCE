@@ -291,6 +291,12 @@ static inline void
 #ifdef ENABLE_REPLICA_STATE_UPDATE
 void *pReplicaStateMempool = NULL;
 #endif
+
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+//volatile uint8_t bNDSync=0;    //status indicating if the outstanding ND is committed or not
+// 0 = No Outstanding ND Sync; 1 = Outstanding ND Sync yet to be committed.
+#endif
+
 #endif //ENABLE_NFV_RESL
 dirty_mon_state_map_tbl_t *dirty_state_map = NULL;  //reson to keep it ouside is that NFs can still make  use of it regardless of resiliency
 

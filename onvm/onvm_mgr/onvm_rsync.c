@@ -83,13 +83,13 @@ uint8_t rx_halt = 0;
 #define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT ((1*REMOTE_SYNC_WAIT_INTERVAL*MAX_TRANS_COMMIT_WAIT_COUNTER)/(1000))
 //#define MAX_WAIT_TIME_FOR_TRANSACTION_COMMIT (150)
 
-#ifdef __DEBUG_LOGS__
+#ifdef __DEBUG_NFMGR_RSYNC_LOGS__
 #define ENABLE_EXTRA_RSYNC_PRINT_MSGS
 #endif
 
 struct rte_timer tx_ts_checkpoint_timer;
 struct rte_timer nf_status_checkpoint_timer;
-#define NF_CHECKPOINT_PERIOD_IN_US      (1000)      // use high precision 100us; ensure that it is at least 1RTT
+#define NF_CHECKPOINT_PERIOD_IN_US      (10000)      // use high precision 1ms, 10ms or 100ms; ensure that it is at least 1RTT (measure to be ~500us between b2b connected nodes + 8K buffering)
 #define TX_TS_CHECKPOINT_PERIOD_IN_US   (100)       // Perform More often 100us => (@15MPPS: for every 1500 data packets perform 1 checkpoint=(1--64 packets tx_ts_packets) Therefore w.c. overhead = 4.25%),
 //Given that we have buffer of 8K we can perform checkpoints much slower atleast 5 times slow i.e 500us ==> 7.5K packets perform 1 checkpoint. Therefore w.c. overhead= 0.85%
 
@@ -173,10 +173,13 @@ uint8_t replay_mode;
 //Track ongoing transactions and associated timers
 static volatile uint8_t trans_queue[MAX_RSYNC_TRANSACTIONS];
 static onvm_time_t trans_ts[MAX_RSYNC_TRANSACTIONS];
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+static uint8_t trans_notify[MAX_RSYNC_TRANSACTIONS];
+#endif
 
 /***********************Internal Functions************************************/
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
-static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
+static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t bNotify, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
 static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t meta, uint8_t *pData, uint32_t data_len);
 
 int transmit_tx_port_packets(void);
@@ -186,7 +189,7 @@ static int extract_and_parse_tx_port_packets( __attribute__((unused))uint8_t to_
 
 //Functions to transmit local state to remote node
 static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db);
-static int rsync_nf_state_to_remote(void);
+static int rsync_nf_state_to_remote(__attribute__((unused)) uint8_t bNDSync);
 static int rsync_wait_for_commit_ack(uint8_t trans_id, uint8_t no_wait);
 
 //Functions to sync local state from remote node packets
@@ -200,7 +203,26 @@ static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *data,  uin
 static inline int initialize_rsync_timers(void);
 
 /***********************Internal Functions************************************/
+static inline void notify_ndsync_commit_to_blocked_NFs(void) {
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        uint16_t nf_id = 0;
 
+        //Start with Each NF Instance ID which is active and valid and start gathering all changed NF state;
+        for (nf_id = 0; nf_id < MAX_CLIENTS; nf_id++) {
+                //Get the Processing (Actively Running and Processing packets) NF Instance ID */
+                if (unlikely(onvm_nf_is_waiting_on_NDSYNC(&clients[nf_id]))){
+                        //clear Status Bits and notify resume to the NF
+                        struct client *cl = &clients[nf_id];
+                        //cl->info->status ^=(NF_PAUSED_BIT|NF_WT_ND_SYNC_BIT);
+                        if(cl->info->status & NF_WT_ND_SYNC_BIT)cl->info->status ^=(NF_WT_ND_SYNC_BIT);
+                        if(cl->info->status & NF_PAUSED_BIT)cl->info->status ^=(NF_PAUSED_BIT);
+                        onvm_nf_send_msg(cl->info->instance_id,MSG_RESUME,MSG_MODE_ASYNCHRONOUS,NULL);
+                        //printf("\n Client [%d] is delivered SYNC to resume processing ND committed [%d]! \n", nf_id, cl->info->status);
+                        //sleep(2);
+                }
+        }
+#endif
+}
 /***********************TRANSACTION FUNCTIONS**********************************/
 #ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
 static int print_trans_status(void) {
@@ -230,8 +252,15 @@ static int get_transaction_id(void) {
         //goto RECHECK;
         return -1;
 }
-static uint8_t log_transaction_id(uint8_t tid) {
+static uint8_t log_transaction_id(uint8_t tid, __attribute__((unused)) uint8_t bNotify) {
         onvm_util_get_cur_time(&trans_ts[tid]);
+
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        if(bNotify) {
+                //printf("\n Got Transaction with NDSYNC COMMIT!!\n");
+                trans_notify[tid] = 1;
+        }
+#endif
 #ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
         trans_queue[tid] = 1;
         printf("On Transaction LOG for [%d]\n", tid);
@@ -242,6 +271,12 @@ static uint8_t log_transaction_id(uint8_t tid) {
 }
 static uint8_t clear_transaction_id (uint8_t tid) {
         trans_ts[tid].t.tv_nsec = trans_ts[tid].t.tv_sec=0;
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        if(trans_notify[tid]) {
+                trans_notify[tid]=0;
+                notify_ndsync_commit_to_blocked_NFs();
+        }
+#endif
 #ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
         printf("On Transaction Clear for [%d]\n", tid);
         trans_queue[tid]=0;
@@ -372,7 +407,7 @@ nf_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_time
         __attribute__((unused)) void *ptr_data) {
         static uint8_t nf_sync_trans_id = 0;
         if(!nf_sync_trans_id) {
-                int tnx_id = rsync_nf_state_to_remote();
+                int tnx_id = rsync_nf_state_to_remote(1);
                 if(likely(tnx_id >=0 )) {
                         nf_sync_trans_id = (uint8_t) tnx_id;
                 }
@@ -393,10 +428,10 @@ static inline int initialize_rsync_timers(void) {
         ticks = ((uint64_t)NF_CHECKPOINT_PERIOD_IN_US *(rte_get_timer_hz()/1000000));
         rte_timer_reset_sync(&nf_status_checkpoint_timer,ticks,PERIODICAL,
                         rte_lcore_id(), &nf_status_checkpoint_timer_cb, NULL);
+        //rte_timer_init(&nf_status_checkpoint_timer);
         return 0;
 }
 /***********************DPDK TIMER FUNCTIONS**********************************/
-
 /***********************Internal Functions************************************/
 /***********************DPDK TIMER FUNCTIONS**********************************/
 static void bswap_rsync_hdr_data(state_tx_meta_t *meta, int to_be) {
@@ -509,7 +544,7 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
                 dtx->dirty_index =0;
                 //check if packets are created and need to be transmitted out;
                 if(i) {
-                        log_transaction_and_send_packets_out(meta.trans_id, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                        log_transaction_and_send_packets_out(meta.trans_id, 0, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                         rsync_stat.tx_state_sync_pkt_counter +=i;
 #endif
@@ -521,10 +556,9 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
         }
         return 0;
 }
-static int rsync_nf_state_to_remote(void) {
+static int rsync_nf_state_to_remote(uint8_t bNDSync) {
         //Note: Size of NF_STATE_SIZE=64K and total_chunks=64 => size_per_chunk=1K -- can fit in 1 packet But
         //      size of SVC_STATE_SIZE=4MB and total_chunks=64 => size_per_chunk=64K -- so, each service each chunk requires 64 sends. -- must optimize -- DPI is an exception..
-
         uint16_t i=0;
         uint8_t active_services[MAX_SERVICES] = {0};
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
@@ -532,12 +566,18 @@ static int rsync_nf_state_to_remote(void) {
         void *pReplicaStateMempool = NULL;
         dirty_mon_state_map_tbl_t *dirty_state_map_nf = NULL;
         uint16_t nf_id = 0;
+        uint8_t btrans_initiated = 0;
         for(;nf_id < MAX_SERVICES; nf_id++) active_services[nf_id]=0;
 
         //Start with Each NF Instance ID which is active and valid and start gathering all changed NF state;
         for (nf_id = 0; nf_id < MAX_CLIENTS; nf_id++) {
                 //Get the Processing (Actively Running and Processing packets) NF Instance ID */
                 if (likely(onvm_nf_is_processing(&clients[nf_id]))){
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+                        if(onvm_nf_is_waiting_on_NDSYNC(&clients[nf_id])) {
+                                bNDSync=1;
+                        }
+#endif
                         //store the corresponding service id for Global state transfer :: What if there are multiple active NFs for same service; we should still ensure that svc is used only once.
                         active_services[clients[nf_id].info->service_id] = 1;//active_services[j++] = clients[nf_id].info->service_id;
 
@@ -556,7 +596,9 @@ static int rsync_nf_state_to_remote(void) {
                                 if(unlikely(0 == meta.trans_id)) {
                                         int trans_id = get_transaction_id();
                                         if(unlikely(trans_id < 0)) {
-                                                //printf("\n rsync_nf_state_to_remote(nf): Failed to acquire the transaction ID\n");
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+                                                printf("\n rsync_nf_state_to_remote(nf): Failed to acquire the transaction ID\n");
+#endif
                                                 return -1;
                                         }meta.trans_id = (uint8_t) trans_id;
                                 }
@@ -574,11 +616,12 @@ static int rsync_nf_state_to_remote(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if( i == PACKET_READ_SIZE_LARGE) {
-                                                        log_transaction_and_send_packets_out(meta.trans_id, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, bNDSync, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                                                         rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
 #endif
                                                         i=0;
+                                                        btrans_initiated=1;
                                                 }
                                         }
                                 }
@@ -587,12 +630,17 @@ static int rsync_nf_state_to_remote(void) {
                         //Either Send State update for each NF or batch with other NF State? ( IF batch multiple NFs, then move it out of for_loop )
                         //check if packets are created and need to be transmitted out;
                         if(i) {
-                                //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                if(btrans_initiated) {
+                                        //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
+                                        send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                } else {
+                                        log_transaction_and_send_packets_out(meta.trans_id, bNDSync, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                }
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                                 rsync_stat.nf_state_sync_pkt_counter[nf_id] +=i;
 #endif
                                 i=0;
+                                btrans_initiated=0;
                         }
                 }
         }
@@ -614,7 +662,9 @@ static int rsync_nf_state_to_remote(void) {
                                 if(unlikely(0 == meta.trans_id)) {
                                         int trans_id = get_transaction_id();
                                         if(unlikely(trans_id < 0)) {
-                                                //printf("\n rsync_nf_state_to_remote(svc): Failed to acquire the transaction ID\n");
+#ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
+                                                printf("\n rsync_nf_state_to_remote(svc): Failed to acquire the transaction ID\n");
+#endif
                                                 return -1;
                                         }meta.trans_id = (uint8_t) trans_id;
                                 }
@@ -632,8 +682,9 @@ static int rsync_nf_state_to_remote(void) {
                                                 dirty_index^=copy_setbit;
                                                 //If we exhaust all the packets, then we must send out packets before processing further state
                                                 if(i == PACKET_READ_SIZE_LARGE) {
-                                                        log_transaction_and_send_packets_out(meta.trans_id, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                                                        log_transaction_and_send_packets_out(meta.trans_id, bNDSync, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //send_packets_out(out_port, 0, pkts, i);
                                                         i=0;
+                                                        btrans_initiated=1;
                                                 }
                                         }
                                 }
@@ -642,9 +693,14 @@ static int rsync_nf_state_to_remote(void) {
                         //Either Send State update for each NF or batch with other NF State? ( IF batch multiple NFs, then move it out of for_loop )
                         //check if packets are created and need to be transmitted out;
                         if(i) {
-                                //printf("\n $$$$ Sending [%d] packets for NF Instdance [%d] State Sync $$$$\n", i, nf_id);
-                                send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i); //log_transaction_and_send_packets_out(meta.trans_id, out_port, 0, pkts, i);
+                                if(btrans_initiated) {
+                                        //printf("\n $$$$ Sending [%d] packets for NF Instdance [%d] State Sync $$$$\n", i, nf_id);
+                                        send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                } else {
+                                        log_transaction_and_send_packets_out(meta.trans_id, bNDSync, RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                }
                                 i=0;
+                                btrans_initiated=0;
                         }
                 }
         }
@@ -803,13 +859,13 @@ static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rt
 
         {
                 volatile struct tx_stats *tx_stats = &(ports->tx_stats);
-                tx_stats->tx[port_id] = sent_packets;
+                tx_stats->tx[port_id] += sent_packets;
                 tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
         }
         return sent_packets;
 }
-static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
-        log_transaction_id(trans_id);
+static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t bNotify, uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
+        log_transaction_id(trans_id, bNotify);
         return send_packets_out(port_id, queue_id, tx_pkts, nb_pkts);
 }
 //Bypass Function to directly enqueue to Tx Port Ring and Flush to ETH Ports
@@ -995,7 +1051,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                         for(i=0; i < count;i++) {
                                 meta = onvm_get_pkt_meta((struct rte_mbuf *)in_pkts[i]);
                                 //uint8_t port = meta->destination;
-                                uint8_t dest = meta->reserved_word&0x01; //Hack
+                                uint8_t dest = meta->reserved_word&NF_NEED_ND_SYNC; //Hack
                                 int flow_index = get_flow_entry_index(in_pkts[i], meta);
                                 if(flow_index >= 0) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
@@ -1242,7 +1298,7 @@ static int rsync_start_simple(__attribute__((unused)) void *arg) {
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-                int trans_id = rsync_nf_state_to_remote();
+                int trans_id = rsync_nf_state_to_remote(1);
                 if(trans_id>=0) {
 #ifdef USE_BATCHED_RSYNC_TRANSACTIONS
                         trans_ids[tid++] = trans_id;
@@ -1304,7 +1360,7 @@ int rsync_start_only_db(__attribute__((unused)) void *arg) {
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-                int trans_id = rsync_nf_state_to_remote();
+                int trans_id = rsync_nf_state_to_remote(1);
                 if(trans_id>=0) {
 #ifdef USE_BATCHED_RSYNC_TRANSACTIONS
                         trans_ids[tid++] = trans_id;
@@ -1419,7 +1475,7 @@ static int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-                int trans_id = rsync_nf_state_to_remote();
+                int trans_id = rsync_nf_state_to_remote(1);
                 if(trans_id>=0) {
                         if(db_mode){
                                 trans_ids_db[db_mode-1][(tid_db[db_mode-1])++] = (uint8_t)  trans_id;
@@ -1503,7 +1559,9 @@ static int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
                         if(buff_avail) {
                                 trans_ids_db[buff_avail-1][(tid_db[buff_avail-1])++] = (uint8_t) trans_id;
                         }
-                        else trans_ids[tid++] = (uint8_t)  trans_id;
+                        else {
+                                trans_ids[tid++] = (uint8_t)  trans_id;
+                        }
                 }
         }
 
@@ -1513,7 +1571,7 @@ static int rsync_start_simple_multi_db(__attribute__((unused)) void *arg) {
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-                trans_id = rsync_nf_state_to_remote();
+                trans_id = rsync_nf_state_to_remote(1);
                 if(trans_id>=0) {
                         if(buff_avail){
                                 trans_ids_db[buff_avail-1][(tid_db[buff_avail-1])++] = (uint8_t)  trans_id;
@@ -1598,7 +1656,7 @@ static int rsync_start_simple_db(__attribute__((unused)) void *arg) {
 
         //check and Initiate remote NF Sync
         if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-                int trans_id = rsync_nf_state_to_remote();
+                int trans_id = rsync_nf_state_to_remote(1);
                 if(trans_id>=0) {
                         if(db_mode) trans_ids_db[tid_db++] = (uint8_t)  trans_id;
                         else trans_ids[tid++] = (uint8_t)  trans_id;
@@ -1659,7 +1717,7 @@ static int rsync_start_optimal_db(__attribute__((unused)) void *arg) {
                         }
                         //check and Initiate remote NF Sync
                         if(ret_db & NEED_REMOTE_NF_STATE_SYNC) {
-                                int trans_id = rsync_nf_state_to_remote();
+                                int trans_id = rsync_nf_state_to_remote(1);
                                 if(trans_id>=0) {
                                         trans_ids_db[tid_db++] = trans_id;
                                 }
@@ -1678,7 +1736,7 @@ static int rsync_start_optimal_db(__attribute__((unused)) void *arg) {
                 }
                 //check and Initiate remote NF Sync
                 if(ret & NEED_REMOTE_NF_STATE_SYNC) {
-                        int trans_id = rsync_nf_state_to_remote();
+                        int trans_id = rsync_nf_state_to_remote(1);
                         if(trans_id>=0) {
                                 trans_ids[tid++] = trans_id;
                         }
@@ -1697,7 +1755,7 @@ static int rsync_start_optimal_db(__attribute__((unused)) void *arg) {
                         }
                         //check and Initiate remote NF Sync
                         if(ret_db & NEED_REMOTE_NF_STATE_SYNC) {
-                                int trans_id = rsync_nf_state_to_remote();
+                                int trans_id = rsync_nf_state_to_remote(1);
                                 if(trans_id>=0) {
                                         trans_ids_db[tid_db++] = trans_id;
                                 }

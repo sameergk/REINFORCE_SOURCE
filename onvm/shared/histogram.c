@@ -9,7 +9,6 @@
 #define RUN_AVG(a,b) ((a==0)?(b):((a+b)/2))
 #define EWMA_ALPHA  (0.25)
 #define EWMA_AVG(a,b) ((a==0)?(b):( ( (a*(1-EWMA_ALPHA)) + (b*EWMA_ALPHA)/2) ))
-//#define __DEBUG_LOGS__
 
 void hist_init(volatile struct histogram *h, uint32_t max, uint32_t min) {
 

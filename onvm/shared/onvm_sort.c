@@ -7,7 +7,7 @@
 #define MAX(a,b) ((a) > (b)? (a):(b))
 #define MIN0(a,b) ((a==0)?(b):MIN(a,b))
 #define RUN_AVG(a,b) ((a==0)?(b):((a+b)/2))
-//#define __DEBUG_LOGS__
+
 int onvm_cmp_int_a(const void * a, const void *b) {
         int arg1 = *(const int*)a;
         int arg2 = *(const int*)b;

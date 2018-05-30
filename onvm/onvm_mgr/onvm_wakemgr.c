@@ -154,7 +154,7 @@ static void per_core_timer_cb(__attribute__((unused)) struct rte_timer *tim, voi
 
         core_nf_timers_t *pCoreTimer = (core_nf_timers_t*)arg;
         if(pCoreTimer ) {
-#ifdef __DEBUG_LOGS__
+#ifdef __DEBUG_NFMGR_WK_LOGS__
                 printf("Timer Expired Callback core [%d]  client [%d] at index [%d] for period [%zu]\n ",pCoreTimer->core_id, pCoreTimer->nf_id, pCoreTimer->index, pCoreTimer->exec_period);
 #endif
                 //stop the current client (force sleep the current client)
@@ -172,12 +172,12 @@ int launch_core_nf_timer(uint16_t core_id, uint16_t index, uint16_t nf_id, uint6
         core_timers[core_id].exec_period = exec_period;
         if(exec_period) {
                 if(core_timers[core_id].timer_status || rte_timer_pending(&core_timers[core_id].timer)) {
-#ifdef __DEBUG_LOGS__
+#ifdef __DEBUG_NFMGR_WK_LOGS__
                         printf("Force Stopping the timer!\n ");
 #endif
                         rte_timer_stop(&core_timers[core_id].timer);
                 }
-#ifdef __DEBUG_LOGS__
+#ifdef __DEBUG_NFMGR_WK_LOGS__
                 printf("core [%d] Waking client [%d] at index [%d] for period [%zu]\n ",core_id, nf_id, index, exec_period);
 #endif
                 core_timers[core_id].timer_status=1;

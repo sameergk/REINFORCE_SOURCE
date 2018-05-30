@@ -157,12 +157,12 @@ void compute_nf_exec_period_and_cgroup_weight(void) {
                                 clients[nf_id].info->exec_period = 0;
 
                         }
-                        #ifdef __DEBUG_LOGS__
+                        #ifdef __DEBUG_NFMGR_NF_LOGS__
                         printf("\n ***** Client [%d] with cost [%d] on core [%d] with total_demand [%d] shared by [%d] NFs, got cpu share [%d]***** \n ", clients[nf_id].info->instance_id, clients[nf_id].info->comp_cost, clients[nf_id].info->core_id,
                                                                                                                                                    nfs_on_core[clients[nf_id].info->core_id].total_comp_cost,
                                                                                                                                                    nfs_on_core[clients[nf_id].info->core_id].total_nf_count,
                                                                                                                                                    clients[nf_id].info->cpu_share);
-                        #endif //__DEBUG_LOGS__
+                        #endif //__DEBUG_NFMGR_NF_LOGS__
 
 #else
                         uint64_t num = 0;
@@ -183,12 +183,12 @@ void compute_nf_exec_period_and_cgroup_weight(void) {
                                 clients[nf_id].info->exec_period = 0;
 #endif
                         }
-                        #ifdef __DEBUG_LOGS__
+                        #ifdef __DEBUG_NFMGR_NF_LOGS__
                         printf("\n ***** Client [%d] with cost [%d] and load [%d] on core [%d] with total_demand_comp_cost=%"PRIu64", shared by [%d] NFs, got num=%"PRIu64", cpu share [%d]***** \n ", clients[nf_id].info->instance_id, clients[nf_id].info->comp_cost, clients[nf_id].info->load, clients[nf_id].info->core_id,
                                                                                                                                                    nfs_on_core[clients[nf_id].info->core_id].total_load_cost_fct,
                                                                                                                                                    nfs_on_core[clients[nf_id].info->core_id].total_nf_count,
                                                                                                                                                    num, clients[nf_id].info->cpu_share);
-                        #endif //__DEBUG_LOGS__
+                        #endif //__DEBUG_NFMGR_NF_LOGS__
 #endif //USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE
 
                 }
@@ -242,12 +242,12 @@ void compute_and_assign_nf_cgroup_weight(void) {
                                 clients[nf_id].info->exec_period = 0;
 
                         }
-                        #ifdef __DEBUG_LOGS__
+                        #ifdef __DEBUG_NFMGR_NF_LOGS__
                         printf("\n ***** Client [%d] with cost [%d] on core [%d] with total_demand [%d] shared by [%d] NFs, got cpu share [%d]***** \n ", clients[nf_id].info->instance_id, clients[nf_id].info->comp_cost, clients[nf_id].info->core_id,
                                                                                                                                                    nf_pool_per_core[clients[nf_id].info->core_id].total_comp_cost,
                                                                                                                                                    nf_pool_per_core[clients[nf_id].info->core_id].total_nf_count,
                                                                                                                                                    clients[nf_id].info->cpu_share);
-                        #endif //__DEBUG_LOGS__
+                        #endif //__DEBUG_NFMGR_NF_LOGS__
 
 #else
                         uint64_t num = 0;
@@ -268,12 +268,12 @@ void compute_and_assign_nf_cgroup_weight(void) {
                                 clients[nf_id].info->exec_period = 0;
 #endif
                         }
-                        #ifdef __DEBUG_LOGS__
+                        #ifdef __DEBUG_NFMGR_NF_LOGS__
                         printf("\n ***** Client [%d] with cost [%d] and load [%d] on core [%d] with total_demand_comp_cost=%"PRIu64", shared by [%d] NFs, got num=%"PRIu64", cpu share [%d]***** \n ", clients[nf_id].info->instance_id, clients[nf_id].info->comp_cost, clients[nf_id].info->load, clients[nf_id].info->core_id,
                                                                                                                                                    nf_pool_per_core[clients[nf_id].info->core_id].total_load_cost_fct,
                                                                                                                                                    nf_pool_per_core[clients[nf_id].info->core_id].total_nf_count,
                                                                                                                                                    num, clients[nf_id].info->cpu_share);
-                        #endif //__DEBUG_LOGS__
+                        #endif //__DEBUG_NFMGR_NF_LOGS__
 #endif //USE_DYNAMIC_LOAD_FACTOR_FOR_CPU_SHARE
 
                         //set_cgroup_nf_cpu_share(clients[nf_id].info->instance_id, clients[nf_id].info->cpu_share);
@@ -417,8 +417,17 @@ onvm_nf_is_paused(struct client *cl){
 }
 inline int
 onvm_nf_is_processing(struct client *cl) {
-        return cl->info && cl->info->status == NF_RUNNING;    //only in running state.
+        return ((cl->info) && ((cl->info->status == NF_RUNNING)||(cl->info->status&NF_WT_ND_SYNC_BIT)));    //only in running state.
 }
+inline int
+onvm_nf_is_waiting_on_NDSYNC(struct client *cl) {
+        //return ((cl->info) && (cl->info->status&NF_WT_ND_SYNC_BIT));
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        return ((cl->info) && (cl->info->bNDSycn));
+#endif
+        return 0;
+}
+
 inline int
 onvm_nf_is_instance_id_free(struct client *cl) {
         return cl && (NULL == cl->info);
