@@ -226,6 +226,15 @@ static inline int update_dirty_state_index(uint16_t vtag_index) {
 }
 static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
         if(vtag_tbl) {
+//#define ENABLE_LOCAL_LATENCY_PROFILER
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                static int countm = 0;uint64_t start_cycle=0;onvm_interval_timer_t ts_p;
+                countm++;
+                if(countm == 1000*1000*20) {
+                        onvm_util_get_start_time(&ts_p);
+                        start_cycle = onvm_util_get_current_cpu_cycles();
+                }
+#endif
                 if(unlikely(vtag_tbl[vtag_index].vlan_tag != vlan_tag)) {
                         vtag_tbl[vtag_index].vlan_tag = vlan_tag;
                         vtag_tbl[vtag_index].pkt_counter =1;
@@ -233,6 +242,12 @@ static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
                         vtag_tbl[vtag_index].pkt_counter+=1;
                 }
                 update_dirty_state_index(vtag_index);
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                if(countm == 1000*1000*20) {
+                        fprintf(stdout, "STATE REPLICATION TIME (Marking): %li(ns) and %li (cycles) \n", onvm_util_get_elapsed_time(&ts_p), onvm_util_get_elapsed_cpu_cycles(start_cycle));
+                        countm=0;
+                }
+#endif
         }
         return 0;
 }

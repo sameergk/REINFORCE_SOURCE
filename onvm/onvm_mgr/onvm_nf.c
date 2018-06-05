@@ -420,7 +420,7 @@ onvm_nf_is_processing(struct client *cl) {
         return ((cl->info) && ((cl->info->status == NF_RUNNING)||(cl->info->status&NF_WT_ND_SYNC_BIT)));    //only in running state.
 }
 inline int
-onvm_nf_is_waiting_on_NDSYNC(struct client *cl) {
+onvm_nf_is_waiting_on_NDSYNC(__attribute__((unused))struct client *cl) {
         //return ((cl->info) && (cl->info->status&NF_WT_ND_SYNC_BIT));
 #ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
         return ((cl->info) && (cl->info->bNDSycn));

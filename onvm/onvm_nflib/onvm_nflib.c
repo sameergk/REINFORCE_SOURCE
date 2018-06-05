@@ -140,7 +140,105 @@ void init_cgroup_info(struct onvm_nf_info *nf_info) {
 }
 #endif //USE_CGROUPS_PER_NF_INSTANCE
 
+/******************************FTMB Helper Functions********************************/
+#ifdef MIMIC_FTMB
+#define SV_ACCES_PER_PACKET (10)
+typedef struct pal_packet {
+        uint64_t pal_counter;
+        uint64_t pal_info;
+}pal_packet_t;
+static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
 
+        return 0;
+        uint16_t sent_packets = 0; //rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
+        if(unlikely(sent_packets < nb_pkts)) {
+                uint16_t i = sent_packets;
+                for(; i< nb_pkts;i++)
+                        onvm_nflib_drop_pkt(tx_pkts[i]);
+        }
+/*
+        {
+                volatile struct tx_stats *tx_stats = &(ports->tx_stats);
+                tx_stats->tx[port_id] += sent_packets;
+                tx_stats->tx_drop[port_id] += (nb_pkts - sent_packets);
+        }
+*/
+        return sent_packets;
+        rte_eth_tx_burst(port_id,queue_id, tx_pkts, nb_pkts);
+}
+int generate_and_transmit_pals_for_batch(__attribute__((unused))  void **pktsTX, unsigned tx_batch_size, __attribute__((unused)) unsigned non_det_evt, __attribute__((unused)) uint64_t ts_info);
+int generate_and_transmit_pals_for_batch(__attribute__((unused))  void **pktsTX, unsigned tx_batch_size, __attribute__((unused)) unsigned non_det_evt, __attribute__((unused)) uint64_t ts_info) {
+        uint32_t i = 0;
+        static uint64_t pal_counter = 0;
+        struct rte_mbuf *out_pkt = NULL;
+        struct onvm_pkt_meta *pmeta = NULL;
+        struct ether_hdr *eth_hdr = NULL;
+        pal_packet_t *p_hdr;
+        size_t pkt_size = 0;
+        size_t data_len = sizeof(struct ether_hdr) + sizeof(uint16_t) + sizeof(uint16_t);
+        int ret = 0;
+        //void *pkts[CLIENT_SHADOW_RING_SIZE];
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        static uint64_t pktcounterm=0; uint64_t start_cycle=0;onvm_interval_timer_t ts_p;
+        pktcounterm+=(tx_batch_size*SV_ACCES_PER_PACKET);
+        if(pktcounterm >= (1000*1000*20)) {
+                onvm_util_get_start_time(&ts_p);
+                start_cycle = onvm_util_get_current_cpu_cycles();
+        }
+#endif
+        for(i=0; i<(tx_batch_size*SV_ACCES_PER_PACKET); i++) {
+
+                //Allocate New Packet
+                out_pkt = rte_pktmbuf_alloc(pktmbuf_pool);
+                if (out_pkt == NULL) {
+                        rte_pktmbuf_free(out_pkt);
+                        //rte_exit(EXIT_FAILURE, "onvm_nflib:Failed to alloc packet for %x, %li!! \n", i, pal_counter);
+                        //RTE_LOG(ERROR, APP, "onvm_nflib:Failed to alloc packet for %x, %li!! \n", i, pal_counter);
+                        fprintf(stderr, "onvm_nflib:Failed to alloc packet for %x, %li!! \n", i, pal_counter);
+                        return -1;
+                }
+
+                //set packet properties
+                pkt_size = sizeof(struct ether_hdr) + sizeof(pal_packet_t);
+                out_pkt->data_len = MAX(pkt_size, data_len);    //todo: crirical error if 0 or lesser than pkt_len: mooongen discards; check again and confirm
+                out_pkt->pkt_len = pkt_size;
+
+                //Set Ethernet Header info
+                eth_hdr = onvm_pkt_ether_hdr(out_pkt);
+                eth_hdr->ether_type = rte_cpu_to_be_16((ETHER_TYPE_RSYNC_DATA+1));
+                //ether_addr_copy(&ports->mac[port], &eth_hdr->s_addr);
+                //ether_addr_copy((const struct ether_addr *)&rsync_node_info.mac_addr_bytes, &eth_hdr->d_addr);
+
+                //SET PAL DATA
+                p_hdr = rte_pktmbuf_mtod_offset(out_pkt, pal_packet_t*, sizeof(struct ether_hdr));
+                p_hdr->pal_counter = pal_counter++;
+                p_hdr->pal_info = 0xBADABADBBADCBADD;
+
+
+                //SEND PACKET OUT/SET METAINFO
+                pmeta = onvm_get_pkt_meta(out_pkt);
+                pmeta->destination =RSYNC_TX_OUT_PORT;
+                pmeta->action = ONVM_NF_ACTION_DROP;
+
+                send_packets_out(0, RSYNC_TX_PORT_QUEUE_ID_0, &out_pkt, 1);
+                if(unlikely(0 != (ret = rte_ring_enqueue(tx_ring, out_pkt)))) {
+                        do {
+#ifdef INTERRUPT_SEM
+                                onvm_nf_yeild(nf_info,YIELD_DUE_TO_FULL_TX_RING);
+                                ret = rte_ring_enqueue(tx_ring, out_pkt);
+#endif
+                        }while(ret && keep_running);
+                }
+        }
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        if((pktcounterm)>=(1000*1000*20)) {
+                fprintf(stdout, "PAL GENERATION TIME for (%x) SV : %li(ns) and %li (cycles) for packet:%d \n", SV_ACCES_PER_PACKET, onvm_util_get_elapsed_time(&ts_p), onvm_util_get_elapsed_cpu_cycles(start_cycle), (int)pkt_size);
+                pktcounterm=0;
+        }
+#endif
+        return ret;
+}
+#endif
 /******************************Timer Helper functions*******************************/
 #ifdef ENABLE_TIMER_BASED_NF_CYCLE_COMPUTATION
 static void
@@ -331,7 +429,14 @@ static inline void synchronize_replica_nf_state_memory(void) {
         //if(likely(nf_info->nf_state_mempool && pReplicaStateMempool))
         if(likely(dirty_state_map && dirty_state_map->dirty_index)) {
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        onvm_util_get_start_time(&ts);
+#if 0
+                static int count = 0;uint64_t start_cycle=0;
+                count++;
+                if(count == 1000*1000*20) {
+                        onvm_util_get_start_time(&ts);
+                        start_cycle = onvm_util_get_current_cpu_cycles();
+                }
+#endif
 #endif
                 //Note: Must always ensure that dirty_map is carried over first; so that the remote replica can use this value to update only the changed states
                 uint64_t dirty_index = dirty_state_map->dirty_index;
@@ -348,7 +453,12 @@ static inline void synchronize_replica_nf_state_memory(void) {
                 }
                 dirty_state_map->dirty_index =0;
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        //fprintf(stdout, "STATE REPLICATION TIME: %li ns\n", onvm_util_get_elapsed_time(&ts));
+#if 0
+                if(count == 1000*1000*20) {
+                        fprintf(stdout, "STATE REPLICATION TIME (Scan + Copy): %li(ns) and %li (cycles) \n", onvm_util_get_elapsed_time(&ts), onvm_util_get_elapsed_cpu_cycles(start_cycle));
+                        count=0;
+                }
+#endif
 #endif
         }
         return;
@@ -477,6 +587,9 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
         do_memcopy(nf_info->nf_state_mempool);
 #endif //TEST_MEMCPY_OVERHEAD
 
+#ifdef MIMIC_FTMB
+        generate_and_transmit_pals_for_batch(pktsTX, tx_batch_size, non_det_evt,ts_info);
+#endif
         if(likely(tx_batch_size)) {
                 if(likely(0 == (ret = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size)))) {
                         this_nf->stats.tx += tx_batch_size;
@@ -670,7 +783,7 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         const struct rte_memzone *mz_scp;
         const struct rte_memzone *mz_services;
         const struct rte_memzone *mz_nf_per_service;
-        struct rte_mempool *mp;
+        //struct rte_mempool *mp;
         struct onvm_service_chain **scp;
         int retval_eal, retval_parse, retval_final;
 
@@ -715,8 +828,8 @@ onvm_nflib_init(int argc, char *argv[], const char *nf_tag) {
         /* Initialize the info struct */
         nf_info = onvm_nflib_info_init(nf_tag);
 
-        mp = rte_mempool_lookup(PKTMBUF_POOL_NAME);
-        if (mp == NULL)
+        pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
+        if (pktmbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot get mempool for mbufs\n");
 
         /* Lookup mempool for NF structs */

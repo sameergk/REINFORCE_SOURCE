@@ -395,13 +395,25 @@ static int init_service_state_pool(void) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
 static int init_per_flow_ts_pool(void) {
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
-#ifdef ENABLE_RSYNC_MULTI_BUFFERING
-#define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS + ENABLE_RSYNC_MULTI_BUFFERING+1) //(MAX_CLIENTS +2)
+        #ifdef ENABLE_RSYNC_MULTI_BUFFERING
+                #ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
+                        #define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS + ENABLE_RSYNC_MULTI_BUFFERING+1)
+                #else
+                        #define PER_FLOW_TS_POOL_COUNT  (ENABLE_RSYNC_MULTI_BUFFERING+1) //(MAX_CLIENTS + ENABLE_RSYNC_MULTI_BUFFERING+1) //(MAX_CLIENTS +2) //currently NFs do not use it
+                #endif
+        #else
+                #ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
+                        #define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS +2)
+                #else
+                        #define PER_FLOW_TS_POOL_COUNT  (2) //(MAX_CLIENTS +2)
+                #endif
+        #endif
 #else
-#define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS +2)
+        #ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
+                #define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS +1)
+        #else
+                #define PER_FLOW_TS_POOL_COUNT  (1) //(MAX_CLIENTS +1)
 #endif
-#else
-#define PER_FLOW_TS_POOL_COUNT  (MAX_CLIENTS +1)
 #endif
         per_flow_ts_pool = rte_mempool_create(_PER_FLOW_TS_MEMPOOL_NAME, PER_FLOW_TS_POOL_COUNT,
                         _PER_FLOW_TS_SIZE, _PER_FLOW_TS_CACHE,
@@ -690,7 +702,7 @@ init_shm_rings(void) {
                         if(rte_mempool_get(nf_state_pool,&clients[i].nf_state_mempool) < 0) {
                                 rte_exit(EXIT_FAILURE, "Failed to get client state memory");;
                         }
-#ifdef ENABLE_PER_FLOW_TS_STORE
+#ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
                         if(rte_mempool_get(per_flow_ts_pool,&clients[i].per_flow_ts_info) < 0) {
                                 rte_exit(EXIT_FAILURE, "Failed to get client per_flow_ts_info memory");;
                         }
@@ -710,7 +722,7 @@ init_shm_rings(void) {
                         clients[i].rx_q = clients[get_associated_active_or_standby_nf_id(i)].rx_q;
                         clients[i].tx_q = clients[get_associated_active_or_standby_nf_id(i)].tx_q;
                         clients[i].nf_state_mempool = clients[get_associated_active_or_standby_nf_id(i)].nf_state_mempool;
-#ifdef ENABLE_PER_FLOW_TS_STORE
+#ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
                         clients[i].per_flow_ts_info =  clients[get_associated_active_or_standby_nf_id(i)].per_flow_ts_info;
 #endif
                         fprintf(stderr, "re-using rx and tx queue rings for client %d with %d\n", i, get_associated_active_or_standby_nf_id(i));

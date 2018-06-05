@@ -67,7 +67,7 @@ struct onvm_nf_info *nf_info;
 /* number of package between each print */
 static uint32_t print_delay = 25000000;
 
-/* Frequency of Non-determinism events : after every xxxx packets */
+/* Frequency of Non-determinism events : after every nondet_freq micro seconds */
 static uint32_t nondet_freq = (10*1000*1000);
 
 /* Note: the Packet interval and corresponding approximate duration interval @10MPPS
@@ -329,19 +329,24 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
         }
         return;
 }
+
+static uint64_t last_cycle;
+static uint64_t cur_cycles;
+static uint64_t cycles_per_nd_mark;
+static uint32_t nd_counter = 0;
+
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
-        static uint32_t nd_counter = 0;
+
         if (++counter == print_delay) {
                 do_stats_display(pkt);
                 counter = 0;
         }
-        if(++nd_counter == nondet_freq) {
+        if(nd_counter == 0) {
                 meta->reserved_word |= NF_NEED_ND_SYNC;
                 //printf("\n NF is raising ND Event!\n\n");
-                nd_counter =0;
-        }
+        } nd_counter++;
         //printf("\n Inside Packet Handler\n");
 
         do_check_and_insert_vlan_tag(pkt,meta);
@@ -354,6 +359,20 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         meta->destination = pkt->port;
 
         //printf("\n Leaving Packet Handler\n");
+        return 0;
+}
+
+
+static int
+callback_handler(void) {
+        cur_cycles = rte_get_tsc_cycles();
+
+        if (((cur_cycles - last_cycle)) >=  cycles_per_nd_mark) {
+                printf("Total packets before nd_sync: %" PRIu32 "\n", nd_counter);
+                last_cycle = cur_cycles;
+                nd_counter=0;
+        }
+
         return 0;
 }
 
@@ -387,8 +406,11 @@ int main(int argc, char *argv[]) {
                 vtag_tbl[0].tag_counter+=1;
         }
 #endif
-
-        onvm_nflib_run(nf_info, &packet_handler);
+        {
+                cycles_per_nd_mark = (nondet_freq*rte_get_timer_hz())/(1000*1000);
+                printf("\n [%d] corresponds to Interval in Cycles %"PRIu64"\n",nondet_freq, cycles_per_nd_mark);
+        }
+        onvm_nflib_run_callback(nf_info, &packet_handler, &callback_handler);
 
 #ifndef ENABLE_NFV_RESL
         rte_free(vlan_state_mp);

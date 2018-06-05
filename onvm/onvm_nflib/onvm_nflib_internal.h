@@ -158,6 +158,9 @@ static struct rte_mempool *nf_info_mp;
 // Shared pool for mgr <--> NF messages
 static struct rte_mempool *nf_msg_pool;
 
+// Shared pool for packets
+static struct rte_mempool *pktmbuf_pool;
+
 // User-given NF Client ID (defaults to manager assigned)
 static uint16_t initial_instance_id = NF_NO_ID;
 

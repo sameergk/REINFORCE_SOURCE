@@ -161,8 +161,17 @@ do_stats_display(struct rte_mbuf* pkt) {
         }
 }
 #ifdef ENABLE_NFV_RESL
+//#define ENABLE_LOCAL_LATENCY_PROFILER
 static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 //return 0;
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        static int countm = 0;uint64_t start_cycle=0;onvm_interval_timer_t ts_p;
+        countm++;
+        if(countm == 1000*1000*20) {
+                onvm_util_get_start_time(&ts_p);
+                start_cycle = onvm_util_get_current_cpu_cycles();
+        }
+#endif
         if(nf_info->nf_state_mempool) {
                 if(mon_state_tbl  == NULL) {
                         dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
@@ -182,6 +191,12 @@ static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                         mon_state_tbl[0].pkt_counter+=1;
                 }
         }
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        if(countm == 1000*1000*20) {
+                fprintf(stdout, "STATE REPLICATION TIME (Marking): %li(ns) and %li (cycles) \n", onvm_util_get_elapsed_time(&ts_p), onvm_util_get_elapsed_cpu_cycles(start_cycle));
+                countm=0;
+        }
+#endif
         return 0;
 }
 
@@ -211,7 +226,7 @@ static int save_packet_state_new(__attribute__((unused)) struct rte_mbuf* pkt, s
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
-        if (++counter == print_delay) {
+        if (++counter == 0) {//if (++counter == print_delay) {
                 do_stats_display(pkt);
                 counter = 0;
         }

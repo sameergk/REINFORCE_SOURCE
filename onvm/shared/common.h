@@ -76,7 +76,7 @@
 // NIC (Rx, Tx) and NF (Rx and Tx) Ring buffer sizes
 #ifdef ENABLE_HIGH_THROUGHPUT_MODE
 #define RTE_MP_RX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
-#define RTE_MP_TX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
+#define RTE_MP_TX_DESC_DEFAULT (1024*4)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)       //For Resiliency increase to at least 1/2 of Latch Ring buffer size
 #define CLIENT_QUEUE_RINGSIZE  (4096)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
 #elif defined(ENABLE_LOW_LATENCY_MODE)
 #define RTE_MP_RX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512) //128
@@ -376,6 +376,42 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define RESL_UPDATE_MODE_PER_BATCH      //update mode Shadow Ring, Replica state, per flow TS for batch of packets
 #endif
 
+
+
+/* Feature to enable PICO Replication mode of operation: Cut Rx while State update
+ * How Pico works?: Synchrnous mode; till NF state is synced; NF cannot process packets;
+ * Lock NF input and Output till 2P commit and after commit enable input and output
+ * Replication Frequency: Every 1ms.
+ * How to mimic it in REINFORCE?:
+ * During NF sync halt Rx from sending packets to NFs and resume after state commit.
+ * Note: Additionally disable Double Buffering and operate in single Buffer mode.
+ * Remember: Input low packet rate to get reliable latency figures.
+ * */
+//#define MIMIC_PICO_REP
+
+/* Feature toe Enable FTMB mode of operation:
+ * Note: NFLIB generate PALS; ignore VOR packets as there is only 1NF thread.
+ * How FTMB works? Capture PAL for all shared variables in the NF processing.
+ * PAL = 16byte packet.
+ * Master transmits PAL, VOR and Data Packets to OL.
+ * OL must track and commit all dependency PALs to stable storage before releasing the packet from OL.
+ * Perform full NF checkpoint for every 50-200ms
+ * How to mimic it in REINFORCE:
+ *  setup #shared vars as variable in NF (shared with NFLIB)
+ *  NFLib bypass all determinism/non-determinism check; performs continuous processing
+ *  For each packet NFLib generates and transmits # PALs on the RSYNC PORT
+ *  Encode LAST PAL ID on Packet and also transmit it on RSYNC PORT
+ *  RSYNC PORT Node must commit differentiate PAL and Transmit it to to intended output node.
+ */
+//#define MIMIC_FTMB
+#ifdef MIMIC_FTMB
+#undef ENABLE_REPLICA_STATE_UPDATE
+#undef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+#undef ENABLE_PER_FLOW_TS_STORE
+#undef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+#undef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+#endif
+
 #ifdef ENABLE_SHADOW_RINGS
 #ifdef RESL_UPDATE_MODE_PER_PACKET
 #define SHADOW_RING_UPDATE_PER_PKT
@@ -385,8 +421,9 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #endif
 
 #ifdef ENABLE_PER_FLOW_TS_STORE
-#define ENABLE_PER_FLOW_TXTS_MAP_ENTRY
 //#define ENABLE_NFLIB_PER_FLOW_TS_STORE    //enable TS update for each NF
+//#define ENABLE_PER_FLOW_TXTS_MAP_ENTRY
+
 #ifdef ENABLE_NFLIB_PER_FLOW_TS_STORE
 #ifdef RESL_UPDATE_MODE_PER_PACKET
 #define PER_FLOW_TS_UPDATE_PER_PKT
@@ -409,7 +446,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ONVM_NUM_RSYNC_PORTS    (RTE_MAX_ETHPORTS)      //(3)     //2 + 1 for rest
 #define USE_BATCHED_RSYNC_TRANSACTIONS  (1) //enable single wait for multiple remote transactions in a round;
 //#define BYPASS_WAIT_ON_TRANSACTIONS       //to bypass wait on transactions and assume send=success; (Do not enable!)
-#define ENABLE_OPPROTUNISTIC_MAX_POLL       //Enable to opportunistically maxout packets per transaction; induce more ppkt delay but gain throughput improvement.
+//#define ENABLE_OPPROTUNISTIC_MAX_POLL       //Enable to opportunistically maxout packets per transaction; induce more ppkt delay but gain throughput improvement.
 #define ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE        //Enable double buffering scheme such that we minimize the effective time on wait_for_trans_complete() and allow to send more (double) the transactions
 
 #define _TX_RSYNC_TX_PORT_RING_NAME     "_TX_RSYNC_TX_%u_PORT"  //"_TX_RSYNC_TX_PORT"
@@ -417,7 +454,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define _TX_RSYNC_TX_LATCH_RING_NAME    "_TX_RSYNC_TX_%u_LATCH" //"_TX_RSYNC_TX_LATCH"
 #define TX_RSYNC_TX_LATCH_RING_SIZE     (CLIENT_QUEUE_RINGSIZE*2)   //(8*1024)
 #define _TX_RSYNC_NF_LATCH_RING_NAME    "_TX_RSYNC_NF_%u_LATCH" //"_TX_RSYNC_NF_LATCH"
-#define TX_RSYNC_NF_LATCH_RING_SIZE     (CLIENT_QUEUE_RINGSIZE*2)   //(8*1024)
+#define TX_RSYNC_NF_LATCH_RING_SIZE     (CLIENT_QUEUE_RINGSIZE)   //(8*1024)
 
 #ifdef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
 #define _TX_RSYNC_TX_LATCH_DB_RING_NAME    "_TX_RSYNC_TX_%u_LATCH_DB" //"_TX_RSYNC_TX_LATCH"
@@ -438,11 +475,6 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ONVM_NUM_RSYNC_THREADS ((int)0)
 #endif
 
-/* Feature to enable PICO Replication mode of operation: Cut Rx while State update
- * Note: Additionally disable DOuble Buffering and operate in single Buffer mode
- * */
-//#define MIMIC_PICO_REP
-
 #define _NF_STATE_MEMPOOL_NAME "NF_STATE_MEMPOOL"
 #define _NF_STATE_SIZE      (64*1024)
 #define _NF_STATE_CACHE     (8)
@@ -459,7 +491,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 
 #ifdef ENABLE_PER_FLOW_TS_STORE
 #define _PER_FLOW_TS_MEMPOOL_NAME "PF_TS_MEMPOOL"
-#define _PER_FLOW_TS_SIZE      (16*1024)  //reduced from 64K to 16K for now.
+#define _PER_FLOW_TS_SIZE      (16*1024) //((16*1024)+1024)  //reduced from 64K(8K entires)  to 16K(2K entries) for now: add 1K for bookkeeping dirty_map.
 #define _PER_FLOW_TS_CACHE     (8)
 #define _PER_FLOW_TS_CACHE_MAX_ENTRIES      ((_PER_FLOW_TS_SIZE)/sizeof(uint64_t))
 #endif
@@ -485,12 +517,19 @@ typedef struct onvm_per_flow_ts_info {
 #define BFD_TX_PORT_QUEUE_ID    (0)//(MAX_NFS/2)
 #endif
 
-#ifdef ENABLE_REPLICA_STATE_UPDATE
+#ifdef ENABLE_NFV_RESL //ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 //for external events
 #define RSYNC_TX_PORT_QUEUE_ID_0    (BFD_TX_PORT_QUEUE_ID+1)
 //for internal thread
 #define RSYNC_TX_PORT_QUEUE_ID_1    (RSYNC_TX_PORT_QUEUE_ID_0+1)
 #define RSYNC_TX_OUT_PORT       (0)
+#endif
+
+
+#ifdef MIMIC_FTMB
+//#undef ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
+//#undef ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
+//#undef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
 #endif
 
 // END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
@@ -502,6 +541,18 @@ typedef struct dirty_mon_state_map_tbl {
         // Bit index to every 1K LSB=0-1K, MSB=63-64K
 }dirty_mon_state_map_tbl_t;
 
+typedef struct dirty_mon_state_map_tbl_txts {
+        uint8_t dirty_index;
+        // Bit index to every 1K LSB=0-1K, MSB=63-64K
+}dirty_mon_state_map_tbl_txts_t;
+/* Note: To optimize, use two level indexing.
+ * First index uint64_t designate which 2nd level indexes are dirtied
+ * Second level index sixty-four of the uint64_t index the chunk in the memory
+ * Total space needed for lookup = (1+64)*8   = 520 bytes ( reserve 1KB)
+ * Total index bits supported in lookup = 64*64 = 4K indices
+ * To support 8 Bytes per flow entry and 4K entries => 32KB memory.
+ * 32KB indexed by 4K indexes => 8 Bytes
+ */
 /******************************************************************************/
 #ifdef ENABLE_VXLAN
 #define DISTRIBUTED_NIC_PORT 1 // NIC port connects to the remote server
