@@ -260,15 +260,16 @@ static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
         }
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         if(countm == 1000*1000*10) {
-                fprintf(stdout, "STATE REPLICATION TIME (Marking): %li(ns) and %li (cycles) \n", onvm_util_get_elapsed_time(&ts_p), onvm_util_get_elapsed_cpu_cycles(start_cycle));
+                fprintf(stdout, "STATE REPLICATION TIME (Marking): %li(ns) == %li (cycles) \n", onvm_util_get_elapsed_time(&ts_p), onvm_util_get_elapsed_cpu_cycles(start_cycle));
                 countm=0;
         }
 #endif
         return 0;
 }
 
-static void
+static inline void
 do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
+        //return ;
 
         /* This function will check if it is a valid ETH Packet and if it is not a vlan_tagged, inserts a vlan tag */
         struct ether_hdr *eth = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
@@ -303,17 +304,18 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
                 uint16_t vlan_tag = ((vtag_tbl[vlan_ft_index].vlan_tag)?(vtag_tbl[vlan_ft_index].vlan_tag):get_new_vlan_tag_value());
                 //printf("\n\n Inserting Vlan Tag=%d for vlan_ft_index=%d\n",vlan_tag, vlan_ft_index);
 
-
+#if 0
                 struct vlan_hdr *vlan = (struct vlan_hdr*)(rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr));
                 vlan->vlan_tci = rte_cpu_to_be_16((uint16_t)vlan_tag);
                 vlan->eth_proto = eth->ether_type;
                 eth->ether_type = rte_cpu_to_be_16(ETHER_TYPE_VLAN);
                 //printf("\n PKT_SIZE:0x%x, VLAN [0x%x, 0x%x:: 0x%x] and NH [0x%x], is already inserted!", pkt->pkt_len, rte_be_to_cpu_16(vlan->vlan_tci), rte_be_to_cpu_16(vlan->eth_proto), ETHER_TYPE_IPv4, rte_be_to_cpu_16(eth->ether_type));
-
+#endif
                 save_packet_state(vlan_ft_index, vlan_tag);
-
+#if 0
                 rte_vlan_strip(pkt);
                 eth->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);  //strip function doesnt restore; hence must restore eth type explicitly,
+#endif
                 //printf("\n After PKT_SIZE:0x%x, After NH [0x%x] !\n", pkt->pkt_len, rte_be_to_cpu_16(eth->ether_type));
         }
         else if (ETHER_TYPE_VLAN == rte_be_to_cpu_16(eth->ether_type)) {

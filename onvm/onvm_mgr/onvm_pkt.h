@@ -222,7 +222,7 @@ onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt,  __at
  * Ouput : an error code
  *
  */
-int
+inline int
 onvm_pkt_drop(struct rte_mbuf *pkt);
 
 

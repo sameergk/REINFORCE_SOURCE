@@ -229,6 +229,11 @@ whether_wakeup_client(int instance_id)
         }
 
 #ifdef ENABLE_NFV_RESL
+        //IF NF is waiting on NDSYNC then do not wake it up.
+        if(onvm_nf_is_waiting_on_NDSYNC(&clients[instance_id])) {
+                return 0;
+        }
+
         //TODO: Remove this  check!
         //If PRIMARY(ACTIVE) NF IS ALIVE, then DO NOT WAKE THE (SECONDARY) STANDBY NF;
         //if((!is_primary_active_nf_id(instance_id)) && (NF_RUNNING == clients[get_associated_active_or_standby_nf_id(instance_id)].info->status)) {

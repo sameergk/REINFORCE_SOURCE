@@ -240,7 +240,7 @@ static inline int update_dirty_state_index(uint16_t vtag_index) {
         return vtag_index;
 }
 static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
-#define ENABLE_LOCAL_LATENCY_PROFILER
+//#define ENABLE_LOCAL_LATENCY_PROFILER
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         static int countm = 0;uint64_t start_cycle=0;onvm_interval_timer_t ts_p;
         countm++;
@@ -267,8 +267,10 @@ static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
         return 0;
 }
 
-static void
+static inline void
 do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struct onvm_pkt_meta* meta) {
+
+        //return ;
 
         /* This function will check if it is a valid ETH Packet and if it is not a vlan_tagged, inserts a vlan tag */
         struct ether_hdr *eth = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
@@ -331,9 +333,9 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
 }
 
 static uint64_t last_cycle;
-static uint64_t cur_cycles;
+static uint64_t cur_cycle;
 static uint64_t cycles_per_nd_mark;
-static uint32_t nd_counter = 0;
+static volatile uint32_t nd_counter = 1;
 
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
@@ -347,6 +349,8 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 meta->reserved_word |= NF_NEED_ND_SYNC;
                 //printf("\n NF is raising ND Event!\n\n");
         } nd_counter++;
+        if(0 == last_cycle) last_cycle = rte_get_tsc_cycles();
+
         //printf("\n Inside Packet Handler\n");
 
         do_check_and_insert_vlan_tag(pkt,meta);
@@ -365,11 +369,13 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 
 static int
 callback_handler(void) {
-        cur_cycles = rte_get_tsc_cycles();
-
-        if (((cur_cycles - last_cycle)) >=  cycles_per_nd_mark) {
-                printf("Total packets before nd_sync: %" PRIu32 "\n", nd_counter);
-                last_cycle = cur_cycles;
+        cur_cycle = rte_get_tsc_cycles();
+        uint64_t delta_cycles = cur_cycle - last_cycle;
+        if (last_cycle && (((delta_cycles)) >=  cycles_per_nd_mark)) {
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                printf("Total elapsed cycles  %"PRIu64" (%"PRIu64" us) and packets before nd_sync: %" PRIu32 "\n", (delta_cycles),(((delta_cycles)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz()), nd_counter);
+#endif
+                last_cycle = cur_cycle;
                 nd_counter=0;
         }
 
@@ -408,7 +414,7 @@ int main(int argc, char *argv[]) {
 #endif
         {
                 cycles_per_nd_mark = (nondet_freq*rte_get_timer_hz())/(1000*1000);
-                printf("\n [%d] corresponds to Interval in Cycles %"PRIu64"\n",nondet_freq, cycles_per_nd_mark);
+                printf("\n [%d] corresponds to Interval in Cycles %"PRIu64" (%"PRIu64" us)\n",nondet_freq, cycles_per_nd_mark, (uint64_t) (((cycles_per_nd_mark)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz()));
         }
         onvm_nflib_run_callback(nf_info, &packet_handler, &callback_handler);
 

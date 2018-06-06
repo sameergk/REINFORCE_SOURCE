@@ -577,7 +577,7 @@ init_port(uint8_t port_num) {
         };
 #endif
         const uint16_t rx_rings = ONVM_NUM_RX_THREADS;
-        const uint16_t tx_rings = MAX_NFS;  //Note Max queuues on FS-2/3/4 = 16; requesting and allocating for more queues doesnt fail; but results in runtime SIGSEGV in ixgbe_transmit()
+        const uint16_t tx_rings = (ONVM_NUM_TX_THREADS + ONVM_NF_MGR_TX_QUEUES); //MAX_NFS;  //Note Max queuues on FS-2/3/4 = 16; requesting and allocating for more queues doesnt fail; but results in runtime SIGSEGV in ixgbe_transmit()
         const uint16_t rx_ring_size = RTE_MP_RX_DESC_DEFAULT;
         const uint16_t tx_ring_size = RTE_MP_TX_DESC_DEFAULT;
 

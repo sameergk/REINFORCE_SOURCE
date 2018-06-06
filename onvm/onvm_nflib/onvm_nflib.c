@@ -366,7 +366,7 @@ onvm_nflib_wait_till_notification(void) {
                 onvm_nf_yeild(nf_info,YEILD_DUE_TO_EXPLICIT_REQ);
                 /* Next Check for any Messages/Notifications */
                 onvm_nflib_dequeue_messages();
-        }while((NF_PAUSED == (nf_info->status & NF_PAUSED))||(NF_WT_ND_SYNC_BIT == (nf_info->status & NF_WT_ND_SYNC_BIT)) );
+        }while(((NF_PAUSED == (nf_info->status & NF_PAUSED))||(NF_WT_ND_SYNC_BIT == (nf_info->status & NF_WT_ND_SYNC_BIT))) && keep_running );
 
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         //printf("SIGNAL_TIME(PAUSE-->RESUME): %li ns\n", onvm_util_get_elapsed_time(&ts));
@@ -540,7 +540,8 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
         if(unlikely(non_det_evt)){
                 if(unlikely(nf_info->bNDSycn)) {//if(unlikely(bNDSync)) {
                         //explicitly move to pause state and wait till notified.
-                        nf_info->status = NF_PAUSED|NF_WT_ND_SYNC_BIT;
+                        //nf_info->status = NF_PAUSED|NF_WT_ND_SYNC_BIT;
+                        nf_info->status |= NF_WT_ND_SYNC_BIT;
 #ifdef  __DEBUG_NDSYNC_LOGS__
                         //printf("\n Client [%d] is halting due to second ND at: [%li] while first [%li] is not committed! waiting for SYNC Signal\n", nf_info->instance_id,ts_info, nf_info->bLastPktId);
                         onvm_util_get_start_time(&nd_ts);
@@ -564,8 +565,7 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
 #endif
                 }
                 nf_info->bNDSycn=1; //bNDSync = 1;    //set the NDSync to True again
-                nf_info->bLastPktId=ts_info;
-
+                nf_info->bLastPktId=ts_info;    //can be used to check if Resume message carries TxTs of latest synced packet
         }
         //printf("\n %d", non_det_evt);
 #endif
@@ -578,9 +578,9 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
 #endif
 
 #if defined(SHADOW_RING_UPDATE_PER_BATCH)
-        rte_ring_enqueue_bulk(tx_sring, pktsTX, tx_batch_size);
-        void *pktsRX[NF_PKT_BATCH_SIZE];
-        rte_ring_sc_dequeue_bulk(rx_sring, pktsRX,NF_PKT_BATCH_SIZE ); //for now Bypass as we do at the end (down)
+        //rte_ring_enqueue_bulk(tx_sring, pktsTX, tx_batch_size);
+        //void *pktsRX[NF_PKT_BATCH_SIZE];
+        //rte_ring_sc_dequeue_bulk(rx_sring, pktsRX,NF_PKT_BATCH_SIZE ); //for now Bypass as we do at the end (down)
 #endif
 
 #if defined(TEST_MEMCPY_MODE_PER_BATCH)
@@ -590,37 +590,37 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
 #ifdef MIMIC_FTMB
         generate_and_transmit_pals_for_batch(pktsTX, tx_batch_size, non_det_evt,ts_info);
 #endif
-        if(likely(tx_batch_size)) {
-                if(likely(0 == (ret = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size)))) {
-                        this_nf->stats.tx += tx_batch_size;
-                } else {
+        //if(likely(tx_batch_size)) {
+        if(likely(0 == (ret = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size)))) {
+                this_nf->stats.tx += tx_batch_size;
+        } else {
 #if defined(NF_LOCAL_BACKPRESSURE)
-                        do {
+                do {
 #ifdef INTERRUPT_SEM
-                                //printf("\n Yielding till Tx Ring has place to store Packets\n");
-                                onvm_nf_yeild(nf_info, YIELD_DUE_TO_FULL_TX_RING);
-                                //printf("\n Resuming from Tx Ring wait to store Packets\n");
+                        //printf("\n Yielding till Tx Ring has place to store Packets\n");
+                        onvm_nf_yeild(nf_info, YIELD_DUE_TO_FULL_TX_RING);
+                        //printf("\n Resuming from Tx Ring wait to store Packets\n");
 #endif
-                                if (tx_batch_size > rte_ring_free_count(tx_ring)) {
-                                        continue;
-                                }
-                                if((ret = rte_ring_enqueue_bulk(tx_ring,pktsTX,tx_batch_size)) == 0)break;
-                        } while (ret && ((this_nf->info->status==NF_RUNNING) && keep_running));
-                        this_nf->stats.tx += tx_batch_size;
+                        if (tx_batch_size > rte_ring_free_count(tx_ring)) {
+                                continue;
+                        }
+                        if((ret = rte_ring_enqueue_bulk(tx_ring,pktsTX,tx_batch_size)) == 0)break;
+                } while (ret && ((this_nf->info->status==NF_RUNNING) && keep_running));
+                this_nf->stats.tx += tx_batch_size;
 #endif  //NF_LOCAL_BACKPRESSURE
                 }
 #if defined(ENABLE_SHADOW_RINGS)
-                /* Finally clear all packets from the Tx Shadow Ring and also Rx shadow Ring ::only if packets from shadow ring have been flushed to Tx Ring: Reason, NF might get paused or stopped */
-                if(likely(ret == 0)) {
-                        rte_ring_sc_dequeue_burst(tx_sring,pktsTX,rte_ring_count(tx_sring));
-                        if(unlikely(rte_ring_count(rx_sring))) {
-                                //These are the held packets in the NF in this round:
-                                rte_ring_sc_dequeue_burst(rx_sring,pktsTX,rte_ring_count(rx_sring));
-                                //fprintf(stderr, "BATCH END: %d packets still in Rx shadow ring!\n", rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring)));
-                        }
+        /* Finally clear all packets from the Tx Shadow Ring and also Rx shadow Ring ::only if packets from shadow ring have been flushed to Tx Ring: Reason, NF might get paused or stopped */
+        if(likely(ret == 0)) {
+                rte_ring_sc_dequeue_burst(tx_sring,pktsTX,rte_ring_count(tx_sring));
+                if(unlikely(rte_ring_count(rx_sring))) {
+                        //These are the held packets in the NF in this round:
+                        rte_ring_sc_dequeue_burst(rx_sring,pktsTX,rte_ring_count(rx_sring));
+                        //fprintf(stderr, "BATCH END: %d packets still in Rx shadow ring!\n", rte_ring_sc_dequeue_burst(rx_sring,pkts,rte_ring_count(rx_sring)));
                 }
-#endif
         }
+#endif
+        //}
         return ret;
 }
 static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts,  pkt_handler handler);
@@ -653,7 +653,6 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
 #if defined(TEST_MEMCPY_MODE_PER_PACKET)
                 do_memcopy(nf_info->nf_state_mempool);
 #endif
-
 
 #ifdef INTERRUPT_SEM
                 end_ppkt_processing_cost(start_tsc);
@@ -689,6 +688,14 @@ static inline int onvm_nflib_process_packets_batch(void **pkts, unsigned nb_pkts
 #endif
                 }
         } //End Batch Process;
+
+#if defined(SHADOW_RING_UPDATE_PER_BATCH)
+        void *pktsRX[NF_PKT_BATCH_SIZE];
+        //clear rx_sring
+        rte_ring_sc_dequeue_bulk(rx_sring, pktsRX,NF_PKT_BATCH_SIZE);
+        //save processed packets in tx_sring
+        rte_ring_enqueue_bulk(tx_sring, pktsTX, tx_batch_size);
+#endif
 
         /* Perform Post batch processing actions */
         if(likely(tx_batch_size)) {

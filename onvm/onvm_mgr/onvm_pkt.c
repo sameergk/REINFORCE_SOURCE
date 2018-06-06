@@ -647,7 +647,7 @@ onvm_pkt_process_next_action(struct thread_info *tx, struct rte_mbuf *pkt, __att
 }
 
 /*******************************Helper function*******************************/
-int
+inline int
 onvm_pkt_drop(struct rte_mbuf *pkt) {
         rte_pktmbuf_free(pkt);
         if (pkt != NULL) {

@@ -77,7 +77,7 @@
 #ifdef ENABLE_HIGH_THROUGHPUT_MODE
 #define RTE_MP_RX_DESC_DEFAULT (1024)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)
 #define RTE_MP_TX_DESC_DEFAULT (1024*4)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512)       //For Resiliency increase to at least 1/2 of Latch Ring buffer size
-#define CLIENT_QUEUE_RINGSIZE  (4096)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
+#define CLIENT_QUEUE_RINGSIZE  (1024*2)   //(16384) //4096 //(4096) //(512)  //128 //4096  //4096 //128   (use U:4096, T:512) //256
 #elif defined(ENABLE_LOW_LATENCY_MODE)
 #define RTE_MP_RX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512) //128
 #define RTE_MP_TX_DESC_DEFAULT (128)   //(1024) //512 //512 //1536 //2048 //1024 //512 (use U:1024, T:512) //128
@@ -93,7 +93,7 @@
 
 // Number of Rx and Tx Threads
 #define ONVM_NUM_RX_THREADS     (1)
-#define ONVM_NUM_TX_THREADS     (MAX_NFS)
+#define ONVM_NUM_TX_THREADS     (4)
 
 #define ONVM_MAX_CHAIN_LENGTH (12)      // the maximum chain length
 #define SDN_FT_ENTRIES  (1024)          // Max Flow Table Entries
@@ -199,7 +199,7 @@
 #define NF_LOCAL_BACKPRESSURE           // (Preferred Usage: Enabled)
 
 /* Enable back-pressure handling to throttle NFs upstream */
-#define ENABLE_NF_BACKPRESSURE          // (Preferred Usage: Enabled)
+//#define ENABLE_NF_BACKPRESSURE          // (Preferred Usage: Enabled)
 
 /* Enable CGROUP cpu share setting Feature */
 #define ENABLE_CGROUPS_FEATURE          // (Preferred Usage: Enabled)
@@ -364,7 +364,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #ifdef ENABLE_NFV_RESL
 #define ENABLE_NF_MGR_IDENTIFIER    // Identifier for the NF Manager node
 #define ENABLE_BFD                  // BFD management
-#define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
+//#define ENABLE_SHADOW_RINGS         //enable shadow rings in the NF to save enqueued packets.
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 #define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
@@ -512,9 +512,9 @@ typedef struct onvm_per_flow_ts_info {
 
 //Note the NUM_OF_QUEUES in PORT seem to be only 16; so ensure the queue value with MAX_NFS ( but unforunately the init_port() doesnt fail.
 #ifdef ENABLE_BFD
-#define BFD_TX_PORT_QUEUE_ID        ((MAX_NFS/2)+1)
+#define BFD_TX_PORT_QUEUE_ID        (ONVM_NUM_TX_THREADS)//((MAX_NFS/2)+1)
 #else
-#define BFD_TX_PORT_QUEUE_ID    (0)//(MAX_NFS/2)
+#define BFD_TX_PORT_QUEUE_ID   (ONVM_NUM_TX_THREADS-1)// (0)//(MAX_NFS/2)
 #endif
 
 #ifdef ENABLE_NFV_RESL //ENABLE_REMOTE_SYNC_WITH_TX_LATCH
@@ -523,6 +523,7 @@ typedef struct onvm_per_flow_ts_info {
 //for internal thread
 #define RSYNC_TX_PORT_QUEUE_ID_1    (RSYNC_TX_PORT_QUEUE_ID_0+1)
 #define RSYNC_TX_OUT_PORT       (0)
+#define ONVM_NF_MGR_TX_QUEUES   (4) //1 for BFD, 2 for RSYNC
 #endif
 
 
@@ -805,7 +806,7 @@ struct port_info {
 struct onvm_nf_info {
         uint16_t instance_id;
         uint16_t service_id;
-        //volatile
+        volatile
         uint8_t status;    //moved to status to ensure status read is not cached and is updated across different cores; but seeing no major difference in sync refresh time.
         const char *tag;
         pid_t pid;

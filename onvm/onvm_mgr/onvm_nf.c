@@ -644,9 +644,9 @@ onvm_nf_send_msg(uint16_t dest, uint8_t msg_type, __attribute__((unused)) uint8_
 #endif
         ret = rte_ring_sp_enqueue(clients[dest].msg_q, (void*)msg);
 #ifdef INTERRUPT_SEM
-        if(!ret) {
+        //if(!ret) {
                 check_and_wakeup_nf(dest);
-        }
+        //}
 #endif
         return ret;
 }

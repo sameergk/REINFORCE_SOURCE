@@ -276,7 +276,7 @@ static inline void
 init_shared_cpu_info(uint16_t instance_id);
 
 #define YEILD_DUE_TO_EXPLICIT_REQ   (0)
-#define YIELD_DUE_TO_EMPTY_RX_RING  (0)
+#define YIELD_DUE_TO_EMPTY_RX_RING  (1)
 #define YIELD_DUE_TO_FULL_TX_RING   (1)
 void onvm_nf_yeild(__attribute__((unused))struct onvm_nf_info* info, uint8_t reason_rxtx);
 
