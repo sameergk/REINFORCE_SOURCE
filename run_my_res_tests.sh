@@ -3,7 +3,8 @@
 # Results will be stored at: /home/skulk901/dev/res_results/<$2>/<$1>
 mode=$1
 res_dir=$2
-
+#now=$(date +"%d_%m_%Y_%H_%M_%S")
+now=$(date +"%d_%m_%Y_%H")
 if [ -z $mode ]
 then
   mode="unknown"
@@ -13,6 +14,8 @@ if [ -z $res_dir ]
 then
   res_dir="res_unset"
 fi
+res_dir=$res_dir$now
+
 mkdir -p dev/res_results/$res_dir
 mkdir -p dev/res_results/$res_dir/$mode
 

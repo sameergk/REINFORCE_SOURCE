@@ -100,6 +100,9 @@ void *vlan_state_mp = NULL;
 /* We can have more entries supported in SDN_FT than this state table or vice versa: hence hash entries to available MAX_STATE_ELEMENTS */
 #define MAP_SDN_FT_INDEX_TO_VLAN_STATE_TBL_INDEX(sdn_ft_index) ((sdn_ft_index)%(MAX_STATE_ELEMENTS))
 
+#ifdef MIMIC_FTMB
+extern uint8_t SV_ACCES_PER_PACKET;
+#endif
 /*
  * Print a usage message
  */
@@ -226,6 +229,15 @@ static inline int update_dirty_state_index(uint16_t vtag_index) {
 }
 static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
         if(vtag_tbl) {
+//#define ENABLE_LOCAL_LATENCY_PROFILER
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                static int countm = 0;uint64_t start_cycle=0;onvm_interval_timer_t ts_p;
+                countm++;
+                if(countm == 1000*1000*20) {
+                        onvm_util_get_start_time(&ts_p);
+                        start_cycle = onvm_util_get_current_cpu_cycles();
+                }
+#endif
                 if(unlikely(vtag_tbl[vtag_index].vlan_tag != vlan_tag)) {
                         vtag_tbl[vtag_index].vlan_tag = vlan_tag;
                         vtag_tbl[vtag_index].pkt_counter =1;
@@ -233,6 +245,12 @@ static inline int save_packet_state(uint16_t vtag_index, int vlan_tag) {
                         vtag_tbl[vtag_index].pkt_counter+=1;
                 }
                 update_dirty_state_index(vtag_index);
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                if(countm == 1000*1000*20) {
+                        fprintf(stdout, "STATE REPLICATION TIME (Marking): %li(ns) and %li (cycles) \n", onvm_util_get_elapsed_time(&ts_p), onvm_util_get_elapsed_cpu_cycles(start_cycle));
+                        countm=0;
+                }
+#endif
         }
         return 0;
 }
@@ -299,6 +317,14 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
         }
         return;
 }
+
+/* Frequency of Non-determinism events : after every nondet_freq micro seconds */
+//static uint32_t nondet_freq = (1000);
+static uint64_t cycles_per_nd_mark = (3*1000*1000); //(nondet_freq*rte_get_timer_hz())/(1000*1000);
+static volatile uint32_t nd_counter = 1;
+static uint64_t last_cycle;
+static uint64_t cur_cycle;
+
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
@@ -307,7 +333,13 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 counter = 0;
         }
         //printf("\n Inside Packet Handler\n");
-
+#ifdef ENABLE_ND_MARKING_IN_NFS
+        if(nd_counter == 0) {
+                meta->reserved_word |= NF_NEED_ND_SYNC;
+                //printf("\n NF is raising ND Event!\n\n");
+        } nd_counter++;
+        if(0 == last_cycle) last_cycle = rte_get_tsc_cycles();
+#endif
         do_check_and_insert_vlan_tag(pkt,meta);
         //if(0 == counter) do_stats_display(pkt);
 
@@ -317,6 +349,23 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         return 0;
 }
 
+#ifdef ENABLE_ND_MARKING_IN_NFS
+static int
+callback_handler(void) {
+        return 0;
+        cur_cycle = rte_get_tsc_cycles();
+        uint64_t delta_cycles = cur_cycle - last_cycle;
+        if (last_cycle && (((delta_cycles)) >=  cycles_per_nd_mark)) {
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                printf("Total elapsed cycles  %"PRIu64" (%"PRIu64" us) and packets before nd_sync: %" PRIu32 "\n", (delta_cycles),(((delta_cycles)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz()), nd_counter);
+#endif
+                last_cycle = cur_cycle;
+                nd_counter=0;
+        }
+
+        return 0;
+}
+#endif
 
 int main(int argc, char *argv[]) {
         int arg_offset;
@@ -348,7 +397,15 @@ int main(int argc, char *argv[]) {
                 vtag_tbl[0].tag_counter+=1;
         }
 #endif
+#ifdef MIMIC_FTMB
+SV_ACCES_PER_PACKET = 3;
+#endif
+
+#ifndef ENABLE_ND_MARKING_IN_NFS
         onvm_nflib_run(nf_info, &packet_handler);
+#else
+        onvm_nflib_run_callback(nf_info, &packet_handler, &callback_handler);
+#endif
 
 #ifndef ENABLE_NFV_RESL
         rte_free(vlan_state_mp);

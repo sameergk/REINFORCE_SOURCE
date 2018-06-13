@@ -192,4 +192,8 @@ typedef struct dirty_mon_state_map_tbl {
 #endif
 extern dirty_mon_state_map_tbl_t *dirty_state_map;
 
+#ifdef MIMIC_FTMB
+extern uint8_t SV_ACCES_PER_PACKET;
+#endif
+
 #endif  // _ONVM_NFLIB_H_

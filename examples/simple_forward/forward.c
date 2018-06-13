@@ -186,6 +186,32 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt) {
 
         return;
 }
+#undef ENABLE_ND_MARKING_IN_NFS
+#ifdef ENABLE_ND_MARKING_IN_NFS
+/* Frequency of Non-determinism events : after every nondet_freq micro seconds */
+//static uint32_t nondet_freq = (1000);
+static uint64_t cycles_per_nd_mark = (3*1000*1000*100);  //10ms
+//static uint64_t cycles_per_nd_mark =(nondet_freq*rte_get_timer_hz())/(1000*1000);
+static volatile uint32_t nd_counter = 1;
+static uint64_t last_cycle;
+static uint64_t cur_cycle;
+static int
+callback_handler(void) {
+        //return 0;
+        cur_cycle = rte_get_tsc_cycles();
+        uint64_t delta_cycles = cur_cycle - last_cycle;
+        if (last_cycle && (((delta_cycles)) >=  cycles_per_nd_mark)) {
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+                printf("Total elapsed cycles  %"PRIu64" (%"PRIu64" us) and packets before nd_sync: %" PRIu32 "\n", (delta_cycles),(((delta_cycles)*SECOND_TO_MICRO_SECOND)/rte_get_tsc_hz()), nd_counter);
+#endif
+                last_cycle = cur_cycle;
+                nd_counter=0;
+        }
+
+        return 0;
+}
+#endif
+
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
@@ -193,12 +219,23 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 do_stats_display(pkt);
                 counter = 0;
         }
+#ifdef ENABLE_ND_MARKING_IN_NFS
+        if(nd_counter == 0) {
+                meta->reserved_word |= NF_NEED_ND_SYNC;
+                //printf("\n NF is raising ND Event!\n\n");
+        } nd_counter++;
+        if(0 == last_cycle) last_cycle = rte_get_tsc_cycles();
+#endif
 
         //do_check_and_insert_vlan_tag(pkt);
         //if(0 == counter) do_stats_display(pkt);
 
         meta->action = ONVM_NF_ACTION_TONF;
         meta->destination = destination;
+
+        meta->action = ONVM_NF_ACTION_OUT;
+        meta->destination = pkt->port;
+
         return 0;
 }
 
@@ -216,7 +253,11 @@ int main(int argc, char *argv[]) {
         if (parse_app_args(argc, argv, progname) < 0)
                 rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
 
+#ifndef ENABLE_ND_MARKING_IN_NFS
         onvm_nflib_run(nf_info, &packet_handler);
+#else
+        onvm_nflib_run_callback(nf_info, &packet_handler, &callback_handler);
+#endif
         printf("If we reach here, program is ending");
         return 0;
 }

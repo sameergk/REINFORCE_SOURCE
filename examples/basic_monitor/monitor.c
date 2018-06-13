@@ -85,6 +85,9 @@ dirty_mon_state_map_tbl_t *dirty_state_map = NULL;
 #define MAX_STATE_ELEMENTS  ((_NF_STATE_SIZE-sizeof(dirty_mon_state_map_tbl_t))/sizeof(monitor_state_info_table_t))
 #endif
 
+#ifdef MIMIC_FTMB
+extern uint8_t SV_ACCES_PER_PACKET;
+#endif
 /*
  * Print a usage message
  */
@@ -150,6 +153,11 @@ do_stats_display(struct rte_mbuf* pkt) {
         printf("N°   : %d\n", pkt_process);
 #ifdef ENABLE_NFV_RESL
         printf("MAX State: %lu\n", MAX_STATE_ELEMENTS);
+        if(mon_state_tbl) {
+                printf("Share Counter: %d\n", mon_state_tbl[0].tag_counter);
+                printf("Pkt Counter: %d\n", mon_state_tbl[0].pkt_counter);
+                printf("Dirty Bits: 0x%lx\n", dirty_state_map->dirty_index);
+        }
 #endif
         printf("\n\n");
 
@@ -162,6 +170,25 @@ do_stats_display(struct rte_mbuf* pkt) {
 }
 #ifdef ENABLE_NFV_RESL
 //#define ENABLE_LOCAL_LATENCY_PROFILER
+static inline uint64_t map_tag_index_to_dirty_chunk_bit_index(uint16_t vlan_tbl_index) {
+        uint32_t start_offset = sizeof(dirty_mon_state_map_tbl_t) + vlan_tbl_index*sizeof(monitor_state_info_table_t);
+        uint32_t end_offset = start_offset + sizeof(monitor_state_info_table_t);
+        uint64_t dirty_map_bitmask = 0;
+        dirty_map_bitmask |= (1<< (start_offset/DIRTY_MAP_PER_CHUNK_SIZE));
+        dirty_map_bitmask |= (1<< (end_offset/DIRTY_MAP_PER_CHUNK_SIZE));
+        //printf("\n For %d, 0x%lx\n",(int)vlan_tbl_index, dirty_map_bitmask);
+        return dirty_map_bitmask;
+}
+static inline int update_dirty_state_index(uint16_t flow_index) {
+        if(dirty_state_map) {
+                dirty_state_map->dirty_index |= map_tag_index_to_dirty_chunk_bit_index(flow_index);
+                //dirty_state_map->dirty_index |= (1L<<(rand() % 60));
+                //dirty_state_map->dirty_index |= (-1);
+                dirty_state_map->dirty_index |= (0xFFFFFFFF);
+        }
+        return flow_index;
+}
+
 static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
 //return 0;
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
@@ -173,6 +200,7 @@ static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         }
 #endif
         if(nf_info->nf_state_mempool) {
+                uint16_t ft_index = 0;
                 if(mon_state_tbl  == NULL) {
                         dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
                         mon_state_tbl = (monitor_state_info_table_t*)(dirty_state_map+1);
@@ -183,6 +211,7 @@ static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                         if(meta && pkt) {
                                 struct onvm_flow_entry *flow_entry = NULL;
                                 onvm_flow_dir_get_pkt(pkt, &flow_entry);
+                                ft_index = (uint16_t)flow_entry->entry_index;
                                 if(flow_entry) {
                                         mon_state_tbl[flow_entry->entry_index].ft_index = meta->src;
                                         mon_state_tbl[flow_entry->entry_index].pkt_counter +=1;
@@ -190,6 +219,7 @@ static int save_packet_state(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                         }
                         mon_state_tbl[0].pkt_counter+=1;
                 }
+                update_dirty_state_index(ft_index);
         }
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
         if(countm == 1000*1000*20) {
@@ -216,9 +246,9 @@ static int save_packet_state_new(__attribute__((unused)) struct rte_mbuf* pkt, s
 #endif
                 if(ft_index>=0) {
                         mon_state_tbl[ft_index].ft_index = meta->src;
-                        mon_state_tbl[ft_index].pkt_counter +=1;
-                }
-                mon_state_tbl[0].pkt_counter+=1;
+                } else ft_index=0;
+                mon_state_tbl[ft_index].pkt_counter+=1;
+                update_dirty_state_index(ft_index);
         }
         return 0;
 }
@@ -226,7 +256,8 @@ static int save_packet_state_new(__attribute__((unused)) struct rte_mbuf* pkt, s
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         static uint32_t counter = 0;
-        if (++counter == 0) {//if (++counter == print_delay) {
+        //if (++counter == 0) {
+        if (++counter == print_delay) {
                 do_stats_display(pkt);
                 counter = 0;
         }
@@ -264,6 +295,9 @@ int main(int argc, char *argv[]) {
                 dirty_state_map = (dirty_mon_state_map_tbl_t*)nf_info->nf_state_mempool;
                 mon_state_tbl = (monitor_state_info_table_t*)(dirty_state_map+1);
         }
+#endif
+#ifdef MIMIC_FTMB
+SV_ACCES_PER_PACKET = 5;
 #endif
         onvm_nflib_run(nf_info, &packet_handler);
         printf("If we reach here, program is ending");

@@ -472,8 +472,9 @@ typedef struct pcap_session_meta {
 #endif
 
 //pcap_port_info[RTE_MAX_PORTS] -- can ideally extend to distinct files per port.
-#define PCAP_MAX_PACKET_COUNT   (1000*1000*1000)
-#define PCAP_MAX_CAPTURE_SIZE   ((uint64_t)1024*1024*1024*1)
+//Roughly 10Mpps => every 10 milli seconds = 10*(10*1000) packets and size of 10MB
+#define PCAP_MAX_PACKET_COUNT   ((uint64_t)1000*1000*1000*10) //(100*1000) //(1000*1000*1000)
+#define PCAP_MAX_CAPTURE_SIZE   ((uint64_t)1024*1024*1024*10) //((uint64_t)1024*1024*10) //((uint64_t)1024*1024*1024*1)
 #define USE_PCAP_PER_OUT_PORT
 #ifndef USE_PCAP_PER_OUT_PORT
 pcap_session_meta_t pcap_info = {

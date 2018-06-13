@@ -102,6 +102,6 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
 int onvm_print_rsync_stats(unsigned difftime, FILE *fout);
 /****************************Internal functions*******************************/
 #ifdef MIMIC_PICO_REP
-extern uint8_t rx_halt;
+extern volatile uint8_t rx_halt;
 #endif
 #endif  //

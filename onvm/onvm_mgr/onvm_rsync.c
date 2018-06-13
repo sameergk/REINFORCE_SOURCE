@@ -59,7 +59,8 @@
 #include <rte_ether.h>
 #include <rte_arp.h>
 
-//#define RSYNC_USE_DPDK_TIMER    //option only for TxTs  to either do inline or perform in timer context; NF state transfer always in timer context.
+//#define RSYNC_USE_DPDK_TIMER    //(prefer disabled for REINFOCE) option only for TxTs  to either do inline or perform in timer context; NF state transfer always in timer context.
+
 #define NF_CHECKPOINT_PERIOD_IN_US      (1000)    // use high precision 1ms, 10ms or 100ms; ensure that it is at least 1RTT (measure to be ~500us between b2b connected nodes + 8K buffering)
 #define TX_TS_CHECKPOINT_PERIOD_IN_US   (10)       // Perform More often 100us => (@15MPPS: for every 1500 data packets perform 1 checkpoint=(1--64 packets tx_ts_packets) Therefore w.c. overhead = 4.25%),
 //Given that we have buffer of 8K we can perform checkpoints much slower atleast 5 times slow i.e 500us ==> 7.5K packets perform 1 checkpoint. Therefore w.c. overhead= 0.85%
@@ -68,7 +69,19 @@
 #define RSYNC_OUT_PORT (1)      //(RSYNC_TX_OUT_PORT)
 
 #ifdef MIMIC_PICO_REP
-uint8_t rx_halt = 0;
+#define RSYNC_USE_DPDK_TIMER
+volatile uint8_t rx_halt = 0;
+
+#ifndef ENABLE_PICO_STATELESS_MODE
+#undef TX_TS_CHECKPOINT_PERIOD_IN_US
+#define TX_TS_CHECKPOINT_PERIOD_IN_US   (1000)
+#endif
+#undef NF_CHECKPOINT_PERIOD_IN_US
+#define NF_CHECKPOINT_PERIOD_IN_US      (1000) // fix to 1ms as in PicoReplication
+static int rsync_start_simple_pico(__attribute__((unused)) void *arg);
+#ifndef ENABLE_PICO_STATELESS_MODE
+static int rsync_start_simple_pico_nf(__attribute__((unused)) void *arg);
+#endif
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
@@ -236,7 +249,8 @@ static inline void notify_ndsync_commit_to_blocked_NFs(void) {
                 struct client *cl = &clients[nf_id];
                 //Get the Processing (Actively Running and Processing packets) NF Instance ID */
                 //if(1){
-                if (unlikely(onvm_nf_is_waiting_on_NDSYNC(cl))){
+                if(unlikely(onvm_nf_is_NDSYNC_set(cl))) {
+                //if (unlikely(onvm_nf_is_waiting_on_NDSYNC(cl))){
                         //clear Status Bits and notify resume to the NF
 
                         //if(!cl->info) continue;
@@ -264,13 +278,13 @@ static int print_trans_status(void) {
 }
 #endif
 static int get_transaction_id(void) {
-        static uint8_t last_trans_id = 1;
+        static uint8_t next_trans_id = 1;
         //return ((++trans_id)%MAX_RSYNC_TRANSACTIONS);
-        uint8_t i = last_trans_id%MAX_RSYNC_TRANSACTIONS,j=0;
+        uint8_t i = next_trans_id%MAX_RSYNC_TRANSACTIONS,j=0;
 //RECHECK:
         for(j=0; j< MAX_RSYNC_TRANSACTIONS; j++) {
                 if(i && trans_queue[i] == 0) {
-                        last_trans_id = i+1;
+                        next_trans_id = i+1;
                         return i;
                 }
                 i++;
@@ -355,7 +369,7 @@ static int rsync_wait_for_commit_ack(uint8_t trans_id, __attribute__((unused)) u
         int wait_counter = 0; //hack till remote_node also sends
         struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         do {
-#ifdef MIMIC_PICO_REP
+#if defined(MIMIC_PICO_REP) && !defined(ENABLE_PICO_RX_NON_BLOCKING_MODE)
                 rx_halt=1;
 #endif
                 nanosleep(&req, &res);
@@ -392,7 +406,7 @@ static int rsync_wait_for_commit_acks(uint8_t *trans_id_list, uint8_t count, __a
         int wait_counter = 0; //hack till remote_node also sends
         struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
         do {
-#ifdef MIMIC_PICO_REP
+#if defined(MIMIC_PICO_REP) && !defined(ENABLE_PICO_RX_NON_BLOCKING_MODE)
                 rx_halt=1;
 #endif
                 wait_needed= 0;
@@ -432,6 +446,17 @@ tx_ts_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
 static void
 nf_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
+
+#if defined(MIMIC_PICO_REP)
+#if !defined(ENABLE_PICO_STATELESS_MODE)
+        rsync_start_simple_pico(ptr_data);
+        return;
+#else
+#endif
+        //rsync_start_simple_pico_nf(ptr_data);
+        return;
+#endif
+
         static uint8_t nf_sync_trans_id = 0;
         if(!nf_sync_trans_id) {
                 int tnx_id = rsync_nf_state_to_remote(1);
@@ -452,7 +477,7 @@ static inline int initialize_rsync_timers(void) {
         uint64_t ticks = ((uint64_t)TX_TS_CHECKPOINT_PERIOD_IN_US *(rte_get_timer_hz()/1000000));
         rte_timer_reset_sync(&tx_ts_checkpoint_timer,ticks,PERIODICAL,
                         rte_lcore_id(), &tx_ts_checkpoint_timer_cb, NULL);
-#ifndef RSYNC_USE_DPDK_TIMER
+#if !defined(RSYNC_USE_DPDK_TIMER)   //in either case disable TxTs
         rte_timer_init(&tx_ts_checkpoint_timer);
 #endif
 
@@ -537,6 +562,7 @@ static struct rte_mbuf* craft_state_update_packet(uint8_t port, state_tx_meta_t 
 
 /***********************TX STATE TABLE UPDATE**********************************/
 static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
+#ifdef ENABLE_PER_FLOW_TS_STORE
         uint16_t i=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         state_tx_meta_t meta = {.state_type= STATE_TYPE_TX_TS_TABLE, .nf_or_svc_id=0, .start_offset=0, /*.reserved=nf_mgr_id, */.trans_id=0};
@@ -591,6 +617,7 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
 #endif
                 return meta.trans_id;
         }
+#endif //ENABLE_PER_FLOW_TS_STORE
         return 0;
 }
 static int rsync_nf_state_to_remote(uint8_t bNDSync) {
@@ -611,7 +638,8 @@ static int rsync_nf_state_to_remote(uint8_t bNDSync) {
                 //Get the Processing (Actively Running and Processing packets) NF Instance ID */
                 if (likely(onvm_nf_is_processing(&clients[nf_id]))){
 #ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
-                        if(onvm_nf_is_waiting_on_NDSYNC(&clients[nf_id])) {
+                        if(onvm_nf_is_NDSYNC_set(&clients[nf_id])) {
+                        //if(onvm_nf_is_waiting_on_NDSYNC(&clients[nf_id])) {
                                 bNDSync=1;
                         }
 #endif
@@ -636,7 +664,7 @@ static int rsync_nf_state_to_remote(uint8_t bNDSync) {
 #ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
                                                 printf("\n rsync_nf_state_to_remote(nf): Failed to acquire the transaction ID\n");
 #endif
-                                                return -1;
+                                                return 0; //return -1;
                                         }meta.trans_id = (uint8_t) trans_id;
                                 }
 
@@ -702,7 +730,7 @@ static int rsync_nf_state_to_remote(uint8_t bNDSync) {
 #ifdef ENABLE_EXTRA_RSYNC_PRINT_MSGS
                                                 printf("\n rsync_nf_state_to_remote(svc): Failed to acquire the transaction ID\n");
 #endif
-                                                return -1;
+                                                return 0; //return -1;
                                         }meta.trans_id = (uint8_t) trans_id;
                                 }
 
@@ -745,7 +773,8 @@ static int rsync_nf_state_to_remote(uint8_t bNDSync) {
         return 0;
 }
 
-static int rsync_tx_ts_state_from_remote(state_tx_meta_t *meta, uint8_t *pData, uint16_t data_len) {
+static int rsync_tx_ts_state_from_remote(__attribute__((unused)) state_tx_meta_t *meta, __attribute__((unused)) uint8_t *pData, __attribute__((unused)) uint16_t data_len) {
+#ifdef ENABLE_PER_FLOW_TS_STORE
 #if 0
         uint16_t i=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
@@ -760,6 +789,7 @@ static int rsync_tx_ts_state_from_remote(state_tx_meta_t *meta, uint8_t *pData, 
 #endif
         uint8_t* pDst = (((uint8_t*)onvm_mgr_tx_per_flow_ts_info)+meta->start_offset);
         rte_memcpy(pDst, pData, MIN(data_len, TXTS_DIRTY_MAP_CHUNK_SIZE)); //should be MIN(pkt->data_len, TXTS_DIRTY_MAP_CHUNK_SIZE)
+#endif
         return 0;
 }
 
@@ -822,7 +852,7 @@ static inline void tx_ts_update_dirty_state_index(uint16_t tx_tbl_index, __attri
         return;
 }
 #endif
-static inline int update_flow_tx_ts_table(uint64_t flow_index,  __attribute__((unused)) uint64_t ts, __attribute__((unused)) uint8_t to_db) { // __attribute__((unused)) struct onvm_pkt_meta* meta,  __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
+static inline int update_flow_tx_ts_table(__attribute__((unused)) uint64_t flow_index,  __attribute__((unused)) uint64_t ts, __attribute__((unused)) uint8_t to_db) { // __attribute__((unused)) struct onvm_pkt_meta* meta,  __attribute__((unused)) struct onvm_flow_entry *flow_entry) {
 #ifdef ENABLE_PER_FLOW_TS_STORE
         if(unlikely(flow_index >=MAX_TX_TS_ENTRIES)){
                 printf("\n Incorrect Index:%lld\n", (long long)flow_index);
@@ -950,7 +980,11 @@ static inline int log_transaction_and_send_packets_out(uint8_t trans_id, uint8_t
 int transmit_tx_port_packets(void) {
         uint16_t j, count= PACKET_READ_SIZE_LARGE, sent=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
-
+#if 0
+#ifdef MIMIC_PICO_REP
+        struct timespec req = {0,REMOTE_SYNC_WAIT_INTERVAL}, res = {0,0};
+#endif
+#endif
         for(j=0; j < MIN(ports->num_ports, ONVM_NUM_RSYNC_PORTS); j++) {
                 unsigned tx_count = rte_ring_count(tx_port_ring[j]);
                 //printf("\n %d Pkts in %d port\n", tx_count, j);
@@ -968,6 +1002,13 @@ int transmit_tx_port_packets(void) {
                         {
 #if 1 // note modified to use single port; switch to 1 if use multiple port array tx_port_ring[]
                                 sent = send_packets_out(j,RSYNC_TX_PORT_QUEUE_ID_0, pkts,count);
+#if 0
+#ifdef MIMIC_PICO_REP
+                                if(sent < count) {
+                                        nanosleep(&req, &res); // avoid processed packet drops to boost throughput..
+                                }
+#endif
+#endif
 #else
                                 for(i=0; i < count;i++) {
                                         uint8_t port = (onvm_get_pkt_meta((struct rte_mbuf*) pkts[i]))->destination;
@@ -1096,7 +1137,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
         uint16_t i, j, count= PACKET_READ_SIZE_LARGE, sent=0;
         uint64_t ts[PACKET_READ_SIZE_LARGE];
         uint16_t out_pkts_nf_count, out_pkts_tx_count, out_pkts_dr_count;
-        uint8_t tx_ret_sts;
+        uint8_t tx_ret_sts=0;
         struct rte_mbuf *in_pkts[PACKET_READ_SIZE_LARGE];
         struct rte_mbuf *out_pkts_tx[PACKET_READ_SIZE_LARGE];
         struct rte_mbuf *out_pkts_nf[PACKET_READ_SIZE_LARGE];
@@ -1351,11 +1392,92 @@ int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, 
 #define MAX_EXTRACT_AND_PARSE_LOOP_COUNTER (1)
 #endif
 
+#if defined(MIMIC_PICO_REP)
+#ifndef ENABLE_PICO_STATELESS_MODE
+static int rsync_start_simple_pico_nf(__attribute__((unused)) void *arg);
+static int rsync_start_simple_pico_nf(__attribute__((unused)) void *arg){
+
+#if defined(ENABLE_PICO_EXPLICT_NF_PAUSE_RESUME) //this approach has wakeup issue: Why? -- When Pause is sent and Resume is sent together ( resume before NF actually pauses), NF sees the pause and blocks, Resume message is never dequeued, unless second resume is sent, which cannot happen either.
+        uint16_t nf_id = 0;
+        uint16_t nfs_paused[MAX_CLIENTS]={0};
+        uint8_t msg_count=0;
+        //PAUSE the Active NFs
+        for (nf_id = 1; nf_id < MAX_CLIENTS; nf_id++) {
+                nfs_paused[nf_id]=0;
+                //Get the Processing (Actively Running and Processing packets) NF Instance ID */
+                if (likely(onvm_nf_is_processing(&clients[nf_id]))){
+                        onvm_nf_send_msg(clients[nf_id].info->instance_id,MSG_PAUSE,MSG_MODE_ASYNCHRONOUS,NULL);
+                        nfs_paused[nf_id]=1;
+                        msg_count++;
+                }
+        }
+        //RTE_LOG(INFO, APP, "Total NFs moved to Pause %d:\n",msg_count);
+        //printf("Total NFs moved to Pause %d:\n",msg_count);
+#endif
+
+        //check and Initiate remote NF Sync
+        int trans_id = rsync_nf_state_to_remote(0);
+        if(trans_id>0) {
+                //printf("\nTranscation ID: %d", trans_id);
+                rsync_wait_for_commit_ack(trans_id, CHECK_FOR_COMMIT_WITH_WAIT);
+                //Now release the packets from NF
+                transmit_tx_nf_state_latch_rings(0);
+        }
+
+#if defined(ENABLE_PICO_EXPLICT_NF_PAUSE_RESUME)
+        //RESUME the PAUSED NFs
+        for (nf_id = 0; nf_id < MAX_CLIENTS; nf_id++) {
+
+                //Get the Processing (Actively Running and Processing packets) NF Instance ID */
+                if (likely(nfs_paused[nf_id])){
+                        onvm_nf_send_msg(clients[nf_id].info->instance_id,MSG_RESUME,MSG_MODE_ASYNCHRONOUS,NULL);
+                        nfs_paused[nf_id]=1;
+                }
+        }
+#endif
+
+        return trans_id;
+}
+#endif
+static int rsync_start_simple_pico(__attribute__((unused)) void *arg);
+static int rsync_start_simple_pico(__attribute__((unused)) void *arg) {
+
+#if 0
+        rx_halt=1;
+        //check and Initiate remote NF Sync
+        int trans_id = rsync_nf_state_to_remote(0);
+        if(trans_id>0) {
+                //printf("\nTranscation ID: %d", trans_id);
+                rsync_wait_for_commit_ack(trans_id, CHECK_FOR_COMMIT_WITH_WAIT);
+                //Now release the packets from NF
+                transmit_tx_nf_state_latch_rings(0);
+        }
+        rx_halt=0;
+#endif
+
+#if defined(MIMIC_PICO_REP) && !defined(ENABLE_PICO_RX_NON_BLOCKING_MODE)
+        rx_halt =1;
+#endif
+
+#if !defined(ENABLE_PICO_STATELESS_MODE)        //If stateful then sync NF state
+        rsync_start_simple_pico_nf(arg);
+#endif
+
+        transmit_tx_port_packets();
+
+#if defined(MIMIC_PICO_REP) && !defined(ENABLE_PICO_RX_NON_BLOCKING_MODE)
+        if(rx_halt)rx_halt=0;
+#endif
+
+        //Note: There is an issue without lock: while updating any new flow comes with new non-determinism then it might be released much earlier.
+        return 0;
+}
+#endif
 /* Simple Scheme without Double Buffering: Still more efficient than PICO Replication.
  * We can use this scheme as baseline for Pico Replication comparison. or FTMB approach
  * that performs VM checkpointing with Output commit on logged packets == committing Tx Ts.
  */
-#ifndef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
+#if !defined(ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE)
 static int rsync_start_simple(__attribute__((unused)) void *arg);
 static int rsync_start_simple(__attribute__((unused)) void *arg) {
         //TEST_HACK to directly transfer out the packets
@@ -1905,6 +2027,15 @@ static int rsync_start_optimal_db(__attribute__((unused)) void *arg) {
 #endif
 inline int rsync_start(__attribute__((unused)) void *arg) {
 
+#ifdef MIMIC_PICO_REP
+#ifdef ENABLE_PICO_STATELESS_MODE
+        rsync_start_simple_pico(arg);
+#else
+        //rsync_start_simple_pico(arg); //move to nf_timer_cb (if we need stateless to operate at full rate then enable here and disable in nf_timer_cb)
+#endif
+        return 0;
+#endif
+
 #ifndef ENABLE_RSYNC_WITH_DOUBLE_BUFFERING_MODE
         return rsync_start_simple(arg);
 
@@ -1997,7 +2128,6 @@ rsync_main(__attribute__((unused)) void *arg) {
                 //start Tx port Packet Processing
                 rsync_start(arg); //moved to timer thread.
 #endif
-
                 check_and_clear_elapsed_transactions();
 
                 //check for timer Expiry

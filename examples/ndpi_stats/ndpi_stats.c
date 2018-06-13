@@ -64,6 +64,10 @@
 #define NF_TAG "ndpi_stat"
 #define TICK_RESOLUTION 1000
 
+#ifdef MIMIC_FTMB
+extern uint8_t SV_ACCES_PER_PACKET;
+#endif
+
 /* Struct that contains information about this NF */
 struct onvm_nf_info *nf_info;
 
@@ -429,6 +433,10 @@ int main(int argc, char *argv[]) {
         }
 #else
         setup_ndpi();
+#endif
+
+#ifdef MIMIC_FTMB
+SV_ACCES_PER_PACKET = 2;
 #endif
 
         gettimeofday(&begin, NULL);

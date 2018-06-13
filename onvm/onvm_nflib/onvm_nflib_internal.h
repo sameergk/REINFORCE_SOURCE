@@ -184,7 +184,8 @@ uint64_t counter = 1;
 // flag_p=1 => NF sleeping (waiting on semaphore)
 // flag_p=0 => NF is running and processing (not waiting on semaphore)
 // flag_p=2 => "Internal NF Msg to wakeup NF and do processing .. Yet To be Finalized."   
-static rte_atomic16_t *flag_p;
+static rte_atomic16_t * flag_p;
+//static rte_atomic16_t *volatile flag_p;
 
 #ifdef USE_SEMAPHORE
 // Mutex for sem_wait
@@ -303,5 +304,9 @@ void *pReplicaStateMempool = NULL;
 #endif //ENABLE_NFV_RESL
 dirty_mon_state_map_tbl_t *dirty_state_map = NULL;  //reson to keep it ouside is that NFs can still make  use of it regardless of resiliency
 
+#ifdef MIMIC_FTMB
+//shared variable for FTMB mode
+uint8_t SV_ACCES_PER_PACKET;
+#endif
 
 #endif  // _ONVM_NFLIB_INTERNAL_H_

@@ -421,9 +421,19 @@ onvm_nf_is_processing(struct client *cl) {
 }
 inline int
 onvm_nf_is_waiting_on_NDSYNC(__attribute__((unused))struct client *cl) {
-        //return ((cl->info) && (cl->info->status&NF_WT_ND_SYNC_BIT));
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        return ((cl->info) && (cl->info->status&NF_WT_ND_SYNC_BIT));
+        //return ((cl->info) && (cl->info->bNDSycn)); //this is wrong, bNDSync will always be ON ( even if only 1 event, and 0 outstanding)
+#endif
+        return 0;
+}
+
+inline int
+onvm_nf_is_NDSYNC_set(__attribute__((unused))struct client *cl) {
 #ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
         return ((cl->info) && (cl->info->bNDSycn));
+        return ((cl->info) && (cl->info->status&NF_WT_ND_SYNC_BIT));
+
 #endif
         return 0;
 }
@@ -634,7 +644,7 @@ onvm_nf_send_msg(uint16_t dest, uint8_t msg_type, __attribute__((unused)) uint8_
         struct onvm_nf_msg *msg;
         ret = rte_mempool_get(nf_msg_pool, (void**)(&msg));
         if (ret != 0) {
-                RTE_LOG(INFO, APP, "Unable to allocate msg from pool :(\n");
+                RTE_LOG(INFO, APP, "Unable to allocate msg from pool:\n");
                 return ret;
         }
         msg->msg_type = msg_type;

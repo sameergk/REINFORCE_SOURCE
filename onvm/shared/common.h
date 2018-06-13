@@ -368,15 +368,17 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_PER_SERVICE_MEMPOOL  //enable common mempool for all NFs on same service type.
 #define ENABLE_REPLICA_STATE_UPDATE //enable feature to update (copy over NF state (_NF_STATE_MEMPOOL_NAME) info to local replic's state
 #define ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
-#define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
-#define ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
-#define ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT  //enable NF to pause (wait) if it has 1 outstanding ND to be synced and encounters second ND event in the interim.
 //#define RESL_UPDATE_MODE_PER_PACKET   //update mode Shadow Ring, Replica state, per flow TS for every packet
 #ifndef RESL_UPDATE_MODE_PER_PACKET
 #define RESL_UPDATE_MODE_PER_BATCH      //update mode Shadow Ring, Replica state, per flow TS for batch of packets
+#define ENABLE_ND_MARKING_IN_NFS        //enable timer based ND_Marking in all NFs.
 #endif
 
-
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+#define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
+#define ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
+#define ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT  //enable NF to pause (wait) if it has 1 outstanding ND to be synced and encounters second ND event in the interim.
+#endif
 
 /* Feature to enable PICO Replication mode of operation: Cut Rx while State update
  * How Pico works?: Synchrnous mode; till NF state is synced; NF cannot process packets;
@@ -387,7 +389,19 @@ Note: Requires to enable timer mode main thread. (currently directly called from
  * Note: Additionally disable Double Buffering and operate in single Buffer mode.
  * Remember: Input low packet rate to get reliable latency figures.
  * */
+
 //#define MIMIC_PICO_REP
+#ifdef MIMIC_PICO_REP
+//#undef ENABLE_REMOTE_SYNC_WITH_TX_LATCH                 // this is needed feature for PICO as well, cannot be undefed..
+//#undef ENABLE_PER_FLOW_TS_STORE                         //no need for TxTs
+#undef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION              //no need for chain isolation
+#undef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT   //no need for ndsync
+
+//#define ENABLE_PICO_STATELESS_MODE                    // For stateless NF, there is no NF commit and packets are released directly..
+//#define ENABLE_PICO_RX_NON_BLOCKING_MODE              //do not halt the rx_input while state transfer
+//#define ENABLE_PICO_EXPLICT_NF_PAUSE_RESUME           //notify NF to pause till state commit and then resume ( issues: doesnt work due to race b/w pause action and resume message post)
+#endif
+
 
 /* Feature toe Enable FTMB mode of operation:
  * Note: NFLIB generate PALS; ignore VOR packets as there is only 1NF thread.
@@ -403,6 +417,7 @@ Note: Requires to enable timer mode main thread. (currently directly called from
  *  Encode LAST PAL ID on Packet and also transmit it on RSYNC PORT
  *  RSYNC PORT Node must commit differentiate PAL and Transmit it to to intended output node.
  */
+
 //#define MIMIC_FTMB
 #ifdef MIMIC_FTMB
 #undef ENABLE_REPLICA_STATE_UPDATE
@@ -524,13 +539,15 @@ typedef struct onvm_per_flow_ts_info {
 #define RSYNC_TX_PORT_QUEUE_ID_1    (RSYNC_TX_PORT_QUEUE_ID_0+1)
 #define RSYNC_TX_OUT_PORT       (0)
 #define ONVM_NF_MGR_TX_QUEUES   (4) //1 for BFD, 2 for RSYNC
+#else
+#define ONVM_NF_MGR_TX_QUEUES   (0)
 #endif
 
 
 #ifdef MIMIC_FTMB
-//#undef ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //enable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
-//#undef ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
-//#undef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
+//#undef ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //disable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
+//#undef ENABLE_PER_FLOW_TS_STORE    //disable  store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
+//#undef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION // disable isolate chains that need no rsync to bypass same tx path and provide latency isolation
 #endif
 
 // END OF FEATURE EXTENSIONS FOR NFV_RESILEINCY
@@ -725,7 +742,7 @@ struct client {
         const char *sem_name;
         key_t shm_key;
         //0=running; 1=blocked_on_rx (no pkts to process); 2=blocked_on_tx (cannot push packets)
-        rte_atomic16_t *shm_server;
+        rte_atomic16_t *volatile shm_server;
 
 #ifdef USE_SEMAPHORE
         sem_t *mutex;
@@ -806,7 +823,7 @@ struct port_info {
 struct onvm_nf_info {
         uint16_t instance_id;
         uint16_t service_id;
-        volatile
+        //volatile
         uint8_t status;    //moved to status to ensure status read is not cached and is updated across different cores; but seeing no major difference in sync refresh time.
         const char *tag;
         pid_t pid;

@@ -4,7 +4,8 @@
 # Results will be stored at: /home/skulk901/dev/res_results/<$2>/<$1>
 mode=$1
 res_dir=$2
-
+#now=$(date +"%d_%m_%Y_%H_%M_%S")
+now=$(date +"%d_%m_%Y_%H")
 if [ -z $mode ]
 then
   mode="unknown"
@@ -14,11 +15,15 @@ if [ -z $res_dir ]
 then
   res_dir="res_unset"
 fi
-mkdir -p dev/res_results/$res_dir
-mkdir -p dev/res_results/$res_dir/$mode
+res_dir=$res_dir$now
 
-t_sec=60
-base_dir="dev/res_results/${res_dir}/${mode}/"
+root_dir="/home/skulk901"
+mkdir -p ${root_dir}/dev/res_results/$res_dir
+mkdir -p ${root_dir}/dev/res_results/$res_dir/$mode
+
+t_sec=120
+base_dir="${root_dir}/dev/res_results/${res_dir}/${mode}/"
+echo"Base Directory for Results: ${base_dir}"
 
 function post_process_data() {
 nf_name=$1
@@ -50,21 +55,25 @@ etime="echo End@ `date`: `date +%T.%3N`"
 echo "Startin Test for Mode:$1"
 
 test_nf="DPI"
-echo "Starting Test for DPI:"
+echo "Starting Test for DPI: in ${mode}. Launch the DPI NF and enter 1"
+read varname
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for DPI: in ${mode} Ends! enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
 post_process_data $test_nf
 echo "Test for DPI Ended!!! Reset ONVM_MGR, setup for Simple Forwarder and press Enter to continue!"
-echo " Test for $mode Ended!! \n "
 read varname
 echo "Key: $varname"
 echo ""
 
 test_nf="Simple_Forwarder"
-echo "Starting Test for Simple Forwarder"
+echo "Starting Test for Simple Forwarder in ${mode}."
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Simple Forwarder in ${mode} Ends! enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
@@ -76,8 +85,10 @@ echo "Key: $varname"
 echo ""
 
 test_nf="Monitor"
-echo "Starting Test for Monitor:"
+echo "Starting Test for Monitor in ${mode}:"
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Monitor Ended!. Enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
@@ -89,8 +100,10 @@ echo "Key: $varname"
 echo ""
 
 test_nf="QoS"
-echo "Starting Test for QoS(VlanTag):"
+echo "Starting Test for QoS(VlanTag) in $mode:"
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Qos in ${mode} Ended!. Enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
@@ -102,8 +115,10 @@ echo "Key: $varname"
 echo ""
 
 test_nf="Load Balancer"
-echo "Starting Test for Load Balancer:"
+echo "Starting Test for Load Balancer in $mode:"
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for LB in $mode Ended!. Enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
@@ -115,8 +130,10 @@ echo "Key: $varname"
 echo ""
 
 test_nf="Chain1"
-echo "Starting Test for Chain1:(QoS->Mon):"
+echo "Starting Test for Chain1:(QoS->Mon) in $mode:"
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Chain1(QoS->Mon) Ended!. Enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
@@ -128,9 +145,42 @@ echo "Key: $varname"
 echo ""
 
 
-test_nf="Chain2"
-echo "Starting Test for Chain1:(QoS->Mon):"
+test_nf="Chain2a"
+echo "Starting Test for Chain1:(QoS->Mon->LB):"
 $stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Chain2a(Qos_c->Mon_c->LB) Ended!, Enter 1"
+read varname
+echo "$test_nf: <start> Histogram Data </start>:"
+cat histogram.csv
+echo "<end> Histogram Data </end>:"
+post_process_data $test_nf
+echo "Test for Chain2a (QoS_c->Mon_c->LB) Ended!!!"
+echo "Test for $mode Ended!! \n Reset ONVM_MGR settings; Reset ONVM_SETTINGS; and setup Chain2b (QoS_C->Mon_c->SF1)!"
+read varname
+echo "Key: $varname"
+echo ""
+
+test_nf="Chain2b"
+echo "Starting Test for Chain1:(QoS->Mon->SF):"
+$stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Chain2(Qos_c->Mon_c->SF) Ended!, Enter 1"
+read varname
+echo "$test_nf: <start> Histogram Data </start>:"
+cat histogram.csv
+echo "<end> Histogram Data </end>:"
+post_process_data $test_nf
+echo "Test for Chain2 (QoS_c->Mon_c->SF) Ended!!!"
+echo "Test for $mode Ended!! \n Reset ONVM_MGR settings; Reset ONVM_SETTINGS; and setup Chain3 (QoS_C->Mon_c->SF1->SF2->SF3)!"
+read varname
+echo "Key: $varname"
+echo ""
+
+
+test_nf="Chain3"
+echo "Starting Test for Chain1:(QoS->Mon->SF1->SF2->SF3):"
+$stime; timeout $t_sec ./lmoon1.sh ; sleep 2; $etime
+echo "Test for Chain2(Qos_c->Mon_c->LB) Ended!, Enter 1"
+read varname
 echo "$test_nf: <start> Histogram Data </start>:"
 cat histogram.csv
 echo "<end> Histogram Data </end>:"
@@ -140,5 +190,5 @@ echo "Test for $mode Ended!! \n Reset ONVM_MGR settings; Reset ONVM_SETTINGS; se
 read varname
 echo "Key: $varname"
 echo ""
-
 scp -r $base_dir root@flashstack-3:/home/skulk901/dev/my_fork/nfv_resiliency_work/res_results/${res_dir}/${mode}/
+#scp -r $base_dir root@flashstack-3:/home/skulk901/dev/my_fork/nfv_resiliency_work/res_results/${res_dir}/${mode}/

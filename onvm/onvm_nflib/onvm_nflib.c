@@ -142,7 +142,7 @@ void init_cgroup_info(struct onvm_nf_info *nf_info) {
 
 /******************************FTMB Helper Functions********************************/
 #ifdef MIMIC_FTMB
-#define SV_ACCES_PER_PACKET (10)
+//#define SV_ACCES_PER_PACKET (2)   //moved as configurable variable.
 typedef struct pal_packet {
         uint64_t pal_counter;
         uint64_t pal_info;
@@ -186,6 +186,7 @@ int generate_and_transmit_pals_for_batch(__attribute__((unused))  void **pktsTX,
                 start_cycle = onvm_util_get_current_cpu_cycles();
         }
 #endif
+        //for(i=0; i<(SV_ACCES_PER_PACKET); i++) {
         for(i=0; i<(tx_batch_size*SV_ACCES_PER_PACKET); i++) {
 
                 //Allocate New Packet
@@ -295,6 +296,7 @@ void onvm_nf_yeild(__attribute__((unused))struct onvm_nf_info* info, __attribute
 #ifdef USE_SEMAPHORE
         sem_wait(mutex);
 #endif
+        //rte_atomic16_set(flag_p, 0); //out of block rte_atomic16_cmpset(flag_p, 1, 0);
         
         //check and trigger explicit callabck before returning.
         if(need_ecb && nf_ecb) {
@@ -314,10 +316,10 @@ static inline void  onvm_nf_wake_notify(__attribute__((unused))struct onvm_nf_in
 }
 static inline void onvm_nflib_implicit_wakeup(void);
 static inline void onvm_nflib_implicit_wakeup(void) {
-        if ((rte_atomic16_read(flag_p) ==1)) {
+       // if ((rte_atomic16_read(flag_p) ==1)) {
                 rte_atomic16_set(flag_p, 0);
                 onvm_nf_wake_notify(nf_info);
-        }
+        //}
 }
 #endif //#ifdef INTERRUPT_SEM
 
@@ -538,7 +540,7 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
          */
 #ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
         if(unlikely(non_det_evt)){
-                if(unlikely(nf_info->bNDSycn)) {//if(unlikely(bNDSync)) {
+                if(likely(nf_info->bNDSycn)) {//if(unlikely(bNDSync)) {
                         //explicitly move to pause state and wait till notified.
                         //nf_info->status = NF_PAUSED|NF_WT_ND_SYNC_BIT;
                         nf_info->status |= NF_WT_ND_SYNC_BIT;
@@ -958,9 +960,9 @@ onvm_nflib_handle_msg(struct onvm_nf_msg *msg) {
                 break;
         case MSG_RESUME: //MSG_RUN
 #ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
-                if(unlikely(nf_info->bNDSycn)) { //if(unlikely(bNDSync)) {
-                        //printf("\n Received NDSYNC_CLEAR AND RESUME MESSAGE\n!!");
+                if(likely(nf_info->bNDSycn)) { //if(unlikely(bNDSync)) {
                         nf_info->bNDSycn=0; //bNDSync=0;
+                        //printf("\n Received NDSYNC_CLEAR AND RESUME MESSAGE\n!!");
 #ifdef  __DEBUG_NDSYNC_LOGS__
                         delta_nd=onvm_util_get_elapsed_time(&nd_ts);
                         if(min_nd==0 || delta_nd < min_nd) min_nd= delta_nd;

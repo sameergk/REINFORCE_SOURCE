@@ -4,7 +4,7 @@ ulimit -c unlimited
 #script
 
 #./tune_cfs.sh 1 5
-./go.sh 0,1,2,3,4,5,6 3 -s stdout
+./go.sh 0,1,2,3,4,5,6,7 3 -s stdout
 #./go.sh 0,1,2,3,4,5,6 3 -s web -p 9000
 
 #./go.sh 0,1,2,3,4,5,6 3

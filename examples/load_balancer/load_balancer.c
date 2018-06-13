@@ -148,6 +148,9 @@ struct loadbalance {
 };
 #endif
 
+#ifdef MIMIC_FTMB
+extern uint8_t SV_ACCES_PER_PACKET;
+#endif
 
 /* Struct that contains information about this NF */
 struct onvm_nf_info *nf_info;
@@ -769,6 +772,11 @@ int main(int argc, char *argv[]) {
 #ifndef ENABLE_NFV_RESL
         lb->ft = onvm_ft_create(TABLE_SIZE, sizeof(struct flow_info));
 #endif
+
+#ifdef MIMIC_FTMB
+SV_ACCES_PER_PACKET = 1;
+#endif
+
         if (lb->ft == NULL) {
                 onvm_nflib_stop();
                 rte_exit(EXIT_FAILURE, "Unable to create flow table");

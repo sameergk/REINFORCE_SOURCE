@@ -106,6 +106,8 @@ onvm_stats_truncate(void);
 static void
 onvm_json_reset_objects(void);
 
+
+void onvm_stats_display_mode(unsigned difftime);
 /*********************Stats Output Streams************************************/
 
 static FILE *stats_out;
@@ -180,6 +182,7 @@ onvm_stats_display_all(unsigned difftime) {
        }
        onvm_stats_clear_terminal();
        onvm_stats_display_ports(difftime);
+       onvm_stats_display_mode(difftime);
        onvm_stats_display_clients(difftime);
        onvm_stats_display_chains(difftime);
        if (stats_out != stdout && stats_out != stderr) {
@@ -267,6 +270,52 @@ get_port_stats_rate(double period_time)
 }
 #endif
 
+void onvm_stats_display_mode(__attribute__((unused)) unsigned difftime) {
+        fprintf(stats_out, "ONVM MODE\n");
+        fprintf(stats_out, "---------\n");
+
+#ifdef ENABLE_NF_BACKPRESSURE
+        fprintf(stats_out, "NFVNICE:[ON]\t ");
+        fprintf(stats_out, "---------\n");
+#endif
+
+#ifdef ENABLE_NFV_RESL
+        fprintf(stats_out, "RESILIENCY:[ON]\t ");
+#ifdef MIMIC_PICO_REP
+        fprintf(stats_out, "PICO_REP:\t ");
+#ifdef ENABLE_PICO_STATELESS_MODE
+        fprintf(stats_out, " STATELESS_MODE: \n");
+#else
+        fprintf(stats_out,"\n");
+#endif
+
+#elif defined(MIMIC_FTMB)
+        fprintf(stats_out, "FTMB \n");
+#else
+        fprintf(stats_out, "REINFORCE: ");
+#ifdef ENABLE_REPLICA_STATE_UPDATE
+        fprintf(stats_out, "LCL_REP=ON, ");
+#endif
+
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        fprintf(stats_out, "REM_REP=ON: ");
+#endif
+#ifdef ENABLE_PER_FLOW_TS_STORE
+        fprintf(stats_out, "TxTS=ON: ");
+#endif
+#ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
+        fprintf(stats_out, "ISOLAT=ON: ");
+#endif
+#ifdef ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT
+        fprintf(stats_out, "CORRECTENSS=ON: ");
+#endif
+#endif
+#else
+        fprintf(stats_out, "RESILIENCY:[OFF]\t ");
+        fprintf(stats_out, "---------\n");
+#endif
+
+}
 void
 onvm_stats_display_ports(unsigned difftime) {
         unsigned i;
@@ -433,6 +482,9 @@ onvm_stats_display_clients(__attribute__((unused)) unsigned difftime) {
                 if (avg_wakeups > 0 ) {
                         avg_pkts_per_wakeup = (tx_pps+tx_drop_rate)/avg_wakeups;
                         good_pkts_per_wakeup = (tx_pps)/avg_wakeups;
+                } else {
+                        avg_pkts_per_wakeup=0;
+                        good_pkts_per_wakeup=0;
                 }
 #endif
 

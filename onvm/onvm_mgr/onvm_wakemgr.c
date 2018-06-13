@@ -225,12 +225,18 @@ whether_wakeup_client(int instance_id)
 {
         /* if NF is not valid or Valid but Paused then do not wake up the NF */
         if (unlikely(!onvm_nf_is_valid(&clients[instance_id]))||(onvm_nf_is_paused(&clients[instance_id]))) {
+        //if (unlikely(!onvm_nf_is_valid(&clients[instance_id]))) {
                 return 0;
         }
+        /*if(unlikely(onvm_nf_is_paused(&clients[instance_id]))){
+                printf("Non Waking [%d] due to NF PAUSED!\n", instance_id);
+                return 0;
+        }*/
 
 #ifdef ENABLE_NFV_RESL
         //IF NF is waiting on NDSYNC then do not wake it up.
         if(onvm_nf_is_waiting_on_NDSYNC(&clients[instance_id])) {
+                //printf("Non Waking [%d] due to ND SYNC!\n", instance_id);
                 return 0;
         }
 
@@ -385,6 +391,8 @@ inline void check_and_wakeup_nf(uint16_t instance_id) {
 
 inline void check_and_block_nf(uint16_t instance_id) {
         /* Make sure to set the flag here and check for flag in nf_lib and block */
+        //printf("\n***************Blocking NF! %d**************\n", instance_id);
+        //exit(10);
         rte_atomic16_set(clients[instance_id].shm_server, 1);
 }
 #endif //INTERRUPT_SEM

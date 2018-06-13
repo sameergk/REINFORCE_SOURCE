@@ -121,6 +121,10 @@ onvm_nf_is_processing(struct client *cl);
 inline int
 onvm_nf_is_waiting_on_NDSYNC(struct client *cl);
 
+/* Function to Check if NF is marked to have NDSYNC set (not necessarily blocked) */
+inline int
+onvm_nf_is_NDSYNC_set(struct client *cl);
+
 /*
  * Interface checking if a given nf is "valid", meaning if it's running.
  *
