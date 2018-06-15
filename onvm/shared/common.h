@@ -151,6 +151,7 @@
 //#define __DEBUG_NFMGR_WK_LOGS__
 //#define __DEBUG_NFMGR_RSYNC_LOGS__
 //#define __DEBUG_NDSYNC_LOGS__
+//#define __DEBUG_BFD_LOGS__
 #endif
 
 

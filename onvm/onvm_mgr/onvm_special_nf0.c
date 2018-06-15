@@ -144,7 +144,8 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         int i = 0;
         struct onvm_pkt_meta *meta = NULL;
         struct rte_mbuf *pkt = NULL;
-
+        int j = 0;
+        struct rte_mbuf *pkts_out[PACKET_READ_SIZE];
         if (pkts == NULL || rx_count== 0)
                 return ret;
 
@@ -158,6 +159,13 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                meta->src = 0;
                meta->chain_index = 0;
                pkt = (struct rte_mbuf*)pkts[i];
+
+               // Filter out BFD and RSYNC packets to avoid looping them around!
+               struct ether_hdr *eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
+               if(ETHER_TYPE_RSYNC_DATA == rte_be_to_cpu_16(eth->ether_type) || ETHER_TYPE_BFD == rte_be_to_cpu_16(eth->ether_type)) {
+                       onvm_pkt_drop(pkts[i]); continue;
+               }
+               pkts_out[j++]=pkt;
 
 #ifdef USE_SINGLE_NIC_PORT
                meta->destination = pkt->port;
@@ -186,11 +194,12 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         }
 
         //Push all packets directly to the NF[0]->tx_ring
-        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
+        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts_out, j);
+        //int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
         if (enq_status) {
                 //printf("Enqueue to NF[0] Tx Buffer failed!!");
-                onvm_pkt_drop_batch(pkts,rx_count);
-                nf0_cl->stats.rx_drop += rx_count;
+                onvm_pkt_drop_batch(pkts_out,j);//onvm_pkt_drop_batch(pkts,rx_count);
+                nf0_cl->stats.rx_drop += j;// nf0_cl->stats.rx_drop += rx_count;
         }
         return ret;
 }

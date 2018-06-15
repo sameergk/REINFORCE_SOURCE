@@ -154,7 +154,13 @@ onvm_bfd_stop(void) {
 static void
 bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
+# ifdef __DEBUG_BFD_LOGS__
+        static uint64_t cur_cycles = 0; //onvm_util_get_current_cpu_cycles();
+        static uint64_t prev_cycles = 0;
+        cur_cycles = onvm_util_get_current_cpu_cycles();
+        if(prev_cycles) {printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_diff_cpu_cycles_in_us(prev_cycles, cur_cycles)  );}  prev_cycles=cur_cycles;
         //printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
+#endif
         check_bdf_remote_status();
         send_bfd_echo_packets();
         return;
@@ -343,7 +349,8 @@ static void check_bdf_remote_status(void) {
                 } else {
                         //bfd_sess_info[i].last_rx_pkts = rx_pkts;// - bfd_sess_info[i].last_rx_pkts;
                 }
-                if(rx_pkts - bfd_sess_info[i].last_rx_pkts) {
+                //Check to ensure that only BFD Packets are ignored! otherwise, every BFD packet also causes to stall resulting in timeout after every BFD packet!!
+                if((rx_pkts - bfd_sess_info[i].last_rx_pkts) > BFD_MAX_PER_INTV_PER_PORT) {
                         bfd_sess_info[i].skip_bfd_query= 1;
                         bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
