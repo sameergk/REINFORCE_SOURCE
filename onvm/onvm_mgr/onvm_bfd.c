@@ -83,6 +83,13 @@ typedef struct bfd_session_status {
         //Link Status change counter;
         uint64_t bfd_status_change_counter;
 
+#ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
+        //measure of last batch of rx packets on this port
+        uint64_t last_rx_pkts;
+        uint8_t last_rx_set;
+        uint8_t  skip_bfd_query;
+#endif
+
 }bfd_session_status_t;
 
 typedef struct bfd_pkt_stat_t {
@@ -127,6 +134,12 @@ static void init_bfd_session_status(onvm_bfd_init_config_t *bfd_config) {
                 bfd_sess_info[i].last_sent_pkt_ts = 0;
                 bfd_sess_info[i].last_rcvd_pkt_ts = 0;
                 bfd_sess_info[i].pkt_missed_counter = 0;
+
+#ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
+                bfd_sess_info[i].last_rx_pkts = 0;
+                bfd_sess_info[i].last_rx_set = 0;
+                bfd_sess_info[i].skip_bfd_query= 0;
+#endif
         }
 }
 int
@@ -218,8 +231,12 @@ static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp)
 struct rte_mbuf* create_bfd_packet(void) {
         //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
 
-        struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool);
         if(NULL == pktmbuf_pool) {
+                return NULL;
+        }
+        struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool);
+        if(NULL == pkt) {
+                printf("\n Failed to Get Packet from pktmbuf_pool!\n");
                 return NULL;
         }
 
@@ -293,6 +310,9 @@ static void send_bfd_echo_packets(void) {
                         bfd_sess_info[i].local_state = Up; //bypass handshake protocol just start with run.
                 }else if (AdminDown == bfd_sess_info[i].local_state) continue;
 
+#ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
+                if(bfd_sess_info[i].skip_bfd_query) continue;
+#endif
                 //Avoid sending to the node that is explicitly marked as Down i.e. Admin down
                 if ( AdminDown == bfd_sess_info[i].remote_state) continue;
                 //Else probe at much lower frequency
@@ -314,6 +334,26 @@ static void check_bdf_remote_status(void) {
         uint16_t i=0;
         uint64_t elapsed_time = 0;
         for(i=0; i< ports->num_ports; i++) {
+                //if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
+#ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
+                uint64_t rx_pkts = ports->rx_stats.rx[i];
+                if(rx_pkts && (0 == bfd_sess_info[i].last_rx_set)){
+                        bfd_sess_info[i].last_rx_set=1;
+                        bfd_sess_info[i].last_rx_pkts = rx_pkts;
+                } else {
+                        //bfd_sess_info[i].last_rx_pkts = rx_pkts;// - bfd_sess_info[i].last_rx_pkts;
+                }
+                if(rx_pkts - bfd_sess_info[i].last_rx_pkts) {
+                        bfd_sess_info[i].skip_bfd_query= 1;
+                        bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
+                        bfd_sess_info[i].last_rx_pkts = rx_pkts;
+                        continue;
+                }
+                else {
+                        bfd_sess_info[i].last_rx_pkts = rx_pkts;
+                        bfd_sess_info[i].skip_bfd_query= 0;
+                }
+#endif
                 if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
                 elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
                 if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
@@ -378,19 +418,28 @@ int onvm_print_bfd_status(unsigned difftime, __attribute__((unused)) FILE *fp) {
                         bfd_stat.tx_count, (bfd_stat.tx_count - prev_stat.tx_count)/difftime);
         prev_stat = bfd_stat;
         for(i=0; i< ports->num_ports; i++) {
-                fprintf(fp, "Port:%d Local status:%d, Remote Status:%d  Change count:%"PRIu64" rx_us:%"PRIu64" tx_us:%"PRIu64"\n",
+#ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
+                fprintf(fp, "Port:%d Local status:%d, Remote Status:%d  SkipStatus:%d, last_rx_set:%d, pport_rx_pkts:%"PRIu64", last_rx_packets:%"PRIu64", Change count:%"PRIu64" last_tx(us):%"PRIu64" last_rx(us):%"PRIu64"\n",
+                                i, bfd_sess_info[i].local_state,  bfd_sess_info[i].remote_state, bfd_sess_info[i].skip_bfd_query, bfd_sess_info[i].last_rx_set, ports->rx_stats.rx[i], bfd_sess_info[i].last_rx_pkts, bfd_sess_info[i].bfd_status_change_counter,
+                                onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_sent_pkt_ts),
+                                onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts));
+#else
+                fprintf(fp, "Port:%d Local status:%d, Remote Status:%d  Change count:%"PRIu64" last_tx(us):%"PRIu64" last_rx(us):%"PRIu64"\n",
                                 i, bfd_sess_info[i].local_state,  bfd_sess_info[i].remote_state, bfd_sess_info[i].bfd_status_change_counter,
                                 onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_sent_pkt_ts),
                                 onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts));
+#endif
         }
         return 0;
 }
 
 struct rte_mbuf* create_bfd_packet_spcl(BfdPacketHeader *pkt_hdr) {
         //printf("\n Crafting BFD packet for buffer [%p]\n", pkt);
-
-        struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool);
         if(NULL == pktmbuf_pool) {
+                return NULL;
+        }
+        struct rte_mbuf* pkt = rte_pktmbuf_alloc(pktmbuf_pool);
+        if(NULL == pkt) {
                 return NULL;
         }
 
@@ -423,7 +472,7 @@ struct rte_mbuf* create_bfd_packet_spcl(BfdPacketHeader *pkt_hdr) {
         bfdp->header.flags = 2;
 
         //set packet properties
-        size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) +sizeof(BfdPacket);
+        size_t pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr) + sizeof(BfdPacket);
         pkt->data_len = pkt_size;
         pkt->pkt_len = pkt_size;
 

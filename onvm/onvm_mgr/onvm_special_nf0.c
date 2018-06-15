@@ -165,7 +165,10 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                if (pkt->port == 0) {
                         meta->destination = 0;
                         if(ports->num_ports > 1 ) {
-                                meta->destination = 1;
+                                meta->destination = PRIMARY_OUT_PORT;
+                                if(ports->down_status[PRIMARY_OUT_PORT]) {
+                                        meta->destination = SECONDARY_OUT_PORT;
+                                }
                         }
                 }
                 else {

@@ -240,7 +240,7 @@ get_port_stats_rate(double period_time)
                 rte_eth_stats_get(ports->id[i], &port_stats[i]);
                 fprintf(stats_out,"Port:%"PRIu8", rx:%"PRIu64", rx_err:%"PRIu64", rx_imissed:%"PRIu64" "
                 //        "ibadcrc:%"PRIu64", ibadlen:%"PRIu64", illerrc:%"PRIu64", errbc:%"PRIu64" "
-                        "rx_nombuf:%"PRIu64", tx:%"PRIu64", tx_err:%"PRIu64"\n",
+                        "rx_nombuf:%"PRIu64", tx:%"PRIu64", tx_err:%"PRIu64"",
                         ports->id[i], port_stats[i].ipackets, port_stats[i].ierrors, port_stats[i].imissed,
                         //port_stats[i].ibadcrc, port_stats[i].ibadlen, port_stats[i].illerrc, port_stats[i].errbc,
                         port_stats[i].rx_nombuf, port_stats[i].opackets,
@@ -331,7 +331,7 @@ onvm_stats_display_ports(unsigned difftime) {
         for (i = 0; i < ports->num_ports; i++)
                 fprintf(stats_out,"Port %u: '%s'\t", (unsigned)ports->id[i],
                                 onvm_stats_print_MAC(ports->id[i]));
-        fprintf(stats_out,"\n\n");
+        fprintf(stats_out,"\n");
 
         /* Arrays to store last TX/RX count to calculate rate */
         static uint64_t tx_last[RTE_MAX_ETHPORTS];
@@ -350,7 +350,7 @@ onvm_stats_display_ports(unsigned difftime) {
 
                 fprintf(stats_out,"Port %u - rx: %9"PRIu64"  (%9"PRIu64" pps)\t"
                                 "tx: %9"PRIu64"  (%9"PRIu64" pps) \t"
-                                "tx_drop: %9"PRIu64"  (%9"PRIu64" pps)\n",
+                                "tx_drop: %9"PRIu64"  (%9"PRIu64" pps) ",
                                 (unsigned)ports->id[i],
                                 nic_rx_pkts,
                                 nic_rx_pps,
@@ -501,14 +501,14 @@ onvm_stats_display_clients(__attribute__((unused)) unsigned difftime) {
                 comp_cost = clients[i].stats.comp_cost;
 
 
-                fprintf(stats_out,"NF Inst %2u:[Svc:%2u] [STS:%2u], comp_cost=%"PRIu64", msg_flag(blocked)=%d, \n"
+                fprintf(stats_out,"NF Inst %2u:[Svc:%2u] [STS:%2u], comp_cost=%"PRIu64", msg_flag(blocked)=%d,"
 #ifdef ENABLE_NF_WAKE_NOTIFICATION_COUNTER
-                "avg_wakeups=%"PRIu64", avg_ppw=%"PRIu64", avg_good_ppw=%"PRIu64"\n"
+                "avg_wakeups=%"PRIu64", avg_ppw=%"PRIu64", avg_good_ppw=%"PRIu64""
 #endif
 #ifdef ENABLE_NF_WAKE_NOTIFICATION_COUNTER
-                "yields=%"PRIu64", pkts_per_yield=%"PRIu64"\n"
+                "yields=%"PRIu64", pkts_per_yield=%"PRIu64""
 #endif
-                "rx_rate=%"PRIu64", rx_drop_rate=%"PRIu64", rx_qlen=%"PRIu64", rx_drop=%"PRIu64" \n"
+                "rx_rate=%"PRIu64", rx_drop_rate=%"PRIu64", rx_qlen=%"PRIu64", rx_drop=%"PRIu64""
                 "tx_rate=%"PRIu64", tx_drop_rate=%"PRIu64", tx_qlen=%"PRIu64", tx_drop=%"PRIu64"\n" //"next: %9"PRIu64" drop: %9"PRIu64" ret: %9"PRIu64", out: %9"PRIu64" tonf: %9"PRIu64" buf: %9"PRIu64"\n",
                 ,clients[i].info->instance_id, clients[i].info->service_id, clients[i].info->status, comp_cost,rte_atomic16_read(clients[i].shm_server),
 #ifdef ENABLE_NF_WAKE_NOTIFICATION_COUNTER

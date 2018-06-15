@@ -66,7 +66,7 @@
 //Given that we have buffer of 8K we can perform checkpoints much slower atleast 5 times slow i.e 500us ==> 7.5K packets perform 1 checkpoint. Therefore w.c. overhead= 0.85%
 
 //port on which the TxTs, NF State and SVC State are synced (transmitted out).
-#define RSYNC_OUT_PORT (1)      //(RSYNC_TX_OUT_PORT)
+#define RSYNC_OUT_PORT  (RSYNC_TX_OUT_PORT) //(1)
 
 #ifdef MIMIC_PICO_REP
 #define RSYNC_USE_DPDK_TIMER
@@ -2104,6 +2104,16 @@ int onvm_print_rsync_stats(unsigned difftime, FILE *fout) {
         prev_state = rsync_stat;
         return 0;
 }
+
+int notify_replay_mode(uint8_t mode) {
+        state_tx_meta_t meta = {.state_type= MSG_END_OF_REPLAY, .nf_or_svc_id=0, .start_offset=0, /*.reserved=nf_mgr_id, */.trans_id=0};
+        if(mode) {
+                meta.state_type = MSG_START_OF_REPLAY;
+        }
+        struct rte_mbuf*out_pkt = craft_state_update_packet(SECONDARY_OUT_PORT,meta, NULL,0);
+        return send_packets_out(SECONDARY_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, &out_pkt, 1);
+}
+
 int
 rsync_main(__attribute__((unused)) void *arg) {
 

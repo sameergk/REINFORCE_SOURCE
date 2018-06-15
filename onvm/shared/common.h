@@ -527,6 +527,7 @@ typedef struct onvm_per_flow_ts_info {
 
 //Note the NUM_OF_QUEUES in PORT seem to be only 16; so ensure the queue value with MAX_NFS ( but unforunately the init_port() doesnt fail.
 #ifdef ENABLE_BFD
+#define PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC            //Optimization: this feature enables to track active status of remote port from ongoing traffic and only after 'x' time of idle status initiates check on BFD
 #define BFD_TX_PORT_QUEUE_ID        (ONVM_NUM_TX_THREADS)//((MAX_NFS/2)+1)
 #else
 #define BFD_TX_PORT_QUEUE_ID   (ONVM_NUM_TX_THREADS-1)// (0)//(MAX_NFS/2)
@@ -537,12 +538,15 @@ typedef struct onvm_per_flow_ts_info {
 #define RSYNC_TX_PORT_QUEUE_ID_0    (BFD_TX_PORT_QUEUE_ID+1)
 //for internal thread
 #define RSYNC_TX_PORT_QUEUE_ID_1    (RSYNC_TX_PORT_QUEUE_ID_0+1)
-#define RSYNC_TX_OUT_PORT       (0)
+#define RSYNC_TX_OUT_PORT       (2)
 #define ONVM_NF_MGR_TX_QUEUES   (4) //1 for BFD, 2 for RSYNC
 #else
 #define ONVM_NF_MGR_TX_QUEUES   (0)
 #endif
 
+/* Special defines for Remote Rsync Control (as per FS-2 config) */
+#define PRIMARY_OUT_PORT    (1)
+#define SECONDARY_OUT_PORT  (2)
 
 #ifdef MIMIC_FTMB
 //#undef ENABLE_REMOTE_SYNC_WITH_TX_LATCH    //disable feature to hold the Tx buffers until NF state/Tx ppkt table is updated.        (Remote Sync)
@@ -812,6 +816,7 @@ struct port_info {
         uint8_t num_ports;
         uint8_t id[RTE_MAX_ETHPORTS];
         struct ether_addr mac[RTE_MAX_ETHPORTS];
+        uint8_t down_status[RTE_MAX_ETHPORTS]; //store BFD live=0/dead(1,2) status
         volatile struct rx_stats rx_stats;
         volatile struct tx_stats tx_stats;
 };

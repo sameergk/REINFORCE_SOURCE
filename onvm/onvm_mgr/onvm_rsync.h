@@ -100,6 +100,8 @@ int rsync_start(__attribute__((unused)) void *arg);
 int rsync_process_rsync_in_pkts(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
 
 int onvm_print_rsync_stats(unsigned difftime, FILE *fout);
+
+int notify_replay_mode(uint8_t mode); //0=stop, 1 =start //helper function to enble notify to remote replica node about start/stop of replay.
 /****************************Internal functions*******************************/
 #ifdef MIMIC_PICO_REP
 extern volatile uint8_t rx_halt;

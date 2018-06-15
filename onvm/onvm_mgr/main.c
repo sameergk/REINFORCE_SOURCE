@@ -666,12 +666,26 @@ main(int argc, char *argv[]) {
 }
 
 /*******************************Helper functions********************************/
+void initiate_node_failover(void);
+void initiate_node_failover(void) {
+#ifdef ENABLE_NFV_RESL
+        //turn on replay_mode=1;
+        notify_replay_mode(replay_mode=1);
+        //rest of sequence dealt outside
+        //i1.pcap_replay();
+        //2.notify_replay_mode(replay_mode=0);
+#endif
+}
 #ifdef ENABLE_BFD
 static int bfd_handle_callback(uint8_t port, uint8_t status) {
         //check for valid port and BFD_StateValue
         printf("BFD::Port[%d] moved to status[%d]\n",port,status);
         if(port < ports->num_ports) {
                 if(status == BFD_STATUS_REMOTE_DOWN || status == BFD_STATUS_LOCAL_DOWN) {
+                        ports->down_status[port]=status;
+                        if(PRIMARY_OUT_PORT == port){
+                                initiate_node_failover();
+                        }
                         return 1;
                 }
                 /* if(status == AdminDown || status == Down) {
