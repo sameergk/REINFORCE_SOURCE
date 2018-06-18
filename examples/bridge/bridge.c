@@ -146,9 +146,18 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
                 do_stats_display(pkt);
                 counter = 0;
         }
+        meta->reserved_word=NF_BYPASS_RSYNC;
         if(likely(NULL != ports)) {
-                if(likely(ports->num_ports > 1)) meta->destination = (pkt->port == 0)? (1):(0);
-                else meta->destination = (pkt->port);
+                if(likely(ports->num_ports > 1)) {
+                        meta->destination = (pkt->port == 0)? (1):(0);
+                        if(PRIMARY_OUT_PORT == meta->destination && ports->down_status[PRIMARY_OUT_PORT]) {
+                                meta->destination = SECONDARY_OUT_PORT;
+                                printf("Shifted traffic from primary out port to secondary out port\n");
+                        }
+                }
+                else {
+                        meta->destination = (pkt->port);
+                }
         } else {
                 if (pkt->port == 0) {
                         meta->destination = 1;

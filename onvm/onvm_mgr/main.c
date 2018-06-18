@@ -104,10 +104,10 @@ static thread_core_map_t thread_core_map;
 #ifdef ENABLE_USE_RTE_TIMER_MODE_FOR_MAIN_THREAD
 
 #define NF_STATUS_CHECK_PERIOD_IN_MS    (500)       // (500) 500ms or 0.5seconds
-#define NF_STATUS_CHECK_PERIOD_IN_US    (100)       // use high precision 100us to ensure that we do it quickly to recover/restore
+#define NF_STATUS_CHECK_PERIOD_IN_US    (50)       // use high precision 100us to ensure that we do it quickly to recover/restore
 #define DISPLAY_STATS_PERIOD_IN_MS      (1000)      // 1000ms or Every second
 #define NF_LOAD_EVAL_PERIOD_IN_MS       (1)         // 1ms
-#define USLEEP_INTERVAL_IN_US           (50)        // 50 micro seconds (even if set to 50, best precision >100micro)
+#define USLEEP_INTERVAL_IN_US           (25)        // 50 micro seconds (even if set to 50, best precision with nanosleep  >100micro)
 //#define ARBITER_PERIOD_IN_US            (100)       // 250 micro seconds or 100 micro seconds
 //Note: Running arbiter at 100micro to 250 micro seconds is fine provided we have the buffers available as:
 //RTT (measured with bridge and 1 basic NF) =0.2ms B=10Gbps => B*delay ( 2*RTT*Bw) = 2*200*10^-6 * 10*10^9 = 4Mb = 0.5MB
@@ -327,6 +327,8 @@ master_thread_main(void) {
  * Function to receive packets from the NIC
  * and distribute them to the default service
  */
+void initiate_node_failover(void);
+void replay_and_terminate_failover(void);
 static int
 rx_thread_main(void *arg) {
         uint16_t i, rx_count;
@@ -345,6 +347,12 @@ rx_thread_main(void *arg) {
                         rx_count = rte_eth_rx_burst(ports->id[i], rx->queue_id, \
                                         pkts, PACKET_READ_SIZE);
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+                        if(unlikely(replay_mode)) {
+                                //do replay and then continue with
+                                replay_and_terminate_failover();
+                        }
+#endif
                         /* Now process the NIC packets read */
                         if (likely(rx_count > 0)) {
                                 ports->rx_stats.rx[ports->id[i]] += rx_count;
@@ -666,15 +674,26 @@ main(int argc, char *argv[]) {
 }
 
 /*******************************Helper functions********************************/
-void initiate_node_failover(void);
+void replay_and_terminate_failover(void) {
+#ifdef ENABLE_PCAP_CAPTURE
+        onvm_util_replay_all_packets(PRIMARY_OUT_PORT, 1000); //SECONDARY_OUT_PORT
+#endif
+
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+        notify_replay_mode(replay_mode=0);
+#endif
+}
 void initiate_node_failover(void) {
-#ifdef ENABLE_NFV_RESL
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
         //turn on replay_mode=1;
         notify_replay_mode(replay_mode=1);
         //rest of sequence dealt outside
         //i1.pcap_replay();
         //2.notify_replay_mode(replay_mode=0);
 #endif
+        //either do in the main thread context of rx thread context: better rx_thread as rx_thread must pause sending any buffers during replay
+        //replay_and_terminate_failover();
+
 }
 #ifdef ENABLE_BFD
 static int bfd_handle_callback(uint8_t port, uint8_t status) {

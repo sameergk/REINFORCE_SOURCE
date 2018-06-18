@@ -350,7 +350,7 @@ onvm_stats_display_ports(unsigned difftime) {
 
                 fprintf(stats_out,"Port %u - rx: %9"PRIu64"  (%9"PRIu64" pps)\t"
                                 "tx: %9"PRIu64"  (%9"PRIu64" pps) \t"
-                                "tx_drop: %9"PRIu64"  (%9"PRIu64" pps) ",
+                                "tx_drop: %9"PRIu64"  (%9"PRIu64" pps) \n",
                                 (unsigned)ports->id[i],
                                 nic_rx_pkts,
                                 nic_rx_pps,

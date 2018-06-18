@@ -318,12 +318,15 @@ do_check_and_insert_vlan_tag(struct rte_mbuf* pkt, __attribute__((unused)) struc
         return;
 }
 
+#ifdef ENABLE_ND_MARKING_IN_NFS
 /* Frequency of Non-determinism events : after every nondet_freq micro seconds */
 //static uint32_t nondet_freq = (1000);
-static uint64_t cycles_per_nd_mark = (3*1000*1000); //(nondet_freq*rte_get_timer_hz())/(1000*1000);
+static uint64_t cycles_per_nd_mark = (3*1000*1000*1);
+//static uint64_t cycles_per_nd_mark =(nondet_freq*rte_get_timer_hz())/(1000*1000);
 static volatile uint32_t nd_counter = 1;
 static uint64_t last_cycle;
 static uint64_t cur_cycle;
+#endif
 
 static int
 packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {

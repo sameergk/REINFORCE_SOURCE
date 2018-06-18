@@ -144,8 +144,10 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         int i = 0;
         struct onvm_pkt_meta *meta = NULL;
         struct rte_mbuf *pkt = NULL;
-        int j = 0;
-        struct rte_mbuf *pkts_out[PACKET_READ_SIZE];
+        //int j = 0;
+        //struct rte_mbuf *pkts_out[PACKET_READ_SIZE];
+        //struct rte_mbuf *pkts_drop[PACKET_READ_SIZE];
+        //int dr_count=0;
         if (pkts == NULL || rx_count== 0)
                 return ret;
 
@@ -163,9 +165,13 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                // Filter out BFD and RSYNC packets to avoid looping them around!
                struct ether_hdr *eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
                if(ETHER_TYPE_RSYNC_DATA == rte_be_to_cpu_16(eth->ether_type) || ETHER_TYPE_BFD == rte_be_to_cpu_16(eth->ether_type)) {
-                       onvm_pkt_drop(pkts[i]); continue;
+                       //onvm_pkt_drop(pkts[i]); continue;
+                       //pkts_drop[dr_count++] = pkts[i]; continue;
+                       meta->action = ONVM_NF_ACTION_DROP;
+               } else {
+                       //pkts_out[j++]=pkt;
+                       meta->action = ONVM_NF_ACTION_OUT;
                }
-               pkts_out[j++]=pkt;
 
 #ifdef USE_SINGLE_NIC_PORT
                meta->destination = pkt->port;
@@ -183,8 +189,11 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                         meta->destination = 0;
                 }
 #endif
-                meta->action = ONVM_NF_ACTION_OUT;
         }
+
+        //if(dr_count) {
+        //        onvm_pkt_drop_batch(pkts_drop,dr_count);
+        //}
 
         //Make use of the internal NF[0]
         if(NULL == nf0_cl) nf0_cl = &clients[0];
@@ -194,12 +203,14 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         }
 
         //Push all packets directly to the NF[0]->tx_ring
-        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts_out, j);
-        //int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
+        //int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts_out, j);
+        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
         if (enq_status) {
                 //printf("Enqueue to NF[0] Tx Buffer failed!!");
-                onvm_pkt_drop_batch(pkts_out,j);//onvm_pkt_drop_batch(pkts,rx_count);
-                nf0_cl->stats.rx_drop += j;// nf0_cl->stats.rx_drop += rx_count;
+                //onvm_pkt_drop_batch(pkts_out,j);
+                //nf0_cl->stats.rx_drop += j;
+                onvm_pkt_drop_batch(pkts,rx_count);
+                nf0_cl->stats.rx_drop += rx_count;
         }
         return ret;
 }
@@ -870,6 +881,12 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
         int continue_replay=1;
         uint64_t replay_pkt_count=0;
         uint8_t index = pcap_infos[port].ring_index;
+#define ENABLE_LOCAL_LATENCY_PROFILER
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        onvm_interval_timer_t ts;
+        onvm_util_get_start_time(&ts);
+#endif
+
 
         pcap_infos[port].log[index].pd = pcap_open_offline(pcap_infos[port].log[index].capture_file, err_buf);
         if(pcap_infos[port].log[index].pd == NULL) {
@@ -901,8 +918,8 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
                 }
                 //Add check for elapsed time and break appropriately
         }while(continue_replay);
-        if(rp_count == PACKET_READ_SIZE) {
-                int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
+        if(rp_count) {
+                int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rp_count);
                 if (enq_status) {
                         onvm_pkt_drop_batch(pkts,rp_count);
                         nf0_cl->stats.rx_drop += rp_count;
@@ -910,6 +927,10 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
                 replay_pkt_count+=rp_count;
                 rp_count=0;
         }
+#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+        int64_t ttl_elapsed = onvm_util_get_elapsed_time(&ts);
+        printf("REPLAY START-->REPLAY END): %li ns\n", ttl_elapsed);
+#endif
         printf("\n [%lld] Replay packets sent on port [%d] within [%lld]!\n", (long long)replay_pkt_count, port, (long long)max_duration_us);
         pcap_close(pcap_infos[port].log[index].pd);
         pcap_infos[port].log_active_status=pcap_log_status_replay_finished;

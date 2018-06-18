@@ -120,7 +120,8 @@
 //const uint32_t BaseMinTxInterval = 1000000L;  // The base "slow" Tx interval.
 #define BaseMinTxInterval (1000000L)
 
-#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1.5 RTT
+#define BFD_CHECKPOINT_PERIOD_IN_US  (500)  //since we send only during idle period, setting 500us is still fine. But note worst case RTT is 500-700us with 4K buffering.
+//#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1.5 RTT
 
 #define BFDEchoInterval_us      (BFD_CHECKPOINT_PERIOD_IN_US)
 #define BFDMinRxInterval_us     (100)
@@ -129,7 +130,7 @@
 #define BFDTimeoutValue_us      (BFDEchoInterval_us*BFDEchoMissMultiplier)
 #define BFDTimeoutErr_oft_us    (BFDEchoInterval_us/2)
 #define BFD_TIMEOUT_INTERVAL    (BFDTimeoutValue_us + BFDTimeoutErr_oft_us)
-#define BFD_SLOW_SEND_RATE_RATIO_COUNTER   (100)  //reduce rate to 100th of regular send (use same timer but implicit counter to minimize traffic
+#define BFD_SLOW_SEND_RATE_RATIO_COUNTER   (200)  //reduce rate to 100th of regular send (use same timer but implicit counter to minimize traffic
 #define BFD_MAX_PER_INTV_PER_PORT    (20)
 // State codes
 typedef enum BFD_StateValue
