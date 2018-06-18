@@ -154,6 +154,7 @@ onvm_bfd_stop(void) {
 static void
 bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_timer,
         __attribute__((unused)) void *ptr_data) {
+//#define __DEBUG_BFD_LOGS__
 # ifdef __DEBUG_BFD_LOGS__
         static uint64_t cur_cycles = 0; //onvm_util_get_current_cpu_cycles();
         static uint64_t prev_cycles = 0;
@@ -320,7 +321,7 @@ static void send_bfd_echo_packets(void) {
                 if(bfd_sess_info[i].skip_bfd_query) continue;
 #endif
                 //Avoid sending to the node that is explicitly marked as Down i.e. Admin down
-                if ( AdminDown == bfd_sess_info[i].remote_state) continue;
+                if (AdminDown == bfd_sess_info[i].remote_state) continue;
                 //Else probe at much lower frequency
                 else if (Init == bfd_sess_info[i].remote_state || Down == bfd_sess_info[i].remote_state ) {
                         if(BFD_SLOW_SEND_RATE_RATIO_COUNTER > bfd_sess_info[i].pkt_missed_counter++) continue;
@@ -340,12 +341,14 @@ static void check_bdf_remote_status(void) {
         uint16_t i=0;
         uint64_t elapsed_time = 0;
         for(i=0; i< ports->num_ports; i++) {
+                if(ports->down_status[i]) continue;
                 if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) {
 #ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
                         bfd_sess_info[i].last_rx_set=0;
 #endif
                         continue;
                 }
+
 #ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
                 uint64_t rx_pkts = ports->rx_stats.rx[i];
                 if(rx_pkts && (0 == bfd_sess_info[i].last_rx_set)){
@@ -359,26 +362,28 @@ static void check_bdf_remote_status(void) {
                         bfd_sess_info[i].skip_bfd_query= 1;
                         bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
-                        continue;
+                        //continue;
                 }
                 else {
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
                         if(bfd_sess_info[i].skip_bfd_query) {
                                 bfd_sess_info[i].skip_bfd_query= 0;
                                 bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles(); // make sure we start elapsed time from this interval (should be not really necessary)
-                                continue;
+                                //continue;
                         }
                 }
 #endif
-                if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
-                elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
-                if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
-                        //Shift from Up to Down and notify Link Down Status
-                        printf("Port[%d]:[%d] BFD elapsed time:%lld exceeded Allowed Time_us:%d\n", i, bfd_sess_info[i].remote_state, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
-                        bfd_sess_info[i].remote_state = Down;
-                        bfd_sess_info[i].bfd_status_change_counter++;
-                        if(notifier_cb) {
-                                notifier_cb(i,BFD_STATUS_REMOTE_DOWN);
+                if(0 == bfd_sess_info[i].skip_bfd_query) {
+                        //if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
+                        elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
+                        if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
+                                //Shift from Up to Down and notify Link Down Status
+                                printf("Port[%d]:[%d] BFD elapsed time:%lld exceeded Allowed Time_us:%d\n", i, bfd_sess_info[i].remote_state, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
+                                bfd_sess_info[i].remote_state = Down;
+                                bfd_sess_info[i].bfd_status_change_counter++;
+                                if(notifier_cb) {
+                                        notifier_cb(i,BFD_STATUS_REMOTE_DOWN);
+                                }
                         }
                 }
         }

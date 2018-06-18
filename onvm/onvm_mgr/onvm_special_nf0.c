@@ -82,8 +82,80 @@ static struct client *nf0_cl = NULL;
 /*************************Local functions Declaration**************************/
 
 /*******************************Helper functions********************************/
+inline int set_packet_forwarind_actions(struct rte_mbuf *pkt, struct onvm_pkt_meta * meta);
+inline int set_packet_forwarind_actions(struct rte_mbuf *pkt, struct onvm_pkt_meta * meta) {
+        if (pkt->port == 0) {
+                meta->destination = 0;
+                if(ports->num_ports > 1 ) {
+                        meta->destination = PRIMARY_OUT_PORT;
+                        if(ports->down_status[PRIMARY_OUT_PORT]) {
+                                meta->destination = SECONDARY_OUT_PORT;
+                        }
+                }
+        }
+        else {
+                meta->destination = 0;
+        }
+        return 0;
+}
 #ifdef ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
 static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
+int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count);
+int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
+        uint16_t i, sent_0,sent_1;
+        volatile struct tx_stats *tx_stats;
+        tx_stats = &(ports->tx_stats);
+
+        struct onvm_pkt_meta *meta = NULL;
+        struct rte_mbuf *pkts_0[PACKET_READ_SIZE];
+        struct rte_mbuf *pkts_1[PACKET_READ_SIZE];
+        uint16_t count_0=0, count_1=0;
+
+        for (i = 0; i < rx_count; i++) {
+                meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
+                if (meta->destination == 0) {
+                        pkts_0[count_1++] = pkts[i];
+                } else {
+                        pkts_1[count_0++] = pkts[i];
+                }
+        }
+#ifdef DELAY_BEFORE_SEND
+        usleep(DELAY_PER_PKT*count_0);
+#endif
+        if(count_0) {
+                uint8_t port_id = 0;
+                sent_0 = rte_eth_tx_burst(port_id,
+                                        0,//tx->queue_id,
+                                        pkts_0,
+                                        count_0);
+                if (unlikely(sent_0 < count_0)) {
+                        for (i = sent_0; i < count_0; i++) {
+                                onvm_pkt_drop(pkts_0[i]);
+                        }
+                        tx_stats->tx_drop[port_id] += (count_0 - sent_0);
+                }
+                tx_stats->tx[port_id] += sent_0;
+        }
+#ifdef DELAY_BEFORE_SEND
+        usleep(DELAY_PER_PKT*count_1);
+#endif
+        if(count_1) {
+                uint8_t port_id = 0;
+                if(ports->num_ports > 1 ) port_id=1;
+                sent_1 = rte_eth_tx_burst(port_id,
+                                        0,//tx->queue_id,
+                                        pkts_1,
+                                        count_1);
+                if (unlikely(sent_1 < count_1)) {
+                        for (i = sent_1; i < count_1; i++) {
+                                onvm_pkt_drop(pkts_1[i]);
+                        }
+                        tx_stats->tx_drop[port_id] += (count_1 - sent_1);
+                }
+                tx_stats->tx[port_id] += sent_1;
+        }
+        return 0;
+}
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count);
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
         uint16_t i, sent_0,sent_1;
@@ -144,10 +216,10 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         int i = 0;
         struct onvm_pkt_meta *meta = NULL;
         struct rte_mbuf *pkt = NULL;
-        //int j = 0;
-        //struct rte_mbuf *pkts_out[PACKET_READ_SIZE];
-        //struct rte_mbuf *pkts_drop[PACKET_READ_SIZE];
-        //int dr_count=0;
+        int j = 0;
+        struct rte_mbuf *pkts_out[PACKET_READ_SIZE];
+        struct rte_mbuf *pkts_proc[PACKET_READ_SIZE];
+        int pr_count=0;int enq_status=0;
         if (pkts == NULL || rx_count== 0)
                 return ret;
 
@@ -161,39 +233,45 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                meta->src = 0;
                meta->chain_index = 0;
                pkt = (struct rte_mbuf*)pkts[i];
+               meta->action = ONVM_NF_ACTION_OUT;
+               meta->destination = pkts[i]->port;
 
                // Filter out BFD and RSYNC packets to avoid looping them around!
                struct ether_hdr *eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
-               if(ETHER_TYPE_RSYNC_DATA == rte_be_to_cpu_16(eth->ether_type) || ETHER_TYPE_BFD == rte_be_to_cpu_16(eth->ether_type)) {
-                       //onvm_pkt_drop(pkts[i]); continue;
-                       //pkts_drop[dr_count++] = pkts[i]; continue;
+               if(ETHER_TYPE_RSYNC_DATA == rte_be_to_cpu_16(eth->ether_type)) {
+                       pkts_out[j++]=pkt;
                        meta->action = ONVM_NF_ACTION_DROP;
+                       //onvm_pkt_drop(pkts[i]); continue;
+               } else if (ETHER_TYPE_BFD == rte_be_to_cpu_16(eth->ether_type)) {
+                       pkts_proc[pr_count++] = pkts[i]; continue;
                } else {
-                       //pkts_out[j++]=pkt;
-                       meta->action = ONVM_NF_ACTION_OUT;
+                       pkts_out[j++]=pkt;
                }
 
+               if(ONVM_NF_ACTION_OUT == meta->action) {
+
 #ifdef USE_SINGLE_NIC_PORT
-               meta->destination = pkt->port;
+                       meta->destination = pkt->port;
 #else
-               if (pkt->port == 0) {
-                        meta->destination = 0;
-                        if(ports->num_ports > 1 ) {
-                                meta->destination = PRIMARY_OUT_PORT;
-                                if(ports->down_status[PRIMARY_OUT_PORT]) {
-                                        meta->destination = SECONDARY_OUT_PORT;
+#if 1
+                       set_packet_forwarind_actions(pkt, meta);
+#else
+                       if (pkt->port == 0) {
+                                meta->destination = 0;
+                                if(ports->num_ports > 1 ) {
+                                        meta->destination = PRIMARY_OUT_PORT;
+                                        if(ports->down_status[PRIMARY_OUT_PORT]) {
+                                                meta->destination = SECONDARY_OUT_PORT;
+                                        }
                                 }
                         }
-                }
-                else {
-                        meta->destination = 0;
-                }
+                        else {
+                                meta->destination = 0;
+                        }
 #endif
+#endif
+               }
         }
-
-        //if(dr_count) {
-        //        onvm_pkt_drop_batch(pkts_drop,dr_count);
-        //}
 
         //Make use of the internal NF[0]
         if(NULL == nf0_cl) nf0_cl = &clients[0];
@@ -203,14 +281,23 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
         }
 
         //Push all packets directly to the NF[0]->tx_ring
-        //int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts_out, j);
-        int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
-        if (enq_status) {
+        enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts_out, j);
+        //int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
+        if (-ENOBUFS == enq_status) {
                 //printf("Enqueue to NF[0] Tx Buffer failed!!");
-                //onvm_pkt_drop_batch(pkts_out,j);
-                //nf0_cl->stats.rx_drop += j;
-                onvm_pkt_drop_batch(pkts,rx_count);
-                nf0_cl->stats.rx_drop += rx_count;
+                onvm_pkt_drop_batch(pkts_out,j);
+                nf0_cl->stats.tx_drop += j;
+                //onvm_pkt_drop_batch(pkts,rx_count);
+                //nf0_cl->stats.rx_drop += rx_count;
+        }
+
+        if(pr_count) {
+                enq_status = rte_ring_enqueue_bulk(nf0_cl->rx_q, (void **)pkts_proc, pr_count);
+                if (-ENOBUFS == enq_status) {
+                        onvm_pkt_drop_batch(pkts_proc,pr_count);
+                        nf0_cl->stats.rx_drop += pr_count;
+                }
+                //onvm_pkt_drop_batch(pkts_drop,dr_count);
         }
         return ret;
 }

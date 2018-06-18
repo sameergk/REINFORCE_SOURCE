@@ -181,7 +181,7 @@ onvm_pkt_process_tx_batch(struct thread_info *tx, struct rte_mbuf *pkts[], uint1
 #endif
                         break;
                 default:
-                        printf("onvm_pkt_process_tx_batch(): ERROR invalid action: this shouldn't happen.\n");
+                        printf("onvm_pkt_process_tx_batch(%d): ERROR invalid action: this shouldn't happen.\n", meta->action);
                         onvm_pkt_drop(pkts[i]);
                         break;
                 }
