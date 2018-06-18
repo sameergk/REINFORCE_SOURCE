@@ -161,8 +161,8 @@ bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_tim
         if(prev_cycles) {printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_diff_cpu_cycles_in_us(prev_cycles, cur_cycles)  );}  prev_cycles=cur_cycles;
         //printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
 #endif
-        check_bdf_remote_status();
         send_bfd_echo_packets();
+        check_bdf_remote_status();
         return;
 }
 static inline int initialize_bfd_timers(void) {
@@ -360,6 +360,7 @@ static void check_bdf_remote_status(void) {
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
                         if(bfd_sess_info[i].skip_bfd_query) {
                                 bfd_sess_info[i].skip_bfd_query= 0;
+                                bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles(); // make sure we start elapsed time from this interval (should be not really necessary)
                                 continue;
                         }
                 }
