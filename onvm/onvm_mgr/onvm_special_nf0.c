@@ -1021,6 +1021,10 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
                 uint32_t i = 0;
                 for (; i < nb_pkts; i++) {
                         struct ether_hdr *eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
+                        meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
+                        if(ONVM_NF_ACTION_DROP == meta->action) {
+                                onvm_pkt_drop(pkts[i]); continue;
+                        }
                         switch(rte_be_to_cpu_16(eth->ether_type)) {
                         default:
                         case ETHER_TYPE_IPv4:

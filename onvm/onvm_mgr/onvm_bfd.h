@@ -130,8 +130,8 @@
 #define BFDTimeoutValue_us      (BFDEchoInterval_us*BFDEchoMissMultiplier)
 #define BFDTimeoutErr_oft_us    (BFDEchoInterval_us/2)
 #define BFD_TIMEOUT_INTERVAL    (BFDTimeoutValue_us + BFDTimeoutErr_oft_us)
-#define BFD_SLOW_SEND_RATE_RATIO_COUNTER   (200)  //reduce rate to 100th of regular send (use same timer but implicit counter to minimize traffic
-#define BFD_MAX_PER_INTV_PER_PORT    (20)
+#define BFD_SLOW_SEND_RATE_RATIO_COUNTER   (BFD_CHECKPOINT_PERIOD_IN_US/100)  //reduce rate to 100th of regular send (use same timer but implicit counter to minimize traffic
+#define BFD_MAX_PER_INTV_PER_PORT    (BFD_CHECKPOINT_PERIOD_IN_US*100)
 // State codes
 typedef enum BFD_StateValue
 {

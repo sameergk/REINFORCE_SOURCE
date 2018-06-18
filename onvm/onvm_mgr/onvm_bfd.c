@@ -208,9 +208,9 @@ static void parse_and_set_bfd_session_info(struct rte_mbuf* pkt,BfdPacket *bfdp)
                         bfd_sess_info[port_id].remote_state = Up;
                         bfd_sess_info[port_id].remote_descr = rte_be_to_cpu_32(bfdp->header.myDisc);
                 } else if ((Down == bfd_sess_info[port_id].remote_state) || (AdminDown == bfd_sess_info[port_id].remote_state)) {
+                        printf("BFD in Down or Admin Down State:%d moved to up!\n", bfd_sess_info[port_id].remote_state);
                         bfd_sess_info[port_id].remote_state = Up;
                         bfd_sess_info[port_id].remote_descr = rte_be_to_cpu_32(bfdp->header.myDisc);
-                        printf("BFD in Down or Admin Down State:%d\n", bfd_sess_info[port_id].remote_state);
                 }else if (Up == bfd_sess_info[port_id].remote_state) {
                 } else {
                         printf("BFD in Unknown State:%d\n", bfd_sess_info[port_id].remote_state);
@@ -350,7 +350,7 @@ static void check_bdf_remote_status(void) {
                         //bfd_sess_info[i].last_rx_pkts = rx_pkts;// - bfd_sess_info[i].last_rx_pkts;
                 }
                 //Check to ensure that only BFD Packets are ignored! otherwise, every BFD packet also causes to stall resulting in timeout after every BFD packet!!
-                if((rx_pkts - bfd_sess_info[i].last_rx_pkts) > BFD_MAX_PER_INTV_PER_PORT) {
+                if((rx_pkts - bfd_sess_info[i].last_rx_pkts)) {//if((rx_pkts - bfd_sess_info[i].last_rx_pkts) > BFD_MAX_PER_INTV_PER_PORT) {
                         bfd_sess_info[i].skip_bfd_query= 1;
                         bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
@@ -358,14 +358,17 @@ static void check_bdf_remote_status(void) {
                 }
                 else {
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
-                        bfd_sess_info[i].skip_bfd_query= 0;
+                        if(bfd_sess_info[i].skip_bfd_query) {
+                                bfd_sess_info[i].skip_bfd_query= 0;
+                                continue;
+                        }
                 }
 #endif
-                if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
+                //if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
                 elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
                 if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
                         //Shift from Up to Down and notify Link Down Status
-                        printf("Port[%d]: BFD elapsed time:%lld exceeded Allowed Time_us:%d\n", i, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
+                        printf("Port[%d]:[%d] BFD elapsed time:%lld exceeded Allowed Time_us:%d\n", i, bfd_sess_info[i].remote_state, (long long int)elapsed_time, BFD_TIMEOUT_INTERVAL);
                         bfd_sess_info[i].remote_state = Down;
                         bfd_sess_info[i].bfd_status_change_counter++;
                         if(notifier_cb) {
