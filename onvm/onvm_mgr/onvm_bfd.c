@@ -161,8 +161,8 @@ bfd_status_checkpoint_timer_cb(__attribute__((unused)) struct rte_timer *ptr_tim
         if(prev_cycles) {printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_diff_cpu_cycles_in_us(prev_cycles, cur_cycles)  );}  prev_cycles=cur_cycles;
         //printf("In bfd_status_checkpoint_timer_cb@: %"PRIu64"\n", onvm_util_get_current_cpu_cycles() );
 #endif
-        send_bfd_echo_packets();
         check_bdf_remote_status();
+        send_bfd_echo_packets();
         return;
 }
 static inline int initialize_bfd_timers(void) {
@@ -340,7 +340,12 @@ static void check_bdf_remote_status(void) {
         uint16_t i=0;
         uint64_t elapsed_time = 0;
         for(i=0; i< ports->num_ports; i++) {
-                //if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
+                if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) {
+#ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
+                        bfd_sess_info[i].last_rx_set=0;
+#endif
+                        continue;
+                }
 #ifdef PIGGYBACK_BFD_ON_ACTIVE_PORT_TRAFFIC
                 uint64_t rx_pkts = ports->rx_stats.rx[i];
                 if(rx_pkts && (0 == bfd_sess_info[i].last_rx_set)){
@@ -350,7 +355,7 @@ static void check_bdf_remote_status(void) {
                         //bfd_sess_info[i].last_rx_pkts = rx_pkts;// - bfd_sess_info[i].last_rx_pkts;
                 }
                 //Check to ensure that only BFD Packets are ignored! otherwise, every BFD packet also causes to stall resulting in timeout after every BFD packet!!
-                if((rx_pkts - bfd_sess_info[i].last_rx_pkts)) {//if((rx_pkts - bfd_sess_info[i].last_rx_pkts) > BFD_MAX_PER_INTV_PER_PORT) {
+                if((rx_pkts - bfd_sess_info[i].last_rx_pkts) > BFD_MAX_PER_INTV_PER_PORT) {//if((rx_pkts - bfd_sess_info[i].last_rx_pkts)) {//
                         bfd_sess_info[i].skip_bfd_query= 1;
                         bfd_sess_info[i].last_rcvd_pkt_ts = onvm_util_get_current_cpu_cycles();
                         bfd_sess_info[i].last_rx_pkts = rx_pkts;
