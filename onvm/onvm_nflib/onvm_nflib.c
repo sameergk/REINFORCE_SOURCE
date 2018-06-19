@@ -593,7 +593,7 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
         generate_and_transmit_pals_for_batch(pktsTX, tx_batch_size, non_det_evt,ts_info);
 #endif
         //if(likely(tx_batch_size)) {
-        if(likely(0 == (ret = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size)))) {
+        if(likely(-ENOBUFS != (ret = rte_ring_enqueue_bulk(tx_ring, pktsTX, tx_batch_size)))) {
                 this_nf->stats.tx += tx_batch_size;
         } else {
 #if defined(NF_LOCAL_BACKPRESSURE)
@@ -606,7 +606,7 @@ inline int onvm_nflib_post_process_packets_batch(void **pktsTX, unsigned tx_batc
                         if (tx_batch_size > rte_ring_free_count(tx_ring)) {
                                 continue;
                         }
-                        if((ret = rte_ring_enqueue_bulk(tx_ring,pktsTX,tx_batch_size)) == 0)break;
+                        if((ret = rte_ring_enqueue_bulk(tx_ring,pktsTX,tx_batch_size)) != -ENOBUFS){ ret = 0; break;}
                 } while (ret && ((this_nf->info->status==NF_RUNNING) && keep_running));
                 this_nf->stats.tx += tx_batch_size;
 #endif  //NF_LOCAL_BACKPRESSURE

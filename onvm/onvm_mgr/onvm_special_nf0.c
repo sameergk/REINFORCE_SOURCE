@@ -390,7 +390,7 @@ send_arp_reply_v2(int req_port, int arp_port, struct ether_addr *tha, uint32_t t
         pmeta->action = ONVM_NF_ACTION_OUT;
 
         int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&out_pkt, 1);
-        if (enq_status) {
+        if (-ENOBUFS == enq_status) {
                 onvm_pkt_drop_batch(&out_pkt,1);
                 nf0_cl->stats.rx_drop += 1;
         }
@@ -449,7 +449,7 @@ int send_arp_reply(int port, struct ether_addr *tha, uint32_t tip) {
         pmeta->action = ONVM_NF_ACTION_OUT;
 
         int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&out_pkt, 1);
-        if (enq_status) {
+        if (-ENOBUFS == enq_status) {
                 onvm_pkt_drop_batch(&out_pkt,1);
                 nf0_cl->stats.rx_drop += 1;
         }
@@ -875,7 +875,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
                 rp_count++;
                 if(rp_count == PACKET_READ_SIZE) {
                         int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
-                        if (enq_status) {
+                        if (-ENOBUFS == enq_status) {
                                 onvm_pkt_drop_batch(pkts,rp_count);
                                 nf0_cl->stats.rx_drop += rp_count;
                         }
@@ -886,7 +886,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
         }while(continue_replay);
         if(rp_count == PACKET_READ_SIZE) {
                 int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
-                if (enq_status) {
+                if (-ENOBUFS == enq_status) {
                         onvm_pkt_drop_batch(pkts,rp_count);
                         nf0_cl->stats.rx_drop += rp_count;
                 }
@@ -918,7 +918,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
                 rp_count++;
                 if(rp_count == PACKET_READ_SIZE) {
                         int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
-                        if (enq_status) {
+                        if (-ENOBUFS == enq_status) {
                                 onvm_pkt_drop_batch(pkts,rp_count);
                                 nf0_cl->stats.rx_drop += rp_count;
                         }
@@ -929,7 +929,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
         }while(continue_replay);
         if(rp_count == PACKET_READ_SIZE) {
                 int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
-                if (enq_status) {
+                if (-ENOBUFS == enq_status) {
                         onvm_pkt_drop_batch(pkts,rp_count);
                         nf0_cl->stats.rx_drop += rp_count;
                 }
@@ -983,7 +983,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
                 rp_count++;
                 if(rp_count == PACKET_READ_SIZE) {
                         int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, PACKET_READ_SIZE);
-                        if (enq_status) {
+                        if (-ENOBUFS == enq_status) {
                                 onvm_pkt_drop_batch(pkts,rp_count);
                                 nf0_cl->stats.rx_drop += rp_count;
                         }
@@ -994,7 +994,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
         }while(continue_replay);
         if(rp_count) {
                 int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rp_count);
-                if (enq_status) {
+                if (-ENOBUFS == enq_status) {
                         onvm_pkt_drop_batch(pkts,rp_count);
                         nf0_cl->stats.rx_drop += rp_count;
                 }
@@ -1132,7 +1132,7 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
 #else
                                 meta = onvm_get_pkt_meta((struct rte_mbuf*)pkts[i]);
                                 if(0 == onvm_ft_handle_packet(pkts[i], meta)) {
-                                        if (rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&pkts[i], 1)) {
+                                        if (-ENOBUFS == rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)&pkts[i], 1)) {
                                                 onvm_pkt_drop_batch(&pkts[i],1);
                                                 nf0_cl->stats.rx_drop += 1;
                                         }
