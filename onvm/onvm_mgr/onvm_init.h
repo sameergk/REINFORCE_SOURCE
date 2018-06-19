@@ -174,6 +174,10 @@ extern void *onvm_mgr_tx_per_flow_ts_info_db;
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+extern int node_role; //0= PREDECESSOR; 1=PRIMARY; 2=SECONDARY
+#endif
+
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
 extern struct rte_ring *tx_port_ring[RTE_MAX_ETHPORTS];     //ONVM_NUM_RSYNC_PORTS      //ring used by NFs and Other Tx threads to transmit out port packets
 extern struct rte_ring *tx_tx_state_latch_ring[RTE_MAX_ETHPORTS];  //ONVM_NUM_RSYNC_PORTS //ring used by TX_RSYNC to store packets till 2 Phase commit of TS STAT Update
 extern struct rte_ring *tx_nf_state_latch_ring[RTE_MAX_ETHPORTS]; //ONVM_NUM_RSYNC_PORTS//ring used by TX_RSYNC to store packets till 2 phase commit of NFs in the chain resulting in non-determinism.

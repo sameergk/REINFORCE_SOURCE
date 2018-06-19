@@ -64,10 +64,9 @@ static int bfd_handle_callback(uint8_t port, uint8_t status);
 #endif
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
-#define PRIMARY_NODE     (0)
-#define SECONDARY_NODE   (1)
-#define PREDECESSOR_NODE (2)
 int node_role = PRIMARY_NODE; //0= PREDECESSOR; 1=PRIMARY; 2=SECONDARY
+//int node_role = SECONDARY_NODE;
+//int node_role = PREDECESSOR_NODE;
 #endif
 /****************************Internal Declarations****************************/
 

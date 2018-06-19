@@ -379,6 +379,11 @@ Note: Requires to enable timer mode main thread. (currently directly called from
 #define ENABLE_PER_FLOW_TS_STORE    //enable to store TS of the last processed/updated packet at each NF and last released packet at NF MGR.    (Remote Sync)
 #define ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION //enable to isolate chains that need no rsync to bypass same tx path and provide latency isolation
 #define ENABLE_NF_PAUSE_TILL_OUTSTANDING_NDSYNC_COMMIT  //enable NF to pause (wait) if it has 1 outstanding ND to be synced and encounters second ND event in the interim.
+
+#define PRIMARY_NODE     (0)
+#define SECONDARY_NODE   (1)
+#define PREDECESSOR_NODE (2)
+
 #endif
 
 /* Feature to enable PICO Replication mode of operation: Cut Rx while State update

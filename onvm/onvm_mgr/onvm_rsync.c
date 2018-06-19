@@ -1828,6 +1828,8 @@ RECHECK_AND_REEXTRACT:
                 goto RECHECK_AND_REEXTRACT;
         }
 #endif
+
+if(node_role == PRIMARY_NODE) {
         //check and Initiate remote NF Sync
         //if(ret & NEED_REMOTE_NF_STATE_SYNC)
         if(unlikely(ret & NEED_REMOTE_NF_STATE_SYNC))
@@ -1858,6 +1860,7 @@ RECHECK_AND_REEXTRACT:
                         }
                 }
         }
+}
 
         //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
         //How? -- there can be packets in fastchain and some in slow chain. How will you notify? -- rely on best effort (every 1ms) it will refresh.
