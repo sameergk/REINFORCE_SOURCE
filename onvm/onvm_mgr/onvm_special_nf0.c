@@ -102,58 +102,39 @@ inline int set_packet_forwarind_actions(struct rte_mbuf *pkt, struct onvm_pkt_me
 static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *rx, struct rte_mbuf *pkts[], uint16_t rx_count);
 int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count);
 int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
-        uint16_t i, sent_0,sent_1;
+        uint16_t i, j,sent_0;
         volatile struct tx_stats *tx_stats;
         tx_stats = &(ports->tx_stats);
 
-        struct onvm_pkt_meta *meta = NULL;
-        struct rte_mbuf *pkts_0[PACKET_READ_SIZE];
-        struct rte_mbuf *pkts_1[PACKET_READ_SIZE];
-        uint16_t count_0=0, count_1=0;
+        struct packet_buf portpkts[RTE_MAX_ETHPORTS];
+        //struct onvm_pkt_meta *meta = NULL;
 
         for (i = 0; i < rx_count; i++) {
-                meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
-                if (meta->destination == 0) {
-                        pkts_0[count_1++] = pkts[i];
-                } else {
-                        pkts_1[count_0++] = pkts[i];
-                }
+                //meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
+                portpkts[pkts[i]->port].buffer[portpkts[pkts[i]->port].count++] = pkts[i];
         }
 #ifdef DELAY_BEFORE_SEND
         usleep(DELAY_PER_PKT*count_0);
 #endif
-        if(count_0) {
-                uint8_t port_id = 0;
-                sent_0 = rte_eth_tx_burst(port_id,
-                                        0,//tx->queue_id,
-                                        pkts_0,
-                                        count_0);
-                if (unlikely(sent_0 < count_0)) {
-                        for (i = sent_0; i < count_0; i++) {
-                                onvm_pkt_drop(pkts_0[i]);
+        for(i=0; i< RTE_MAX_ETHPORTS; i++) {
+                if(portpkts[i].count) {
+                        uint8_t port_id = i;
+                        sent_0 = rte_eth_tx_burst(port_id,
+                                                0,//tx->queue_id,
+                                                portpkts[i].buffer,
+                                                portpkts[i].count);
+                        if (unlikely(sent_0 < portpkts[i].count)) {
+                                for (j = sent_0; j < portpkts[i].count; i++) {
+                                        onvm_pkt_drop(portpkts[i].buffer[j]);
+                                }
+                                tx_stats->tx_drop[port_id] += (portpkts[i].count - sent_0);
                         }
-                        tx_stats->tx_drop[port_id] += (count_0 - sent_0);
+                        tx_stats->tx[port_id] += sent_0;
                 }
-                tx_stats->tx[port_id] += sent_0;
         }
 #ifdef DELAY_BEFORE_SEND
         usleep(DELAY_PER_PKT*count_1);
 #endif
-        if(count_1) {
-                uint8_t port_id = 0;
-                if(ports->num_ports > 1 ) port_id=1;
-                sent_1 = rte_eth_tx_burst(port_id,
-                                        0,//tx->queue_id,
-                                        pkts_1,
-                                        count_1);
-                if (unlikely(sent_1 < count_1)) {
-                        for (i = sent_1; i < count_1; i++) {
-                                onvm_pkt_drop(pkts_1[i]);
-                        }
-                        tx_stats->tx_drop[port_id] += (count_1 - sent_1);
-                }
-                tx_stats->tx[port_id] += sent_1;
-        }
         return 0;
 }
 int send_direct_on_alt_port(struct rte_mbuf *pkts[], uint16_t rx_count);
@@ -280,6 +261,17 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                 start_special_nf0();
         }
 
+        //Packets that demand processing
+        if(pr_count) {
+                enq_status = rte_ring_enqueue_bulk(nf0_cl->rx_q, (void **)pkts_proc, pr_count);
+                if (-ENOBUFS == enq_status) {
+                        onvm_pkt_drop_batch(pkts_proc,pr_count);
+                        nf0_cl->stats.rx_drop += pr_count;
+                }
+                //onvm_pkt_drop_batch(pkts_drop,dr_count);
+        }
+
+#if 0
         //Push all packets directly to the NF[0]->tx_ring
         enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts_out, j);
         //int enq_status = rte_ring_enqueue_bulk(nf0_cl->tx_q, (void **)pkts, rx_count);
@@ -290,15 +282,10 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                 //onvm_pkt_drop_batch(pkts,rx_count);
                 //nf0_cl->stats.rx_drop += rx_count;
         }
+#else
+        send_direct_on_alt_port(pkts_out,j);
+#endif
 
-        if(pr_count) {
-                enq_status = rte_ring_enqueue_bulk(nf0_cl->rx_q, (void **)pkts_proc, pr_count);
-                if (-ENOBUFS == enq_status) {
-                        onvm_pkt_drop_batch(pkts_proc,pr_count);
-                        nf0_cl->stats.rx_drop += pr_count;
-                }
-                //onvm_pkt_drop_batch(pkts_drop,dr_count);
-        }
         return ret;
 }
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
