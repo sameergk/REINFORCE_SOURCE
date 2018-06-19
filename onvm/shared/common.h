@@ -116,7 +116,7 @@
 #define INTERRUPT_SEM
 
 /** Feature to Enable Packet Time stamping and to measure processing latency */
-#define ENABLE_PACKET_TIMESTAMPING
+//#define ENABLE_PACKET_TIMESTAMPING
 
 /** Feature to enable Extra Debug Logs on all components */
 //#define __DEBUG_LOGS__

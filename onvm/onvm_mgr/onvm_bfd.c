@@ -372,8 +372,9 @@ static void check_bdf_remote_status(void) {
                                 //continue;
                         }
                 }
+                if(0 == bfd_sess_info[i].skip_bfd_query)
 #endif
-                if(0 == bfd_sess_info[i].skip_bfd_query) {
+                {
                         //if(bfd_sess_info[i].remote_state !=Up || (bfd_sess_info[i].mode == BFD_SESSION_MODE_PASSIVE)) continue;
                         elapsed_time = onvm_util_get_elapsed_cpu_cycles_in_us(bfd_sess_info[i].last_rcvd_pkt_ts);
                         if(elapsed_time > BFD_TIMEOUT_INTERVAL) {
