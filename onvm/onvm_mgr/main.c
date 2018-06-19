@@ -63,6 +63,12 @@ onvm_bfd_init_config_t bfd_config;
 static int bfd_handle_callback(uint8_t port, uint8_t status);
 #endif
 
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+#define PRIMARY_NODE     (0)
+#define SECONDARY_NODE   (1)
+#define PREDECESSOR_NODE (2)
+int node_role = PRIMARY_NODE; //0= PREDECESSOR; 1=PRIMARY; 2=SECONDARY
+#endif
 /****************************Internal Declarations****************************/
 
 #define MAX_SHUTDOWN_ITERS 10
@@ -348,7 +354,7 @@ rx_thread_main(void *arg) {
                                         pkts, PACKET_READ_SIZE);
 
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
-                        if(unlikely(replay_mode)) {
+                        if(unlikely(PREDECESSOR_NODE == node_role) && unlikely(replay_mode)) {
                                 //do replay and then continue with
                                 replay_and_terminate_failover();
                         }
@@ -714,9 +720,11 @@ static int bfd_handle_callback(uint8_t port, uint8_t status) {
         if(port < ports->num_ports) {
                 if(status == BFD_STATUS_REMOTE_DOWN || status == BFD_STATUS_LOCAL_DOWN) {
                         ports->down_status[port]=status;
-                        if(PRIMARY_OUT_PORT == port){
+#ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+                        if(unlikely(PREDECESSOR_NODE == node_role)  && unlikely(PRIMARY_OUT_PORT == port)){
                                 initiate_node_failover();
                         }
+#endif
                         return 1;
                 }
                 /* if(status == AdminDown || status == Down) {
