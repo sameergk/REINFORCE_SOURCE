@@ -959,7 +959,7 @@ static inline int initialize_tx_ts_table(void) {
 static inline int send_packets_out(uint8_t port_id, uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
 
         if(unlikely(port_id >= ports->num_ports)){
-                uint8_t k = 0;
+                uint16_t k = 0;
                 for(;k<nb_pkts;k++) {
                         onvm_pkt_drop(tx_pkts[k]);
                 }
@@ -1739,6 +1739,10 @@ static inline int rsync_start_simple_multi_db(__attribute__((unused)) void *arg)
 RECHECK_AND_REEXTRACT:
 #endif
 
+        if(node_role != PRIMARY_NODE) {
+                return transmit_tx_port_packets();
+        }
+
         if(likely(tid)) //if(tid)
         {
                 //if(0 == rsync_wait_for_commit_acks(trans_ids,tid,CHECK_FOR_COMMIT_WITH_NO_WAIT))
@@ -1829,7 +1833,7 @@ RECHECK_AND_REEXTRACT:
         }
 #endif
 
-if(node_role == PRIMARY_NODE) {
+
         //check and Initiate remote NF Sync
         //if(ret & NEED_REMOTE_NF_STATE_SYNC)
         if(unlikely(ret & NEED_REMOTE_NF_STATE_SYNC))
@@ -1860,7 +1864,6 @@ if(node_role == PRIMARY_NODE) {
                         }
                 }
         }
-}
 
         //TODO:communicate to Peer Node (Predecessor/Remote Node) to release the logged packets till TS.
         //How? -- there can be packets in fastchain and some in slow chain. How will you notify? -- rely on best effort (every 1ms) it will refresh.
