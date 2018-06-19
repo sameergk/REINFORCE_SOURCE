@@ -150,9 +150,9 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         if(likely(NULL != ports)) {
                 if(likely(ports->num_ports > 1)) {
                         meta->destination = (pkt->port == 0)? (1):(0);
-                        if(PRIMARY_OUT_PORT == meta->destination && ports->down_status[PRIMARY_OUT_PORT]) {
+                        if((PRIMARY_OUT_PORT == meta->destination) && (ports->down_status[PRIMARY_OUT_PORT])) {
                                 meta->destination = SECONDARY_OUT_PORT;
-                                printf("Shifted traffic from primary out port to secondary out port\n");
+                                printf("Shifted traffic from primary out port sts=%d, to secondary out port\n", ports->down_status[PRIMARY_OUT_PORT]);
                         }
                 }
                 else {
