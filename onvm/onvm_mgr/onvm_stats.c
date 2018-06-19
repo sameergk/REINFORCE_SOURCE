@@ -348,8 +348,8 @@ onvm_stats_display_ports(unsigned difftime) {
                 nic_tx_drop_pkts = ports->tx_stats.tx_drop[ports->id[i]];
                 nic_tx_drop_pps = (nic_tx_drop_pkts -tx_drop_last[i]) / difftime;
 
-                fprintf(stats_out,"Port %u - rx: %9"PRIu64"  (%9"PRIu64" pps)\t"
-                                "tx: %9"PRIu64"  (%9"PRIu64" pps) \t"
+                fprintf(stats_out,"Port %u - rx: %9"PRIu64"  (%9"PRIu64" pps)    "
+                                "tx: %9"PRIu64"  (%9"PRIu64" pps)    "
                                 "tx_drop: %9"PRIu64"  (%9"PRIu64" pps) \n",
                                 (unsigned)ports->id[i],
                                 nic_rx_pkts,
@@ -564,11 +564,11 @@ onvm_stats_display_clients(__attribute__((unused)) unsigned difftime) {
 #endif
         }
 
-        fprintf(stats_out,"\n");
+        //fprintf(stats_out,"\n");
 }
 
 void onvm_stats_display_chains(unsigned difftime) {
-        fprintf(stats_out,"\nCHAINS\n");
+        fprintf(stats_out,"CHAINS\n");
         fprintf(stats_out,"-------\n");
         (void)difftime;
         onvm_flow_dir_print_stats(stats_out);

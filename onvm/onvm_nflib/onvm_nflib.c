@@ -381,14 +381,14 @@ static inline void onvm_nflib_check_and_wait_if_interrupted(void);
 static inline void onvm_nflib_check_and_wait_if_interrupted(void) {
 #if defined (INTERRUPT_SEM) && ((defined(NF_BACKPRESSURE_APPROACH_2) || defined(USE_ARBITER_NF_EXEC_PERIOD)) || defined(ENABLE_NFV_RESL))
         if(unlikely(NF_PAUSED == (nf_info->status & NF_PAUSED))) {
-                printf("\n Explicit Pause request from ONVM_MGR\n ");
+                //printf("\n Explicit Pause request from ONVM_MGR\n ");
                 onvm_nflib_wait_till_notification();
-                printf("\n Explicit Pause Completed by NF\n");
+                //printf("\n Explicit Pause Completed by NF\n");
         }
         else if (unlikely(rte_atomic16_read(flag_p) ==1)) {
-                printf("\n Explicit Yield request from ONVM_MGR\n ");
+                //printf("\n Explicit Yield request from ONVM_MGR\n ");
                 onvm_nf_yeild(nf_info,YEILD_DUE_TO_EXPLICIT_REQ);
-                printf("\n Explicit Yield Completed by NF\n");
+                //printf("\n Explicit Yield Completed by NF\n");
         }
 #endif
 }

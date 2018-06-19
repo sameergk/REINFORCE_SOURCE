@@ -120,8 +120,8 @@
 //const uint32_t BaseMinTxInterval = 1000000L;  // The base "slow" Tx interval.
 #define BaseMinTxInterval (1000000L)
 
-//#define BFD_CHECKPOINT_PERIOD_IN_US  (500)  //since we send only during idle period, setting 500us is still fine. But note worst case RTT is 500-700us with 4K buffering.
-#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1.5 RTT
+#define BFD_CHECKPOINT_PERIOD_IN_US  (500)  //since we send only during idle period, setting 500us is still fine. But note worst case RTT is 500-700us with 4K buffering.
+//#define BFD_CHECKPOINT_PERIOD_IN_US  (1000)  // use high precision 100us; ensure that it is at least 1.5 RTT
 
 #define BFDEchoInterval_us      (BFD_CHECKPOINT_PERIOD_IN_US)
 #define BFDMinRxInterval_us     (100)

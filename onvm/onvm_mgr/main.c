@@ -674,6 +674,10 @@ main(int argc, char *argv[]) {
 }
 
 /*******************************Helper functions********************************/
+#define ENABLE_REPLAY_LATENCY_PROFILER
+#ifdef ENABLE_REPLAY_LATENCY_PROFILER
+static onvm_interval_timer_t ts;
+#endif
 void replay_and_terminate_failover(void) {
 #ifdef ENABLE_PCAP_CAPTURE
         onvm_util_replay_all_packets(PRIMARY_OUT_PORT, 1000); //SECONDARY_OUT_PORT
@@ -682,9 +686,17 @@ void replay_and_terminate_failover(void) {
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
         notify_replay_mode(replay_mode=0);
 #endif
+#ifdef ENABLE_REPLAY_LATENCY_PROFILER
+        printf("\n TERMINATE REPLAY(START-->-END_OF_REPLAY): %li ns\n", onvm_util_get_elapsed_time(&ts));
+#endif
 }
 void initiate_node_failover(void) {
 #ifdef ENABLE_REMOTE_SYNC_WITH_TX_LATCH
+
+#ifdef ENABLE_REPLAY_LATENCY_PROFILER
+        onvm_util_get_start_time(&ts);
+        printf("\n Initiate Replay started at %li rtdsc_cycles\n", onvm_util_get_current_cpu_cycles());
+#endif
         //turn on replay_mode=1;
         notify_replay_mode(replay_mode=1);
         //rest of sequence dealt outside
@@ -698,7 +710,7 @@ void initiate_node_failover(void) {
 #ifdef ENABLE_BFD
 static int bfd_handle_callback(uint8_t port, uint8_t status) {
         //check for valid port and BFD_StateValue
-        printf("BFD::Port[%d] moved to status[%d]\n",port,status);
+        printf("\n BFD::Port[%d] moved to status[%d]\n",port,status);
         if(port < ports->num_ports) {
                 if(status == BFD_STATUS_REMOTE_DOWN || status == BFD_STATUS_LOCAL_DOWN) {
                         ports->down_status[port]=status;

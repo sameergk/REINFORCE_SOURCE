@@ -337,7 +337,7 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         //printf("\n Inside Packet Handler\n");
 #ifdef ENABLE_ND_MARKING_IN_NFS
         if(nd_counter == 0) {
-                meta->reserved_word |= NF_NEED_ND_SYNC;
+                //meta->reserved_word |= NF_NEED_ND_SYNC;
                 //printf("\n NF is raising ND Event!\n\n");
         } nd_counter++;
         if(0 == last_cycle) last_cycle = rte_get_tsc_cycles();

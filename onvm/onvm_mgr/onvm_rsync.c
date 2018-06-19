@@ -807,22 +807,23 @@ static int rsync_nf_state_from_remote(state_tx_meta_t *meta, uint8_t *pData,  ui
         rte_memcpy(pDst, pData, MIN(data_len, DIRTY_MAP_PER_CHUNK_SIZE)); //should be MIN(pkt->data_len, DIRTY_MAP_PER_CHUNK_SIZE)
         return 0;
 }
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+#define ENABLE_REPLAY_LATENCY_PROFILER
+#ifdef ENABLE_REPLAY_LATENCY_PROFILER
 static onvm_interval_timer_t ts;
 #endif
 static int rsycn_handle_start_of_replay(void) {
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
+#ifdef ENABLE_REPLAY_LATENCY_PROFILER
         onvm_util_get_start_time(&ts);
 #endif
-        printf("Replay started at %li rtdsc_cycles\n", onvm_util_get_current_cpu_cycles());
+        printf("\n Replay started at %li rtdsc_cycles\n", onvm_util_get_current_cpu_cycles());
         //move all standby NFs to Active:: Happens automatically on first play packet.//Assumption: NFs and NF chain is already setup by orchestrator and controller.
         //disable rsync commit during replay but enable packet drop check logic.
         return 0;
 }
 static int rsycn_handle_end_of_replay(void) {
         //no additional action is needed!
-#ifdef ENABLE_LOCAL_LATENCY_PROFILER
-        printf("REPLAY_TIME(START-->-END_OF_REPLAY): %li ns\n", onvm_util_get_elapsed_time(&ts));
+#ifdef ENABLE_REPLAY_LATENCY_PROFILER
+        printf("\n REPLAY_TIME (START-->-END_OF_REPLAY): %li ns\n", onvm_util_get_elapsed_time(&ts));
 #endif
         //Enable Rsync commit logic: Assumption, we can update state on other designated secondary or actual primary (acts as secondary if it is back-up).
         //Disable TxTs check for Ts correctness.
@@ -2092,6 +2093,7 @@ int onvm_print_rsync_stats(unsigned difftime, FILE *fout) {
                 fprintf(fout, "NF[%d]: Total State SYNC Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
                                         rsync_stat.nf_state_sync_pkt_counter[i],(rsync_stat.nf_state_sync_pkt_counter[i] -prev_state.nf_state_sync_pkt_counter[i])/difftime);
         }
+        return 0;
         for(i=0; i< ports->num_ports; i++) {
                 fprintf(fout, "Port:%d, Total Tx Port Packets:%"PRIu64" (%"PRIu64" pps) Drop Packets:%"PRIu64" (%"PRIu64" pps) \n",i,
                                 rsync_stat.enq_count_tx_port_ring[i], (rsync_stat.enq_count_tx_port_ring[i] -prev_state.enq_count_tx_port_ring[i])/difftime,
