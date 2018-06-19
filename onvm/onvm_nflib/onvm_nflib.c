@@ -222,13 +222,13 @@ int generate_and_transmit_pals_for_batch(__attribute__((unused))  void **pktsTX,
                 pmeta->action = ONVM_NF_ACTION_DROP;
 
                 send_packets_out(0, RSYNC_TX_PORT_QUEUE_ID_0, &out_pkt, 1);
-                if(unlikely(0 != (ret = rte_ring_enqueue(tx_ring, out_pkt)))) {
+                if(unlikely(-ENOBUFS == (ret = rte_ring_enqueue(tx_ring, out_pkt)))) {
                         do {
 #ifdef INTERRUPT_SEM
                                 onvm_nf_yeild(nf_info,YIELD_DUE_TO_FULL_TX_RING);
                                 ret = rte_ring_enqueue(tx_ring, out_pkt);
 #endif
-                        }while(ret && keep_running);
+                        }while((ret == -ENOBUFS) && keep_running);
                 }
         }
 #ifdef ENABLE_LOCAL_LATENCY_PROFILER
