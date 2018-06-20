@@ -107,11 +107,12 @@ int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
         tx_stats = &(ports->tx_stats);
 
         static struct packet_buf portpkts[RTE_MAX_ETHPORTS];
-        //struct onvm_pkt_meta *meta = NULL;
+        struct onvm_pkt_meta *meta = NULL;
 
         for (i = 0; i < rx_count; i++) {
-                //meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
-                portpkts[pkts[i]->port].buffer[portpkts[pkts[i]->port].count++] = pkts[i];
+                meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
+                portpkts[meta->destination].buffer[portpkts[meta->destination].count++] = pkts[i];  //based on assigned action
+                //portpkts[pkts[i]->port].buffer[portpkts[pkts[i]->port].count++] = pkts[i];    //based on packet port
         }
 
 
