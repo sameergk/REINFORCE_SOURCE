@@ -566,7 +566,7 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
         uint16_t i=0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         state_tx_meta_t meta = {.state_type= STATE_TYPE_TX_TS_TABLE, .nf_or_svc_id=0, .start_offset=0, /*.reserved=nf_mgr_id, */.trans_id=0};
-
+        uint8_t btrans_initiated = 0;
 #ifdef ENABLE_PER_FLOW_TXTS_MAP_ENTRY
         dirty_mon_state_map_tbl_txts_t *dtx = dirty_state_map_tx_ts;
 #else
@@ -602,12 +602,26 @@ static int rsync_tx_ts_state_to_remote( __attribute__((unused))uint8_t to_db) {
                                 }
                                 pkts[i++] = craft_state_update_packet(RSYNC_OUT_PORT,meta, (((uint8_t*)onvm_mgr_tx_per_flow_ts_info)+meta.start_offset),TXTS_DIRTY_MAP_CHUNK_SIZE);
                                 dirty_index^=copy_setbit;
+                                if( i == PACKET_READ_SIZE_LARGE) {
+                                        log_transaction_and_send_packets_out(meta.trans_id, 0, RSYNC_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+#ifdef ENABLE_PORT_TX_STATS_LOGS
+                                        rsync_stat.tx_state_sync_pkt_counter +=i;
+#endif
+                                        i=0;
+                                        btrans_initiated=1;
+                                }
                         }
                 }
                 dtx->dirty_index =0;
                 //check if packets are created and need to be transmitted out;
                 if(i) {
-                        log_transaction_and_send_packets_out(meta.trans_id, 0, RSYNC_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i); //send_packets_out(out_port, 0, pkts, i);
+                        //exit(222);
+                        if(btrans_initiated) {
+                                send_packets_out(RSYNC_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i);
+                        }
+                        else {
+                                log_transaction_and_send_packets_out(meta.trans_id, 0, RSYNC_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_0, pkts, i);
+                        }
 #ifdef ENABLE_PORT_TX_STATS_LOGS
                         rsync_stat.tx_state_sync_pkt_counter +=i;
 #endif
