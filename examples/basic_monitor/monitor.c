@@ -182,8 +182,8 @@ static inline uint64_t map_tag_index_to_dirty_chunk_bit_index(uint16_t vlan_tbl_
 static inline int update_dirty_state_index(uint16_t flow_index) {
         if(dirty_state_map) {
                 dirty_state_map->dirty_index |= map_tag_index_to_dirty_chunk_bit_index(flow_index);
-                //dirty_state_map->dirty_index |= (1L<<(rand() % 60));
-                //dirty_state_map->dirty_index |= (-1);
+                ////dirty_state_map->dirty_index |= (1L<<(rand() % 60));
+                ////dirty_state_map->dirty_index |= (-1);
                 dirty_state_map->dirty_index |= (0xFFFFFFFF);
         }
         return flow_index;

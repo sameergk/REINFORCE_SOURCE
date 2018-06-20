@@ -59,6 +59,10 @@ typedef struct rsync_stats {
         /* Counters to keep track of number of packets transferred for Tx table and NF state sync */
         uint64_t tx_state_sync_pkt_counter;
         uint64_t nf_state_sync_pkt_counter[MAX_CLIENTS];
+        uint64_t tx_state_sync_in_pkt_counter;
+        uint64_t nf_state_sync_in_pkt_counter[MAX_CLIENTS];
+        uint64_t transactions_out_counter;
+        uint64_t transactions_in_counter;
 
         /* Counters to measure the actual packets enqueued vs Dropped  to these specific internal rings */
         uint64_t enq_coun_tx_tx_state_latch_ring[RTE_MAX_ETHPORTS];
