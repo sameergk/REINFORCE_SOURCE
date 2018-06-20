@@ -187,17 +187,17 @@ typedef struct state_tx_meta {
         uint8_t nf_or_svc_id;   //Id of the NF(NF_STATE) or SVC (SERVICE_STATE)
         uint32_t start_offset;  //Offset in the global mempool
         //uint32_t reserved;      //Note Size per packet is Fixed to 1024 Bytes.
-}state_tx_meta_t;
+} __attribute__((__packed__)) state_tx_meta_t;
 #define STATE_FLAG_LAST_PACKET_MARKER   (0x01)
 
 typedef struct state_transfer_packet_hdr {
         state_tx_meta_t meta;
         uint8_t data[MAX_STATE_SIZE_PER_PACKET];
-}state_transfer_packet_hdr_t;
+} __attribute__((__packed__)) state_transfer_packet_hdr_t;
 
 typedef struct transfer_ack_packet_hdr {
         state_tx_meta_t meta;
-}transfer_ack_packet_hdr_t;
+} __attribute__((__packed__)) transfer_ack_packet_hdr_t;
 extern struct rte_mempool *pktmbuf_pool;
 extern uint32_t nf_mgr_id;
 
@@ -711,7 +711,7 @@ static int rsync_nf_state_to_remote(uint8_t bNDSync) {
                         if(i) {
                                 if(btrans_initiated) {
                                         //printf("\n $$$$ Sending [%d] packets for NF Instance [%d] State Sync $$$$\n", i, nf_id);
-                                        send_packets_out(RSYNC_TX_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
+                                        send_packets_out(RSYNC_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
                                 } else {
                                         log_transaction_and_send_packets_out(meta.trans_id, bNDSync, RSYNC_OUT_PORT, RSYNC_TX_PORT_QUEUE_ID_1, pkts, i);
                                 }
