@@ -66,7 +66,7 @@
 //Given that we have buffer of 8K we can perform checkpoints much slower atleast 5 times slow i.e 500us ==> 7.5K packets perform 1 checkpoint. Therefore w.c. overhead= 0.85%
 
 //port on which the TxTs, NF State and SVC State are synced (transmitted out).
-#define RSYNC_OUT_PORT  (RSYNC_TX_OUT_PORT) //(1)
+#define RSYNC_OUT_PORT  (5) //(RSYNC_TX_OUT_PORT) //(1)
 
 #ifdef MIMIC_PICO_REP
 #define RSYNC_USE_DPDK_TIMER
@@ -1046,6 +1046,7 @@ int transmit_tx_port_packets(void) {
 
 //Function to transmit/release the Tx packets (that were waiting for Tx state update completion)
 static int transmit_tx_tx_state_latch_rings( __attribute__((unused))uint8_t to_db) {
+
         uint16_t j, count= PACKET_READ_SIZE_LARGE, sent=0,tx_count = 0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         struct rte_ring *latch_ring;
@@ -1067,8 +1068,8 @@ static int transmit_tx_tx_state_latch_rings( __attribute__((unused))uint8_t to_d
 
                 //printf("\n %d Pkts in tx_tx_state_latch_ring[%d] port\n", tx_count, j);
                 while(tx_count) {
-
-                        if(unlikely(0 == (count = rte_ring_sc_dequeue_burst(latch_ring, (void**)pkts, PACKET_READ_SIZE_LARGE)))) break;
+                        count = rte_ring_sc_dequeue_burst(latch_ring, (void**)pkts, PACKET_READ_SIZE_LARGE);
+                        if(unlikely(0 == count)) {break;}
                         //Logic is to allocate equal number of ring buffers as port; so no need to check for now.
 #if 0
                         uint16_t i;
@@ -1090,6 +1091,7 @@ static int transmit_tx_tx_state_latch_rings( __attribute__((unused))uint8_t to_d
 }
 //Function to transmit/release the Tx packets (that were waiting for NF state update completion)
 static int transmit_tx_nf_state_latch_rings( __attribute__((unused))uint8_t to_db) {
+
         uint16_t j, count= PACKET_READ_SIZE_LARGE, sent=0, tx_count = 0;
         struct rte_mbuf *pkts[PACKET_READ_SIZE_LARGE];
         struct rte_ring *latch_ring;
@@ -1110,7 +1112,8 @@ static int transmit_tx_nf_state_latch_rings( __attribute__((unused))uint8_t to_d
 
                 //printf("\n %d Pkts in tx_nf_state_latch[%d] port\n", tx_count, j);
                 while(tx_count) {
-                        if(unlikely(0==(count = rte_ring_sc_dequeue_burst(latch_ring, (void**)pkts, PACKET_READ_SIZE_LARGE)))) {break;}
+                        count = rte_ring_sc_dequeue_burst(latch_ring, (void**)pkts, PACKET_READ_SIZE_LARGE);
+                        if(unlikely(0==count)){break;}
 #if 0
                         uint16_t i;
                         if(unlikely(j == (ONVM_NUM_RSYNC_PORTS-1))) {
@@ -1224,7 +1227,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                                 }
                         }
                         if(unlikely(out_pkts_dr_count)){
-                                uint8_t k = sent;
+                                uint16_t k = 0;
                                 for(;k<out_pkts_dr_count;k++) {
                                         onvm_pkt_drop(out_pkts_drop[k]);
                                 }
@@ -1260,7 +1263,7 @@ static int extract_and_parse_tx_port_packets(__attribute__((unused)) uint8_t to_
                                 sent = rte_ring_enqueue_burst(latch_ring_nf, (void**)out_pkts_nf,  out_pkts_nf_count);
 
                                 if (unlikely(sent < out_pkts_nf_count)) {
-                                        uint8_t k = sent;
+                                        uint16_t k = sent;
                                         for(;k<out_pkts_nf_count;k++) {
                                                 onvm_pkt_drop(out_pkts_nf[k]);
                                         }

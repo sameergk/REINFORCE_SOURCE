@@ -220,9 +220,9 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                // Filter out BFD and RSYNC packets to avoid looping them around!
                struct ether_hdr *eth = rte_pktmbuf_mtod(pkts[i], struct ether_hdr *);
                if(ETHER_TYPE_RSYNC_DATA == rte_be_to_cpu_16(eth->ether_type)) {
-                       pkts_out[j++]=pkt;
-                       meta->action = ONVM_NF_ACTION_DROP;
-                       //onvm_pkt_drop(pkts[i]); continue;
+                       //pkts_out[j++]=pkt;
+                       //meta->action = ONVM_NF_ACTION_DROP;
+                       onvm_pkt_drop(pkts[i]); continue;
                } else if (ETHER_TYPE_BFD == rte_be_to_cpu_16(eth->ether_type)) {
                        pkts_proc[pr_count++] = pkts[i]; continue;
                } else {
@@ -1165,7 +1165,6 @@ uint16_t nic_port = DISTRIBUTED_NIC_PORT;
                                 rsync_process_rsync_in_pkts(NULL,&pkts[i],1);
 #endif //ONVM_MGR_ACT_AS_2PORT_FWD_BRIDGE
                                 rte_pktmbuf_free(pkts[i]);//onvm_pkt_drop_batch(&pkts[i], 1);
-
                                 break;
                         case ETHER_TYPE_BFD:
 #ifdef ENABLE_BFD
