@@ -283,7 +283,7 @@ static int onv_pkt_send_on_alt_port(__attribute__((unused)) struct thread_info *
                 //nf0_cl->stats.rx_drop += rx_count;
         }
 #else
-        send_direct_on_alt_port(pkts_out,j);
+        send_direct_on_assigned_port(pkts_out,j);
 #endif
 
         return ret;
