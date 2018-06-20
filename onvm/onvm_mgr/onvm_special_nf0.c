@@ -106,22 +106,25 @@ int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
         volatile struct tx_stats *tx_stats;
         tx_stats = &(ports->tx_stats);
 
-        struct packet_buf portpkts[RTE_MAX_ETHPORTS];
+        static struct packet_buf portpkts[RTE_MAX_ETHPORTS];
         //struct onvm_pkt_meta *meta = NULL;
 
         for (i = 0; i < rx_count; i++) {
                 //meta = (struct onvm_pkt_meta*) &(((struct rte_mbuf*)pkts[i])->udata64);
                 portpkts[pkts[i]->port].buffer[portpkts[pkts[i]->port].count++] = pkts[i];
         }
+
+
 #ifdef DELAY_BEFORE_SEND
         usleep(DELAY_PER_PKT*count_0);
 #endif
         for(i=0; i< RTE_MAX_ETHPORTS; i++) {
                 if(portpkts[i].count) {
                         uint8_t port_id = i;
+                        //printf("\n Sending %d packets on Port %d\n", portpkts[i].count, i);
                         sent_0 = rte_eth_tx_burst(port_id,
-                                                0,//tx->queue_id,
-                                                portpkts[i].buffer,
+                                                5,//tx->queue_id,
+                                                (struct rte_mbuf**)portpkts[i].buffer,
                                                 portpkts[i].count);
                         if (unlikely(sent_0 < portpkts[i].count)) {
                                 for (j = sent_0; j < portpkts[i].count; i++) {
@@ -130,6 +133,7 @@ int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
                                 tx_stats->tx_drop[port_id] += (portpkts[i].count - sent_0);
                         }
                         tx_stats->tx[port_id] += sent_0;
+                        portpkts[i].count=0;
                 }
         }
 #ifdef DELAY_BEFORE_SEND
