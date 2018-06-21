@@ -419,8 +419,10 @@ onvm_pkt_enqueue_port(struct thread_info *tx, uint16_t port, struct rte_mbuf *bu
         if (tx == NULL || buf == NULL)
                 return;
         //if(unlikely(port>= RTE_MAX_ETHPORTS)) return;
-        if(unlikely(port >= ports->num_ports))
+        if(unlikely(port >= ports->num_ports)) {
+                onvm_pkt_drop(buf);
                 return;
+        }
         tx->port_tx_buf[port].buffer[tx->port_tx_buf[port].count++] = buf;
         if (tx->port_tx_buf[port].count == PACKET_READ_SIZE) {
                 onvm_pkt_flush_port_queue(tx, port);
@@ -433,8 +435,10 @@ onvm_pkt_enqueue_port_v2(struct thread_info *tx, uint16_t port, struct rte_mbuf 
         if (tx == NULL || buf == NULL)
                 return;
 
-        if(unlikely(port >= ports->num_ports))
+        if(unlikely(port >= ports->num_ports)) {
+                onvm_pkt_drop(buf);
                 return;
+        }
         //uint8_t bypass = 0;
 #ifdef ENABLE_CHAIN_BYPASS_RSYNC_ISOLATION
         uint8_t bypass = meta->reserved_word&NF_BYPASS_RSYNC; // buf->port;
