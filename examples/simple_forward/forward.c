@@ -68,6 +68,7 @@ static uint32_t print_delay = 5000000;
 
 static uint32_t destination;
 
+extern struct port_info *ports;
 /*
  * Print a usage message
  */
@@ -233,8 +234,16 @@ packet_handler(struct rte_mbuf* pkt, struct onvm_pkt_meta* meta) {
         meta->action = ONVM_NF_ACTION_TONF;
         meta->destination = destination;
 
+
+        if(likely(ports->num_ports > 1)) {
+                meta->destination = (pkt->port == 0)? (PRIMARY_OUT_PORT):(0);
+                if((PRIMARY_OUT_PORT == meta->destination) && (ports->down_status[PRIMARY_OUT_PORT])) {
+                        meta->destination = SECONDARY_OUT_PORT;
+                        //printf("Shifted traffic from primary out port sts=%d, to secondary out port\n", ports->down_status[PRIMARY_OUT_PORT]);
+                }
+        }
         meta->action = ONVM_NF_ACTION_OUT;
-        meta->destination = pkt->port;
+        //meta->destination = pkt->port;
 
         return 0;
 }
