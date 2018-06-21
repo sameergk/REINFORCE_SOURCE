@@ -122,8 +122,10 @@ int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
         for(i=0; i< RTE_MAX_ETHPORTS; i++) {
                 if(portpkts[i].count) {
                         uint8_t port_id = i;
-                        if(unlikely(port_id = ports->num_ports)) {
+                        if(unlikely(port_id >= ports->num_ports)) {
                                 onvm_pkt_drop_batch(portpkts[i].buffer, portpkts[i].count);
+                                tx_stats->tx_drop[port_id] += portpkts[i].count;
+                                portpkts[i].count=0;
                                 continue;
                         }
                         //printf("\n Sending %d packets on Port %d\n", portpkts[i].count, i);
