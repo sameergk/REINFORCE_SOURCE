@@ -123,14 +123,17 @@ int send_direct_on_assigned_port(struct rte_mbuf *pkts[], uint16_t rx_count) {
                 if(portpkts[i].count) {
                         uint8_t port_id = i;
                         if(unlikely(port_id >= ports->num_ports)) {
-                                onvm_pkt_drop_batch(portpkts[i].buffer, portpkts[i].count);
+                                for (j = 0; j < portpkts[i].count; i++) {
+                                        onvm_pkt_drop(portpkts[i].buffer[j]);
+                                }
+                                //onvm_pkt_drop_batch(portpkts[i].buffer, portpkts[i].count);
                                 tx_stats->tx_drop[port_id] += portpkts[i].count;
                                 portpkts[i].count=0;
                                 continue;
                         }
                         //printf("\n Sending %d packets on Port %d\n", portpkts[i].count, i);
                         sent_0 = rte_eth_tx_burst(port_id,
-                                                5,//tx->queue_id,                           //using 5 in case of RSYNC otherwise 0
+                                                0,//tx->queue_id,                           //using 5 in case of RSYNC otherwise 0
                                                 (struct rte_mbuf**)portpkts[i].buffer,
                                                 portpkts[i].count);
                         if (unlikely(sent_0 < portpkts[i].count)) {

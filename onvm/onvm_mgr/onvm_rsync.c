@@ -66,7 +66,7 @@
 //Given that we have buffer of 8K we can perform checkpoints much slower atleast 5 times slow i.e 500us ==> 7.5K packets perform 1 checkpoint. Therefore w.c. overhead= 0.85%
 
 //port on which the TxTs, NF State and SVC State are synced (transmitted out).
-#define RSYNC_OUT_PORT  (5) //(RSYNC_TX_OUT_PORT) //(1)
+#define RSYNC_OUT_PORT  (RSYNC_TX_OUT_PORT) //(1)
 
 #ifdef MIMIC_PICO_REP
 #define RSYNC_USE_DPDK_TIMER
