@@ -978,7 +978,7 @@ static inline int onvm_util_plain_pcap_replay(uint8_t port, uint64_t max_duratio
 
         pcap_infos[port].log[index].pd = pcap_open_offline(pcap_infos[port].log[index].capture_file, err_buf);
         if(pcap_infos[port].log[index].pd == NULL) {
-                printf("\n Unable to open PCAP Capture File=%s\n", pcap_infos[port].log[index].capture_file);
+                printf("\n Unable to open PCAP Capture File=%s, err:%s\n", pcap_infos[port].log[index].capture_file, err_buf);
                 return 2;
         }
         pcap_infos[port].log_active_status=pcap_log_status_replay_on;
