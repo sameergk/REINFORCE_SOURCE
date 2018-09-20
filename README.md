@@ -3,7 +3,7 @@
 
 About
 --
-REINFORCE is an openNetVM[onvm] based high performance NFV service chain resiliency platform based on [Intel DPDK][dpdk] and [Docker][docker] containers.  
+REINFORCE is an [openNetVM][onvm] based high performance NFV service chain resiliency platform based on [Intel DPDK][dpdk] and [Docker][docker] containers.  
 openNetVM is SDN-enabled, allowing the network controller to provide rules that dictate what network functions need to process each packet flow.
 openNetVM is an open source version of the NetVM platform described in our [NSDI 2014 paper][nsdi04], released under the [BSD][license] license.
 
