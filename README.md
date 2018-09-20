@@ -19,6 +19,10 @@ Creating NFs
 --
 The [NF Development][nfs] guide will provide what you need to start create your own NFs.
 
+Resilient NF chains
+--
+More details to follow on how to setup the Local an Remote replica mapping.
+
 
 [onvm]: http://sdnfv.github.io/onvm/
 [license]: LICENSE
